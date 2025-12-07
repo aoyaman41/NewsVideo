@@ -58,53 +58,60 @@ ipcMain.handle('project:list', async (): Promise<ProjectMeta[]> => {
 
 // プロジェクト作成
 ipcMain.handle('project:create', async (_, name: string): Promise<ProjectMeta> => {
-  const projectsDir = getProjectsDir();
-  await fs.mkdir(projectsDir, { recursive: true });
+  try {
+    console.log('[project:create] Creating project:', name);
+    const projectsDir = getProjectsDir();
+    console.log('[project:create] Projects dir:', projectsDir);
+    await fs.mkdir(projectsDir, { recursive: true });
 
-  const id = randomUUID();
-  const now = new Date().toISOString();
-  const projectDirName = `${name.replace(/[^a-zA-Z0-9\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FAF]/g, '_')}_${id.slice(0, 8)}.newsproj`;
-  const projectPath = path.join(projectsDir, projectDirName);
+    const id = randomUUID();
+    const now = new Date().toISOString();
+    const projectDirName = `${name.replace(/[^a-zA-Z0-9\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FAF]/g, '_')}_${id.slice(0, 8)}.newsproj`;
+    const projectPath = path.join(projectsDir, projectDirName);
 
-  // プロジェクトディレクトリ構造を作成
-  await fs.mkdir(projectPath);
-  await fs.mkdir(path.join(projectPath, 'images'));
-  await fs.mkdir(path.join(projectPath, 'images', 'imported'));
-  await fs.mkdir(path.join(projectPath, 'audio'));
-  await fs.mkdir(path.join(projectPath, 'output'));
+    // プロジェクトディレクトリ構造を作成
+    await fs.mkdir(projectPath, { recursive: true });
+    await fs.mkdir(path.join(projectPath, 'images', 'imported'), { recursive: true });
+    await fs.mkdir(path.join(projectPath, 'audio'), { recursive: true });
+    await fs.mkdir(path.join(projectPath, 'output'), { recursive: true });
 
-  // プロジェクトメタデータ
-  const projectMeta = {
-    id,
-    name,
-    schemaVersion: 'v1.1',
-    createdAt: now,
-    updatedAt: now,
-  };
+    // プロジェクトメタデータ
+    const projectMeta = {
+      id,
+      name,
+      schemaVersion: 'v1.1',
+      createdAt: now,
+      updatedAt: now,
+    };
 
-  // 空の記事データ
-  const article = {
-    title: '',
-    source: '',
-    bodyText: '',
-    importedImages: [],
-  };
+    // 空の記事データ
+    const article = {
+      title: '',
+      source: '',
+      bodyText: '',
+      importedImages: [],
+    };
 
-  // 初期ファイルを保存
-  await fs.writeFile(path.join(projectPath, 'project.json'), JSON.stringify(projectMeta, null, 2));
-  await fs.writeFile(path.join(projectPath, 'article.json'), JSON.stringify(article, null, 2));
-  await fs.writeFile(path.join(projectPath, 'parts.json'), JSON.stringify([], null, 2));
-  await fs.writeFile(path.join(projectPath, 'images.json'), JSON.stringify([], null, 2));
-  await fs.writeFile(path.join(projectPath, 'prompts.json'), JSON.stringify([], null, 2));
-  await fs.writeFile(path.join(projectPath, 'audio.json'), JSON.stringify([], null, 2));
+    // 初期ファイルを保存
+    await fs.writeFile(path.join(projectPath, 'project.json'), JSON.stringify(projectMeta, null, 2));
+    await fs.writeFile(path.join(projectPath, 'article.json'), JSON.stringify(article, null, 2));
+    await fs.writeFile(path.join(projectPath, 'parts.json'), JSON.stringify([], null, 2));
+    await fs.writeFile(path.join(projectPath, 'images.json'), JSON.stringify([], null, 2));
+    await fs.writeFile(path.join(projectPath, 'prompts.json'), JSON.stringify([], null, 2));
+    await fs.writeFile(path.join(projectPath, 'audio.json'), JSON.stringify([], null, 2));
 
-  return {
-    id,
-    name,
-    createdAt: now,
-    updatedAt: now,
-    path: projectPath,
-  };
+    console.log('[project:create] Project created successfully:', id);
+    return {
+      id,
+      name,
+      createdAt: now,
+      updatedAt: now,
+      path: projectPath,
+    };
+  } catch (error) {
+    console.error('[project:create] Error:', error);
+    throw error;
+  }
 });
 
 // プロジェクト読み込み

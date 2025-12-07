@@ -186,6 +186,7 @@ interface ScriptOptions {
 interface CommentTarget {
   type: 'script' | 'imagePrompt';
   id: string;
+  currentText: string;
 }
 
 interface TTSOptions {

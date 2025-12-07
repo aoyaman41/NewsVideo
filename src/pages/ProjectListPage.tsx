@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { Header } from '../components/layout';
 
 interface ProjectMeta {
@@ -10,6 +11,7 @@ interface ProjectMeta {
 }
 
 export function ProjectListPage() {
+  const navigate = useNavigate();
   const [projects, setProjects] = useState<ProjectMeta[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [newProjectName, setNewProjectName] = useState('');
@@ -119,6 +121,7 @@ export function ProjectListPage() {
                     </div>
                     <div className="flex items-center gap-2 ml-4">
                       <button
+                        onClick={() => navigate(`/projects/${project.id}/article`)}
                         className="px-4 py-2 text-sm text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
                       >
                         開く

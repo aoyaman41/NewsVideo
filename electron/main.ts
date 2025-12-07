@@ -18,10 +18,10 @@ function createWindow(): void {
     minWidth: 1200,
     minHeight: 800,
     webPreferences: {
-      preload: path.join(__dirname, 'preload.js'),
+      preload: path.join(__dirname, 'preload.cjs'),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: true,
+      sandbox: false,
     },
     titleBarStyle: 'hiddenInset',
     show: false,
@@ -29,7 +29,8 @@ function createWindow(): void {
 
   // 開発環境ではViteのdev serverに接続
   if (isDev) {
-    mainWindow.loadURL('http://localhost:5173');
+    const port = process.env.VITE_DEV_SERVER_URL || 'http://localhost:5173';
+    mainWindow.loadURL(port);
     mainWindow.webContents.openDevTools();
   } else {
     mainWindow.loadFile(path.join(__dirname, '../dist/index.html'));
@@ -65,3 +66,4 @@ app.on('window-all-closed', () => {
 // IPC ハンドラーの登録
 import './ipc/project.js';
 import './ipc/settings.js';
+import './ipc/ai.js';
