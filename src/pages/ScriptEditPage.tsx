@@ -201,7 +201,7 @@ export function ScriptEditPage() {
 
     try {
       await window.electronAPI.project.save(project);
-      navigate(`/projects/${projectId}/images`);
+      navigate(`/projects/${projectId}/image`);
     } catch (err) {
       console.error('Failed to save project:', err);
       setError('保存に失敗しました');

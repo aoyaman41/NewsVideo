@@ -1,6 +1,6 @@
-import { app, BrowserWindow } from 'electron';
+import { app, BrowserWindow, protocol, net } from 'electron';
 import path from 'path';
-import { fileURLToPath } from 'url';
+import { fileURLToPath, pathToFileURL } from 'url';
 
 // ESM環境での __dirname 相当を取得
 const __filename = fileURLToPath(import.meta.url);
@@ -8,6 +8,19 @@ const __dirname = path.dirname(__filename);
 
 // 開発環境かどうか
 const isDev = !app.isPackaged;
+
+// カスタムプロトコル 'local-file' を登録
+protocol.registerSchemesAsPrivileged([
+  {
+    scheme: 'local-file',
+    privileges: {
+      secure: true,
+      supportFetchAPI: true,
+      bypassCSP: true,
+      stream: true,
+    },
+  },
+]);
 
 let mainWindow: BrowserWindow | null = null;
 
@@ -47,6 +60,13 @@ function createWindow(): void {
 
 // アプリケーションの準備完了時
 app.whenReady().then(() => {
+  // カスタムプロトコルハンドラを登録
+  protocol.handle('local-file', (request) => {
+    // local-file://path/to/file から実際のファイルパスを取得
+    const filePath = decodeURIComponent(request.url.replace('local-file://', ''));
+    return net.fetch(pathToFileURL(filePath).href);
+  });
+
   createWindow();
 
   app.on('activate', () => {
@@ -67,3 +87,4 @@ app.on('window-all-closed', () => {
 import './ipc/project.js';
 import './ipc/settings.js';
 import './ipc/ai.js';
+import './ipc/image.js';

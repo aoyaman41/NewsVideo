@@ -36,8 +36,10 @@ interface ElectronAPI {
   };
 
   image: {
-    generate: (prompt: ImagePrompt) => Promise<ImageAsset>;
-    generateBatch: (prompts: ImagePrompt[]) => Promise<ImageAsset[]>;
+    generate: (prompt: ImagePrompt, projectId: string) => Promise<ImageAsset>;
+    generateBatch: (prompts: ImagePrompt[], projectId: string) => Promise<ImageAsset[]>;
+    delete: (filePath: string) => Promise<{ success: boolean }>;
+    import: (sourcePath: string, projectId: string) => Promise<ImageAsset>;
   };
 
   tts: {

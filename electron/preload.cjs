@@ -34,8 +34,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // 画像生成
   image: {
-    generate: (prompt) => ipcRenderer.invoke('image:generate', prompt),
-    generateBatch: (prompts) => ipcRenderer.invoke('image:generateBatch', prompts),
+    generate: (prompt, projectId) => ipcRenderer.invoke('image:generate', prompt, projectId),
+    generateBatch: (prompts, projectId) => ipcRenderer.invoke('image:generateBatch', prompts, projectId),
+    delete: (filePath) => ipcRenderer.invoke('image:delete', filePath),
+    import: (sourcePath, projectId) => ipcRenderer.invoke('image:import', sourcePath, projectId),
   },
 
   // TTS操作

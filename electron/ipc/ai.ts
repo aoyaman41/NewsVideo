@@ -138,7 +138,7 @@ ipcMain.handle(
 
     const response = await withRetry(async () => {
       return openai.chat.completions.create({
-        model: 'gpt-4o',
+        model: 'gpt-5.1',
         messages: [
           {
             role: 'system',
@@ -188,6 +188,27 @@ ipcMain.handle(
   }
 );
 
+// 報道スライドショー用のベーステンプレート（日本語）
+const NEWS_SLIDESHOW_TEMPLATE = {
+  // 共通のスタイル指示（全画像に適用）
+  baseStyle: `日本の報道番組向けインフォグラフィック、シンプルで洗練されたデザイン、16:9アスペクト比、高解像度、テレビ放送品質`,
+  // 共通の除外要素
+  baseNegative: `人物、顔、ポートレート、ニュースキャスター、記者、カメラ、マイク、記者会見、インタビュー、漫画、アニメ、低画質、ぼやけ、テキストオーバーレイ、ウォーターマーク、ロゴ`,
+  // コンテンツタイプ別のテンプレート
+  contentTypes: {
+    // データ・統計を表現
+    data: `データ可視化、チャート、グラフ、統計インフォグラフィック、整理されたレイアウト`,
+    // 場所・地理を表現
+    location: `俯瞰図、衛星画像風、地理マップ、位置表示、クリーンな地図デザイン`,
+    // 技術・科学を表現
+    technology: `技術イラスト、設計図風、概念図、コンセプトビジュアライゼーション`,
+    // 経済・ビジネスを表現
+    business: `ビジネスインフォグラフィック、財務データ可視化、コーポレート抽象デザイン`,
+    // 一般的なニューストピック
+    general: `抽象的なニュース背景、プロフェッショナルなグラデーション、幾何学パターン`,
+  },
+};
+
 // 画像プロンプト生成ハンドラ
 ipcMain.handle(
   'ai:generateImagePrompts',
@@ -221,33 +242,44 @@ ipcMain.handle(
 
     const response = await withRetry(async () => {
       return openai.chat.completions.create({
-        model: 'gpt-4o',
+        model: 'gpt-5.1',
         messages: [
           {
             role: 'system',
-            content: `あなたは報道動画のビジュアルディレクターです。スクリプトの内容に合った画像生成プロンプトを作成します。
-スタイル: ${stylePreset}`,
+            content: `あなたは日本の報道番組向けインフォグラフィックデザイナーです。
+ニュース記事の内容を視覚的に表現する「図解・イラスト」の要素を日本語で抽出します。
+
+重要なルール:
+- 人物、キャスター、記者、インタビューシーンは絶対に含めない
+- 日本人視聴者向けの報道スライドショー用の背景画像・図解を想定
+- 出力は全て日本語で記述`,
           },
           {
             role: 'user',
-            content: `以下のスクリプトパートそれぞれに対して、画像生成AIに渡すプロンプトを作成してください。
+            content: `以下のスクリプトパートそれぞれに対して、ニュースの内容を図解・インフォグラフィックとして表現するための要素を日本語で抽出してください。
 
 ${partsDescription}
 
 ## 要件
-1. 各パートの内容を視覚的に表現する画像のプロンプトを作成してください
-2. プロンプトは英語で記述してください
-3. 報道番組にふさわしい、信頼性のある映像表現を心がけてください
+1. 各パートの「主題」を視覚的に表現する要素を日本語で記述
+2. 人物・顔・キャスター・記者・インタビューは絶対に含めない
+3. 以下のコンテンツタイプから最適なものを選択:
+   - data: 数値・統計・データを表現する場合
+   - location: 地理・場所・地図を表現する場合
+   - technology: 技術・科学・機器を表現する場合
+   - business: 経済・ビジネス・投資を表現する場合
+   - general: 上記に当てはまらない一般的なトピック
 
 ## 出力形式
-以下のJSON形式で出力してください：
+以下のJSON形式で出力してください。partIndexは0から始まる数値です（パート1 = partIndex:0、パート2 = partIndex:1、...）：
 
 {
   "prompts": [
     {
       "partIndex": 0,
-      "prompt": "画像生成プロンプト（英語）",
-      "negativePrompt": "除外したい要素（英語）"
+      "contentType": "technology",
+      "subject": "主題を表す日本語キーワード（例: AI学習システム、教育テクノロジー）",
+      "visualElements": "視覚要素の日本語説明（例: タブレット端末、学習グラフ、教室のイメージ図）"
     }
   ]
 }
@@ -269,16 +301,44 @@ JSONのみを出力してください。`,
     const now = new Date().toISOString();
 
     return parsed.prompts.map(
-      (p: { partIndex: number; prompt: string; negativePrompt: string }) => ({
-        id: crypto.randomUUID(),
-        partId: parts[p.partIndex]?.id || '',
-        stylePreset,
-        prompt: p.prompt,
-        negativePrompt: p.negativePrompt || '',
-        aspectRatio: '16:9' as const,
-        version: 1,
-        createdAt: now,
-      })
+      (
+        p: {
+          partIndex: number;
+          contentType: string;
+          subject: string;
+          visualElements: string;
+        },
+        index: number
+      ) => {
+        // AIが1始まりのインデックスを返した場合のフォールバック
+        let partIndex = p.partIndex;
+        if (partIndex >= parts.length && partIndex > 0) {
+          partIndex = p.partIndex - 1;
+        }
+        if (partIndex < 0 || partIndex >= parts.length) {
+          partIndex = index;
+        }
+
+        // コンテンツタイプに応じたテンプレートを取得
+        const contentTypeKey = p.contentType as keyof typeof NEWS_SLIDESHOW_TEMPLATE.contentTypes;
+        const contentTypeStyle =
+          NEWS_SLIDESHOW_TEMPLATE.contentTypes[contentTypeKey] ||
+          NEWS_SLIDESHOW_TEMPLATE.contentTypes.general;
+
+        // テンプレート + AIが生成したコンテンツ要素を組み合わせ
+        const finalPrompt = `${NEWS_SLIDESHOW_TEMPLATE.baseStyle}, ${contentTypeStyle}, ${p.subject}, ${p.visualElements}`;
+
+        return {
+          id: crypto.randomUUID(),
+          partId: parts[partIndex]?.id || parts[index]?.id || '',
+          stylePreset,
+          prompt: finalPrompt,
+          negativePrompt: NEWS_SLIDESHOW_TEMPLATE.baseNegative,
+          aspectRatio: '16:9' as const,
+          version: 1,
+          createdAt: now,
+        };
+      }
     );
   }
 );
@@ -306,7 +366,7 @@ ipcMain.handle(
 
     const response = await withRetry(async () => {
       return openai.chat.completions.create({
-        model: 'gpt-4o',
+        model: 'gpt-5.1',
         messages: [
           {
             role: 'system',
