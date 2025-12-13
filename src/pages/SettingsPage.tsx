@@ -20,6 +20,7 @@ interface Settings {
   videoFps: number;
   videoBitrate: string;
   audioBitrate: string;
+  videoPartLeadInSec: number;
   openingVideoPath: string;
   endingVideoPath: string;
   autoSaveInterval: number;
@@ -37,6 +38,7 @@ const defaultSettings: Settings = {
   videoFps: 30,
   videoBitrate: '8M',
   audioBitrate: '192k',
+  videoPartLeadInSec: 0.3,
   openingVideoPath: '',
   endingVideoPath: '',
   autoSaveInterval: 60,
@@ -359,6 +361,32 @@ export function SettingsPage() {
                     placeholder="192k"
                     className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
                   />
+                </div>
+                <div className="col-span-2">
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    読み上げ開始までの間（秒）
+                  </label>
+                  <div className="flex items-center gap-3">
+                    <input
+                      type="number"
+                      min="0"
+                      max="2"
+                      step="0.05"
+                      value={settings.videoPartLeadInSec}
+                      onChange={(e) =>
+                        setSettings((prev) => ({
+                          ...prev,
+                          videoPartLeadInSec: Number.isFinite(Number(e.target.value))
+                            ? Number(e.target.value)
+                            : 0,
+                        }))
+                      }
+                      className="w-32 px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    />
+                    <p className="text-xs text-gray-500">
+                      パート切替後に画面が落ち着いてから読み上げを開始します
+                    </p>
+                  </div>
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">

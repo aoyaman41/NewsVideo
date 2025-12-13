@@ -181,6 +181,7 @@ interface Settings {
   videoFps: number;
   videoBitrate: string;
   audioBitrate: string;
+  videoPartLeadInSec: number;
   openingVideoPath: string;
   endingVideoPath: string;
   autoSaveInterval: number;

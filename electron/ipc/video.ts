@@ -30,6 +30,7 @@ type RenderOptions = {
 type Settings = {
   openingVideoPath?: string;
   endingVideoPath?: string;
+  videoPartLeadInSec?: number;
 };
 
 type ImageAssetLike = { id: string; filePath: string };
@@ -106,6 +107,10 @@ async function readSettings(): Promise<Settings> {
     return {
       openingVideoPath: typeof parsed.openingVideoPath === 'string' ? parsed.openingVideoPath : undefined,
       endingVideoPath: typeof parsed.endingVideoPath === 'string' ? parsed.endingVideoPath : undefined,
+      videoPartLeadInSec:
+        typeof parsed.videoPartLeadInSec === 'number' && Number.isFinite(parsed.videoPartLeadInSec)
+          ? parsed.videoPartLeadInSec
+          : undefined,
     };
   } catch {
     return {};
@@ -390,6 +395,7 @@ async function renderPartVideo(
   options: RenderOptions,
   outputPath: string,
   job: VideoJob,
+  leadInSec: number,
   onPercent?: (withinPart: number) => void
 ): Promise<{ durationSec: number }> {
   if (!part.audio?.filePath) {
@@ -411,8 +417,16 @@ async function renderPartVideo(
     return p;
   });
 
-  const totalDurationSec = Math.max(0.1, part.audio.durationSec);
-  const durations = computeImageDurations(part.panelImages, totalDurationSec);
+  const clampedLeadInSec =
+    Number.isFinite(leadInSec) && leadInSec > 0 ? Math.min(2, Math.max(0, leadInSec)) : 0;
+  const leadInMs = Math.round(clampedLeadInSec * 1000);
+
+  const audioDurationSec = Math.max(0.1, part.audio.durationSec);
+  const totalDurationSec = audioDurationSec + clampedLeadInSec;
+  const durations = computeImageDurations(part.panelImages, audioDurationSec);
+  if (durations.length > 0 && clampedLeadInSec > 0) {
+    durations[0] += clampedLeadInSec;
+  }
   const entries = imagePaths.map((p, i) => ({ filePath: p, durationSec: durations[i] }));
 
   const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'newsvideo-'));
@@ -460,6 +474,7 @@ async function renderPartVideo(
     '48000',
     '-ac',
     '2',
+    ...(leadInMs > 0 ? (['-af', `adelay=${leadInMs}|${leadInMs}`] as const) : []),
     '-shortest',
     '-movflags',
     '+faststart',
@@ -627,6 +642,9 @@ ipcMain.handle(
       const { project, part } = await findProjectByPartId(partId);
       const ffmpegPath = await resolveFfmpegPath();
 
+      const settings = await readSettings();
+      const leadInSec = settings.videoPartLeadInSec ?? 0.3;
+
       const previewDir = path.join(project.path, 'output', 'previews');
       await fs.mkdir(previewDir, { recursive: true });
       const previewPath = path.join(previewDir, `preview-part-${part.index + 1}-${part.id.slice(0, 8)}.mp4`);
@@ -655,6 +673,7 @@ ipcMain.handle(
         previewOptions,
         previewPath,
         job,
+        leadInSec,
         (within) => {
           sendProgress({
             stage: 'rendering_parts',
@@ -693,6 +712,9 @@ ipcMain.handle(
       // 出力先ディレクトリ
       await fs.mkdir(path.dirname(outputPath), { recursive: true });
 
+      const settings = await readSettings();
+      const leadInSec = settings.videoPartLeadInSec ?? 0.3;
+
       // パート動画を生成
       const partsDir = path.join(project.path, 'output', 'parts');
       await fs.mkdir(partsDir, { recursive: true });
@@ -726,6 +748,7 @@ ipcMain.handle(
           options,
           partOut,
           job,
+          leadInSec,
           (within) => {
             const overall = (i + within) / totalParts;
             sendProgress({
@@ -743,7 +766,6 @@ ipcMain.handle(
       }
 
       // opening/ending を含める場合は spec に正規化してから concat
-      const settings = await readSettings();
       const segments: string[] = [];
 
       if (options.includeOpening) {

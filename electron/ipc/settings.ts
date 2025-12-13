@@ -25,6 +25,8 @@ const defaultSettings = {
   videoFps: 30,
   videoBitrate: '8M',
   audioBitrate: '192k',
+  // パート切替後、読み上げ開始までの「間」（秒）
+  videoPartLeadInSec: 0.3,
   openingVideoPath: '',
   endingVideoPath: '',
 
