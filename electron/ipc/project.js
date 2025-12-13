@@ -140,6 +140,7 @@ ipcMain.handle('project:save', async (_, project) => {
     const meta = JSON.parse(metaContent);
     meta.name = project.name;
     meta.updatedAt = now;
+    meta.thumbnail = project.thumbnail;
     // 全データを保存
     await Promise.all([
         fs.writeFile(metaPath, JSON.stringify(meta, null, 2)),

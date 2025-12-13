@@ -16,6 +16,7 @@ export function ProjectListPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [newProjectName, setNewProjectName] = useState('');
   const [isCreating, setIsCreating] = useState(false);
+  const [openingProjectId, setOpeningProjectId] = useState<string | null>(null);
 
   useEffect(() => {
     loadProjects();
@@ -56,6 +57,41 @@ export function ProjectListPage() {
       await loadProjects();
     } catch (error) {
       console.error('Failed to delete project:', error);
+    }
+  };
+
+  const handleOpenProject = async (projectId: string) => {
+    setOpeningProjectId(projectId);
+    try {
+      const project = await window.electronAPI.project.load(projectId);
+
+      const parts = project.parts ?? [];
+      if (parts.length === 0) {
+        navigate(`/projects/${projectId}/article`);
+        return;
+      }
+
+      const hasAnyAudio = parts.some((p) => Boolean(p.audio));
+      const hasAnyImages = parts.some((p) => (p.panelImages?.length ?? 0) > 0);
+      const allHaveAudio = parts.every((p) => Boolean(p.audio));
+      const allHaveImages = parts.every((p) => (p.panelImages?.length ?? 0) > 0);
+      const hasAnyPrompt = (project.prompts?.length ?? 0) > 0;
+      const hasAnyGeneratedImage = (project.images?.length ?? 0) > 0;
+
+      if (allHaveAudio && allHaveImages) {
+        navigate(`/projects/${projectId}/video`);
+      } else if (hasAnyAudio) {
+        navigate(`/projects/${projectId}/audio`);
+      } else if (hasAnyImages || hasAnyPrompt || hasAnyGeneratedImage) {
+        navigate(`/projects/${projectId}/image`);
+      } else {
+        navigate(`/projects/${projectId}/script`);
+      }
+    } catch (error) {
+      console.error('Failed to open project:', error);
+      navigate(`/projects/${projectId}/article`);
+    } finally {
+      setOpeningProjectId(null);
     }
   };
 
@@ -121,10 +157,11 @@ export function ProjectListPage() {
                     </div>
                     <div className="flex items-center gap-2 ml-4">
                       <button
-                        onClick={() => navigate(`/projects/${project.id}/article`)}
-                        className="px-4 py-2 text-sm text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
+                        onClick={() => handleOpenProject(project.id)}
+                        disabled={openingProjectId === project.id}
+                        className="px-4 py-2 text-sm text-blue-600 hover:bg-blue-50 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                       >
-                        開く
+                        {openingProjectId === project.id ? '開いています...' : '開く'}
                       </button>
                       <button
                         onClick={() => handleDeleteProject(project.id)}

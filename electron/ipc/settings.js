@@ -19,6 +19,8 @@ const defaultSettings = {
     videoFps: 30,
     videoBitrate: '8M',
     audioBitrate: '192k',
+    openingVideoPath: '',
+    endingVideoPath: '',
     // その他
     autoSaveInterval: 60, // 秒
     defaultProjectDir: '',

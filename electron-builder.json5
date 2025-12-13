@@ -12,7 +12,6 @@
   "mac": {
     "target": ["dmg", "zip"],
     "category": "public.app-category.video",
-    "icon": "resources/icon.icns",
     "hardenedRuntime": true,
     "gatekeeperAssess": false,
     "entitlements": "resources/entitlements.mac.plist",

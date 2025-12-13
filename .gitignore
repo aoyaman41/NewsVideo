@@ -35,6 +35,10 @@ release/
 *.exe
 *.AppImage
 
+# Bundled binaries (generated)
+resources/ffmpeg/ffmpeg
+resources/ffmpeg/ffprobe
+
 # Testing
 coverage/
 

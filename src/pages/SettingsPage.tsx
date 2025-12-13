@@ -20,6 +20,8 @@ interface Settings {
   videoFps: number;
   videoBitrate: string;
   audioBitrate: string;
+  openingVideoPath: string;
+  endingVideoPath: string;
   autoSaveInterval: number;
   defaultProjectDir: string;
 }
@@ -35,6 +37,8 @@ const defaultSettings: Settings = {
   videoFps: 30,
   videoBitrate: '8M',
   audioBitrate: '192k',
+  openingVideoPath: '',
+  endingVideoPath: '',
   autoSaveInterval: 60,
   defaultProjectDir: '',
 };
@@ -165,6 +169,20 @@ export function SettingsPage() {
       description: 'Chirp 3 HDを使用して音声を合成します',
       url: 'https://console.cloud.google.com/',
     },
+  };
+
+  const handleSelectVideoFile = async (field: 'openingVideoPath' | 'endingVideoPath') => {
+    try {
+      const selected = await window.electronAPI.file.selectFile({
+        title: field === 'openingVideoPath' ? 'オープニング動画を選択' : 'エンディング動画を選択',
+        filters: [{ name: 'Video', extensions: ['mp4', 'mov', 'm4v'] }],
+        properties: ['openFile'],
+      });
+      if (!selected) return;
+      setSettings((prev) => ({ ...prev, [field]: selected }));
+    } catch (error) {
+      console.error('Failed to select video file:', error);
+    }
   };
 
   return (
@@ -310,6 +328,40 @@ export function SettingsPage() {
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">
+                    動画ビットレート
+                  </label>
+                  <input
+                    type="text"
+                    value={settings.videoBitrate}
+                    onChange={(e) =>
+                      setSettings((prev) => ({
+                        ...prev,
+                        videoBitrate: e.target.value,
+                      }))
+                    }
+                    placeholder="8M"
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    音声ビットレート
+                  </label>
+                  <input
+                    type="text"
+                    value={settings.audioBitrate}
+                    onChange={(e) =>
+                      setSettings((prev) => ({
+                        ...prev,
+                        audioBitrate: e.target.value,
+                      }))
+                    }
+                    placeholder="192k"
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
                     アスペクト比
                   </label>
                   <select
@@ -326,6 +378,64 @@ export function SettingsPage() {
                     <option value="9:16">9:16 (縦長)</option>
                     <option value="1:1">1:1 (正方形)</option>
                   </select>
+                </div>
+                <div className="col-span-2">
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    オープニング動画（任意）
+                  </label>
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      value={settings.openingVideoPath}
+                      readOnly
+                      placeholder="未設定"
+                      className="flex-1 px-3 py-2 border border-gray-300 rounded-lg bg-gray-50 text-sm"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => handleSelectVideoFile('openingVideoPath')}
+                      className="px-3 py-2 text-sm border border-gray-300 rounded-lg hover:bg-gray-50"
+                    >
+                      参照
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setSettings((prev) => ({ ...prev, openingVideoPath: '' }))}
+                      disabled={!settings.openingVideoPath}
+                      className="px-3 py-2 text-sm border border-gray-300 rounded-lg hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      クリア
+                    </button>
+                  </div>
+                </div>
+                <div className="col-span-2">
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    エンディング動画（任意）
+                  </label>
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      value={settings.endingVideoPath}
+                      readOnly
+                      placeholder="未設定"
+                      className="flex-1 px-3 py-2 border border-gray-300 rounded-lg bg-gray-50 text-sm"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => handleSelectVideoFile('endingVideoPath')}
+                      className="px-3 py-2 text-sm border border-gray-300 rounded-lg hover:bg-gray-50"
+                    >
+                      参照
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setSettings((prev) => ({ ...prev, endingVideoPath: '' }))}
+                      disabled={!settings.endingVideoPath}
+                      className="px-3 py-2 text-sm border border-gray-300 rounded-lg hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      クリア
+                    </button>
+                  </div>
                 </div>
               </div>
             </div>

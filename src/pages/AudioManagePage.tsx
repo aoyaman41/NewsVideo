@@ -3,6 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { Waveform } from '../components/audio';
 import { Header } from '../components/layout';
 import type { AudioAsset, Project } from '../schemas';
+import { toLocalFileUrl } from '../utils/toLocalFileUrl';
 
 type TTSEngine = 'google_tts' | 'gemini_tts' | 'macos_tts';
 
@@ -26,11 +27,6 @@ const defaultSettings: Settings = {
   ttsSpeakingRate: 1.0,
   ttsPitch: 0,
 };
-
-// ローカルファイルパスをカスタムプロトコルURLに変換
-function toLocalFileUrl(filePath: string): string {
-  return `local-file://${encodeURIComponent(filePath)}`;
-}
 
 function guessLanguageCode(voiceName: string): string {
   const match = voiceName.match(/^([a-z]{2}-[A-Z]{2})/);
@@ -476,6 +472,12 @@ export function AudioManagePage() {
               className="px-4 py-2 text-sm text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-lg transition-colors"
             >
               設定
+            </button>
+            <button
+              onClick={() => navigate(`/projects/${projectId}/video`)}
+              className="px-4 py-2 text-sm bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors"
+            >
+              動画へ
             </button>
           </div>
         }

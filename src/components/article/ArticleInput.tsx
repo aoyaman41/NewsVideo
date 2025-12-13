@@ -1,3 +1,4 @@
+import { useEffect } from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { articleInputSchema, type ArticleInput as ArticleInputType } from '../../schemas';
@@ -12,6 +13,7 @@ export function ArticleInput({ defaultValues, onSubmit, isLoading }: ArticleInpu
   const {
     register,
     handleSubmit,
+    reset,
     formState: { errors },
   } = useForm<ArticleInputType>({
     resolver: zodResolver(articleInputSchema),
@@ -21,6 +23,14 @@ export function ArticleInput({ defaultValues, onSubmit, isLoading }: ArticleInpu
       bodyText: defaultValues?.bodyText || '',
     },
   });
+
+  useEffect(() => {
+    reset({
+      title: defaultValues?.title || '',
+      source: defaultValues?.source || '',
+      bodyText: defaultValues?.bodyText || '',
+    });
+  }, [defaultValues?.bodyText, defaultValues?.source, defaultValues?.title, reset]);
 
   return (
     <form onSubmit={handleSubmit(onSubmit)} className="space-y-6">

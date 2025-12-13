@@ -6,6 +6,7 @@ import { ArticleInputPage } from './pages/ArticleInputPage';
 import { ScriptEditPage } from './pages/ScriptEditPage';
 import { ImageManagePage } from './pages/ImageManagePage';
 import { AudioManagePage } from './pages/AudioManagePage';
+import { VideoManagePage } from './pages/VideoManagePage';
 
 function App() {
   return (
@@ -18,6 +19,7 @@ function App() {
           <Route path="/projects/:projectId/script" element={<ScriptEditPage />} />
           <Route path="/projects/:projectId/image" element={<ImageManagePage />} />
           <Route path="/projects/:projectId/audio" element={<AudioManagePage />} />
+          <Route path="/projects/:projectId/video" element={<VideoManagePage />} />
           <Route path="/settings" element={<SettingsPage />} />
         </Route>
       </Routes>

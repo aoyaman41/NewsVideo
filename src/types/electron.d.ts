@@ -49,7 +49,11 @@ interface ElectronAPI {
   };
 
   video: {
-    render: (project: Project, options: RenderOptions) => Promise<{ outputPath: string }>;
+    render: (
+      project: Project,
+      options: RenderOptions,
+      outputPath: string
+    ) => Promise<{ outputPath: string }>;
     preview: (partId: string) => Promise<{ previewPath: string }>;
     cancelRender: () => Promise<{ success: boolean }>;
   };
@@ -177,6 +181,8 @@ interface Settings {
   videoFps: number;
   videoBitrate: string;
   audioBitrate: string;
+  openingVideoPath: string;
+  endingVideoPath: string;
   autoSaveInterval: number;
   defaultProjectDir: string;
 }

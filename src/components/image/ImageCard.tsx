@@ -1,9 +1,5 @@
 import type { ImageAsset } from '../../schemas';
-
-// ローカルファイルパスをカスタムプロトコルURLに変換
-function toLocalFileUrl(filePath: string): string {
-  return `local-file://${encodeURIComponent(filePath)}`;
-}
+import { toLocalFileUrl } from '../../utils/toLocalFileUrl';
 
 interface ImageCardProps {
   image: ImageAsset;

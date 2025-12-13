@@ -3,11 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { Header } from '../components/layout';
 import { ImageAssignment, ImageGallery, PromptEditor } from '../components/image';
 import type { Project, ImageAssetRef, ImagePrompt } from '../schemas';
-
-// ローカルファイルパスをカスタムプロトコルURLに変換
-function toLocalFileUrl(filePath: string): string {
-  return `local-file://${encodeURIComponent(filePath)}`;
-}
+import { toLocalFileUrl } from '../utils/toLocalFileUrl';
 
 export function ImageManagePage() {
   const { projectId } = useParams<{ projectId: string }>();

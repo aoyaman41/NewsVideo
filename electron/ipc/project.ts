@@ -167,6 +167,7 @@ ipcMain.handle('project:save', async (_, project: {
   images: unknown;
   prompts: unknown;
   audio: unknown;
+  thumbnail?: unknown;
 }) => {
   const now = new Date().toISOString();
   const projectPath = project.path;
@@ -177,6 +178,7 @@ ipcMain.handle('project:save', async (_, project: {
   const meta = JSON.parse(metaContent);
   meta.name = project.name;
   meta.updatedAt = now;
+  meta.thumbnail = project.thumbnail;
 
   // 全データを保存
   await Promise.all([
