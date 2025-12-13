@@ -21,6 +21,48 @@ export function ImageManagePage() {
   const [isGeneratingImage, setIsGeneratingImage] = useState(false);
   const [selectedTab, setSelectedTab] = useState<'parts' | 'imported' | 'thumbnail'>('parts');
 
+  const latestPromptByPartId = useMemo(() => {
+    const map = new Map<string, ImagePrompt>();
+    if (!project) return map;
+
+    const activePartIds = new Set(project.parts.map((part) => part.id));
+
+    for (const prompt of project.prompts) {
+      if (!activePartIds.has(prompt.partId)) continue;
+
+      const current = map.get(prompt.partId);
+      if (!current || prompt.createdAt >= current.createdAt) {
+        map.set(prompt.partId, prompt);
+      }
+    }
+
+    return map;
+  }, [project]);
+
+  const activePrompts = useMemo(() => {
+    if (!project) return [];
+    return project.parts
+      .map((part) => latestPromptByPartId.get(part.id))
+      .filter((prompt): prompt is ImagePrompt => !!prompt);
+  }, [project, latestPromptByPartId]);
+
+  const promptIdsWithAnyImage = useMemo(() => {
+    const set = new Set<string>();
+    if (!project) return set;
+    for (const image of project.images) {
+      if (image.metadata.promptId) set.add(image.metadata.promptId);
+    }
+    return set;
+  }, [project]);
+
+  const missingImagePromptCount = useMemo(() => {
+    let missing = 0;
+    for (const prompt of activePrompts) {
+      if (!promptIdsWithAnyImage.has(prompt.id)) missing += 1;
+    }
+    return missing;
+  }, [activePrompts, promptIdsWithAnyImage]);
+
   // プロジェクト読み込み
   useEffect(() => {
     const loadProject = async () => {
@@ -110,14 +152,20 @@ export function ImageManagePage() {
   const handleGenerateAllImages = useCallback(async () => {
     if (!project || !projectId) return;
 
+    const targetPrompts = activePrompts.filter(
+      (prompt) => !promptIdsWithAnyImage.has(prompt.id)
+    );
+
+    if (targetPrompts.length === 0) {
+      setError('未生成の画像がありません（必要なら各パートで個別に生成してください）');
+      return;
+    }
+
     try {
       setIsGeneratingImage(true);
       setError(null);
 
-      const imageAssets = await window.electronAPI.image.generateBatch(
-        project.prompts,
-        projectId
-      );
+      const imageAssets = await window.electronAPI.image.generateBatch(targetPrompts, projectId);
 
       // プロジェクトを更新
       const updatedProject = {
@@ -134,7 +182,7 @@ export function ImageManagePage() {
     } finally {
       setIsGeneratingImage(false);
     }
-  }, [project, projectId]);
+  }, [project, projectId, activePrompts, promptIdsWithAnyImage]);
 
   // 画像削除
   const handleDeleteImage = useCallback(
@@ -239,7 +287,9 @@ export function ImageManagePage() {
   );
 
   // 選択中のパートのプロンプト
-  const selectedPartPrompt = project?.prompts.find((p) => p.partId === selectedPartId);
+  const selectedPartPrompt = selectedPartId
+    ? latestPromptByPartId.get(selectedPartId)
+    : undefined;
 
   // 選択中のパートの画像
   const selectedPartImages = project?.images.filter(
@@ -324,10 +374,10 @@ export function ImageManagePage() {
               スクリプト編集に戻る
             </button>
             <button
-              onClick={() => navigate(`/projects/${projectId}/video`)}
+              onClick={() => navigate(`/projects/${projectId}/audio`)}
               className="px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
             >
-              動画プレビューへ
+              音声生成へ
             </button>
           </div>
         }
@@ -347,7 +397,7 @@ export function ImageManagePage() {
             <h3 className="font-semibold text-gray-900 mb-4">パート一覧</h3>
             <ul className="space-y-2">
               {project.parts.map((part, index) => {
-                const partPrompt = project.prompts.find((p) => p.partId === part.id);
+                const partPrompt = latestPromptByPartId.get(part.id);
                 const assignedCount = part.panelImages.length;
 
                 return (
@@ -398,15 +448,15 @@ export function ImageManagePage() {
                   生成中...
                 </>
               ) : (
-                `プロンプト生成 (${project.prompts.length}件)`
+                `プロンプト生成 (${activePrompts.length}/${project.parts.length}件)`
               )}
             </button>
 
             {/* 画像一括生成ボタン */}
-            {project.prompts.length > 0 && (
+            {activePrompts.length > 0 && (
               <button
                 onClick={handleGenerateAllImages}
-                disabled={isGeneratingImage}
+                disabled={isGeneratingImage || missingImagePromptCount === 0}
                 className="w-full mt-2 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
               >
                 {isGeneratingImage ? (
@@ -418,7 +468,7 @@ export function ImageManagePage() {
                     生成中...
                   </>
                 ) : (
-                  `画像一括生成 (${project.images.length}/${project.prompts.length}枚)`
+                  `画像一括生成 (未生成 ${missingImagePromptCount}/${activePrompts.length}枚)`
                 )}
               </button>
             )}

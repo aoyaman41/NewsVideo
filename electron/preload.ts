@@ -44,17 +44,19 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // 画像生成
   image: {
-    generate: (prompt: unknown) => ipcRenderer.invoke('image:generate', prompt),
-    generateBatch: (prompts: unknown[]) => ipcRenderer.invoke('image:generateBatch', prompts),
+    generate: (prompt: unknown, projectId: string) =>
+      ipcRenderer.invoke('image:generate', prompt, projectId),
+    generateBatch: (prompts: unknown[], projectId: string) =>
+      ipcRenderer.invoke('image:generateBatch', prompts, projectId),
   },
 
   // TTS操作
   tts: {
-    generate: (text: string, options: unknown) =>
-      ipcRenderer.invoke('tts:generate', text, options),
-    generateBatch: (parts: unknown[], options: unknown) =>
-      ipcRenderer.invoke('tts:generateBatch', parts, options),
-    getVoices: () => ipcRenderer.invoke('tts:getVoices'),
+    generate: (text: string, options: unknown, projectId: string) =>
+      ipcRenderer.invoke('tts:generate', text, options, projectId),
+    generateBatch: (parts: unknown[], options: unknown, projectId: string) =>
+      ipcRenderer.invoke('tts:generateBatch', parts, options, projectId),
+    getVoices: (engine?: string) => ipcRenderer.invoke('tts:getVoices', engine),
   },
 
   // 動画操作

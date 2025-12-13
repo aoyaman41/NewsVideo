@@ -263,84 +263,96 @@ ipcMain.handle(
       model: 'gemini-3-pro-image-preview',
     });
 
-    const results: ImageAsset[] = [];
-    const errors: { index: number; error: string }[] = [];
-
     console.log('[image:generateBatch] Starting batch generation for', prompts.length, 'prompts');
 
-    for (let i = 0; i < prompts.length; i++) {
-      const prompt = prompts[i];
-
-      try {
-        // 日本語ニュース向けのシステム指示を追加
-        const japaneseNewsContext = `日本の報道番組向けのインフォグラフィック画像を生成してください。
+    // 日本語ニュース向けのシステム指示を追加（全件共通）
+    const japaneseNewsContext = `日本の報道番組向けのインフォグラフィック画像を生成してください。
 日本人視聴者向けのデザインで、信頼性があり、プロフェッショナルな印象を与える画像にしてください。
 人物、顔、キャスター、記者は含めないでください。`;
 
-        const enhancedPrompt = `${japaneseNewsContext}\n\n${prompt.prompt}`;
+    const settled = await Promise.all(
+      prompts.map(async (prompt, index) => {
+        try {
+          const enhancedPrompt = `${japaneseNewsContext}\n\n${prompt.prompt}`;
 
-        console.log(`[image:generateBatch] Generating image ${i + 1}/${prompts.length}:`, enhancedPrompt.substring(0, 100));
+          console.log(
+            `[image:generateBatch] Generating image ${index + 1}/${prompts.length}:`,
+            enhancedPrompt.substring(0, 100)
+          );
 
-        const imageId = crypto.randomUUID();
-        const dimensions = getDimensions(prompt.aspectRatio);
+          const imageId = crypto.randomUUID();
+          const dimensions = getDimensions(prompt.aspectRatio);
 
-        const response = await withRetry(async () => {
-          return model.generateContent({
-            contents: [{
-              role: 'user',
-              parts: [{ text: enhancedPrompt }],
-            }],
+          const response = await withRetry(async () => {
+            return model.generateContent({
+              contents: [
+                {
+                  role: 'user',
+                  parts: [{ text: enhancedPrompt }],
+                },
+              ],
+            });
           });
-        });
 
-        console.log(`[image:generateBatch] Response received for image ${i + 1}`);
+          console.log(`[image:generateBatch] Response received for image ${index + 1}`);
 
-        const result = response.response;
-        const parts = result.candidates?.[0]?.content?.parts;
-        console.log(`[image:generateBatch] Parts for image ${i + 1}:`, JSON.stringify(parts?.map(p => ({ hasInlineData: !!p.inlineData }))));
+          const result = response.response;
+          const parts = result.candidates?.[0]?.content?.parts;
+          console.log(
+            `[image:generateBatch] Parts for image ${index + 1}:`,
+            JSON.stringify(parts?.map((p) => ({ hasInlineData: !!p.inlineData })))
+          );
 
-        if (!parts || parts.length === 0) {
-          throw new Error('レスポンスが空です');
+          if (!parts || parts.length === 0) {
+            throw new Error('レスポンスが空です');
+          }
+
+          const imagePart = parts.find((part) => part.inlineData?.mimeType?.startsWith('image/'));
+
+          if (!imagePart?.inlineData) {
+            throw new Error('画像データが見つかりません');
+          }
+
+          const base64Data = imagePart.inlineData.data;
+          const mimeType = imagePart.inlineData.mimeType || 'image/png';
+
+          const filePath = await saveImageToFile(base64Data, projectPath, imageId, mimeType);
+          const stats = await fs.stat(filePath);
+
+          const imageAsset: ImageAsset = {
+            id: imageId,
+            filePath,
+            sourceType: 'generated',
+            metadata: {
+              width: dimensions.width,
+              height: dimensions.height,
+              mimeType,
+              fileSize: stats.size,
+              createdAt: new Date().toISOString(),
+              promptId: prompt.id,
+              tags: [],
+            },
+          };
+
+          return { ok: true as const, index, imageAsset };
+        } catch (error) {
+          return {
+            ok: false as const,
+            index,
+            error: error instanceof Error ? error.message : String(error),
+          };
         }
+      })
+    );
 
-        const imagePart = parts.find(part => part.inlineData?.mimeType?.startsWith('image/'));
+    const results: ImageAsset[] = [];
+    const errors: { index: number; error: string }[] = [];
 
-        if (!imagePart?.inlineData) {
-          throw new Error('画像データが見つかりません');
-        }
-
-        const base64Data = imagePart.inlineData.data;
-        const mimeType = imagePart.inlineData.mimeType || 'image/png';
-
-        const filePath = await saveImageToFile(base64Data, projectPath, imageId, mimeType);
-        const stats = await fs.stat(filePath);
-
-        const imageAsset: ImageAsset = {
-          id: imageId,
-          filePath,
-          sourceType: 'generated',
-          metadata: {
-            width: dimensions.width,
-            height: dimensions.height,
-            mimeType,
-            fileSize: stats.size,
-            createdAt: new Date().toISOString(),
-            promptId: prompt.id,
-            tags: [],
-          },
-        };
-
-        results.push(imageAsset);
-
-        // レート制限対策: リクエスト間に1秒待機
-        if (i < prompts.length - 1) {
-          await new Promise(resolve => setTimeout(resolve, 1000));
-        }
-      } catch (error) {
-        errors.push({
-          index: i,
-          error: error instanceof Error ? error.message : String(error),
-        });
+    for (const item of settled) {
+      if (item.ok) {
+        results.push(item.imageAsset);
+      } else {
+        errors.push({ index: item.index, error: item.error });
       }
     }
 

@@ -49,7 +49,7 @@ export const audioAssetSchema = z.object({
   id: z.string().uuid(),
   filePath: z.string(),
   durationSec: z.number().positive(),
-  ttsEngine: z.enum(['google_tts', 'macos_tts']),
+  ttsEngine: z.enum(['google_tts', 'gemini_tts', 'macos_tts']),
   voiceId: z.string(),
   settings: z.object({
     speakingRate: z.number().min(0.5).max(2.0),

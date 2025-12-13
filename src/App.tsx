@@ -5,6 +5,7 @@ import { SettingsPage } from './pages/SettingsPage';
 import { ArticleInputPage } from './pages/ArticleInputPage';
 import { ScriptEditPage } from './pages/ScriptEditPage';
 import { ImageManagePage } from './pages/ImageManagePage';
+import { AudioManagePage } from './pages/AudioManagePage';
 
 function App() {
   return (
@@ -16,6 +17,7 @@ function App() {
           <Route path="/projects/:projectId/article" element={<ArticleInputPage />} />
           <Route path="/projects/:projectId/script" element={<ScriptEditPage />} />
           <Route path="/projects/:projectId/image" element={<ImageManagePage />} />
+          <Route path="/projects/:projectId/audio" element={<AudioManagePage />} />
           <Route path="/settings" element={<SettingsPage />} />
         </Route>
       </Routes>

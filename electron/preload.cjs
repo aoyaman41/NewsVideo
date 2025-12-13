@@ -42,11 +42,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // TTS操作
   tts: {
-    generate: (text, options) =>
-      ipcRenderer.invoke('tts:generate', text, options),
-    generateBatch: (parts, options) =>
-      ipcRenderer.invoke('tts:generateBatch', parts, options),
-    getVoices: () => ipcRenderer.invoke('tts:getVoices'),
+    generate: (text, options, projectId) =>
+      ipcRenderer.invoke('tts:generate', text, options, projectId),
+    generateBatch: (parts, options, projectId) =>
+      ipcRenderer.invoke('tts:generateBatch', parts, options, projectId),
+    getVoices: (engine) => ipcRenderer.invoke('tts:getVoices', engine),
   },
 
   // 動画操作

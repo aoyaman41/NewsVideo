@@ -43,9 +43,9 @@ interface ElectronAPI {
   };
 
   tts: {
-    generate: (text: string, options: TTSOptions) => Promise<AudioAsset>;
-    generateBatch: (parts: Part[], options: TTSOptions) => Promise<AudioAsset[]>;
-    getVoices: () => Promise<VoiceInfo[]>;
+    generate: (text: string, options: TTSOptions, projectId: string) => Promise<AudioAsset>;
+    generateBatch: (parts: Part[], options: TTSOptions, projectId: string) => Promise<AudioAsset[]>;
+    getVoices: (engine?: 'google_tts' | 'gemini_tts' | 'macos_tts') => Promise<VoiceInfo[]>;
   };
 
   video: {
@@ -143,7 +143,7 @@ interface AudioAsset {
   id: string;
   filePath: string;
   durationSec: number;
-  ttsEngine: 'google_tts' | 'macos_tts';
+  ttsEngine: 'google_tts' | 'gemini_tts' | 'macos_tts';
   voiceId: string;
   settings: {
     speakingRate: number;
@@ -162,7 +162,7 @@ interface Comment {
 
 // 設定関連の型
 interface Settings {
-  ttsEngine: 'google_tts' | 'macos_tts';
+  ttsEngine: 'google_tts' | 'gemini_tts' | 'macos_tts';
   ttsVoice: string;
   ttsSpeakingRate: number;
   ttsPitch: number;
@@ -192,6 +192,7 @@ interface CommentTarget {
 }
 
 interface TTSOptions {
+  ttsEngine: 'google_tts' | 'gemini_tts' | 'macos_tts';
   voiceName: string;
   languageCode: string;
   speakingRate: number;

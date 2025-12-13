@@ -8,7 +8,7 @@ const getSecretsPath = () => path.join(app.getPath('userData'), 'secrets.enc');
 const defaultSettings = {
     // TTS設定
     ttsEngine: 'google_tts',
-    ttsVoice: 'ja-JP-Chirp3-HD-Aoife',
+    ttsVoice: 'ja-JP-Chirp3-HD-Zephyr',
     ttsSpeakingRate: 1.0,
     ttsPitch: 0,
     // 画像設定
@@ -30,7 +30,11 @@ async function readSettings() {
     try {
         const settingsPath = getSettingsPath();
         const content = await fs.readFile(settingsPath, 'utf-8');
-        return { ...defaultSettings, ...JSON.parse(content) };
+        const merged = { ...defaultSettings, ...JSON.parse(content) };
+        if (merged.ttsVoice === 'ja-JP-Chirp3-HD-Aoife') {
+            merged.ttsVoice = defaultSettings.ttsVoice;
+        }
+        return merged;
     }
     catch {
         return defaultSettings;
