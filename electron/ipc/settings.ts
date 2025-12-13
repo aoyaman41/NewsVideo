@@ -11,8 +11,8 @@ type TTSEngine = 'google_tts' | 'gemini_tts' | 'macos_tts';
 
 const defaultSettings = {
   // TTS設定
-  ttsEngine: 'google_tts' as TTSEngine,
-  ttsVoice: 'ja-JP-Chirp3-HD-Zephyr',
+  ttsEngine: 'gemini_tts' as TTSEngine,
+  ttsVoice: 'Charon',
   ttsSpeakingRate: 1.0,
   ttsPitch: 0,
 
@@ -45,7 +45,14 @@ async function readSettings(): Promise<Settings> {
     const settingsPath = getSettingsPath();
     const content = await fs.readFile(settingsPath, 'utf-8');
     const merged = { ...defaultSettings, ...JSON.parse(content) } as Settings;
+    // 旧ボイス名の移行
     if (merged.ttsVoice === 'ja-JP-Chirp3-HD-Aoife') {
+      merged.ttsVoice = defaultSettings.ttsVoice;
+    }
+    // 本アプリでは Gemini TTS をデフォルト運用にする
+    merged.ttsEngine = 'gemini_tts';
+    // 旧Google/macos系のボイス名が残っている場合はGemini側のデフォルトへ寄せる
+    if (!merged.ttsVoice || merged.ttsVoice.includes('-')) {
       merged.ttsVoice = defaultSettings.ttsVoice;
     }
     return merged;

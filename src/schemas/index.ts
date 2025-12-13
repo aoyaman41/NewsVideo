@@ -51,6 +51,15 @@ export const audioAssetSchema = z.object({
   durationSec: z.number().positive(),
   ttsEngine: z.enum(['google_tts', 'gemini_tts', 'macos_tts']),
   voiceId: z.string(),
+  segments: z.array(z.string()).optional(),
+  timepoints: z
+    .array(
+      z.object({
+        markName: z.string(),
+        timeSeconds: z.number().nonnegative(),
+      })
+    )
+    .optional(),
   settings: z.object({
     speakingRate: z.number().min(0.5).max(2.0),
     pitch: z.number().min(-20).max(20),

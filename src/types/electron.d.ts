@@ -145,6 +145,11 @@ interface AudioAsset {
   durationSec: number;
   ttsEngine: 'google_tts' | 'gemini_tts' | 'macos_tts';
   voiceId: string;
+  segments?: string[];
+  timepoints?: Array<{
+    markName: string;
+    timeSeconds: number;
+  }>;
   settings: {
     speakingRate: number;
     pitch: number;

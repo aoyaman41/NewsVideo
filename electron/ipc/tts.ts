@@ -24,6 +24,11 @@ interface AudioAsset {
   durationSec: number;
   ttsEngine: TTSEngine;
   voiceId: string;
+  segments?: string[];
+  timepoints?: Array<{
+    markName: string;
+    timeSeconds: number;
+  }>;
   settings: {
     speakingRate: number;
     pitch: number;
@@ -44,7 +49,7 @@ interface PartLike {
   scriptText: string;
 }
 
-type ApiKeyService = 'google_tts';
+type ApiKeyService = 'google_tts' | 'google_ai';
 
 const getSecretsPath = () => path.join(app.getPath('userData'), 'secrets.enc');
 const getProjectsPath = () => path.join(app.getPath('userData'), 'projects');
@@ -101,6 +106,83 @@ function clamp(value: number, min: number, max: number): number {
   return Math.min(Math.max(value, min), max);
 }
 
+function pcm16leToWavBuffer(pcmData: Buffer, sampleRateHertz: number, channels: number): Buffer {
+  const bitsPerSample = 16;
+  const bytesPerSample = bitsPerSample / 8;
+  const byteRate = sampleRateHertz * channels * bytesPerSample;
+  const blockAlign = channels * bytesPerSample;
+  const dataSize = pcmData.length;
+
+  const header = Buffer.alloc(44);
+  header.write('RIFF', 0);
+  header.writeUInt32LE(36 + dataSize, 4);
+  header.write('WAVE', 8);
+  header.write('fmt ', 12);
+  header.writeUInt32LE(16, 16);
+  header.writeUInt16LE(1, 20); // PCM
+  header.writeUInt16LE(channels, 22);
+  header.writeUInt32LE(sampleRateHertz, 24);
+  header.writeUInt32LE(byteRate, 28);
+  header.writeUInt16LE(blockAlign, 32);
+  header.writeUInt16LE(bitsPerSample, 34);
+  header.write('data', 36);
+  header.writeUInt32LE(dataSize, 40);
+
+  return Buffer.concat([header, pcmData]);
+}
+
+function escapeSsmlText(text: string): string {
+  return text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&apos;');
+}
+
+function splitScriptIntoSegments(text: string): string[] {
+  const normalized = text.replace(/\r\n/g, '\n').trim();
+  if (!normalized) return [];
+
+  const segments: string[] = [];
+  let buffer = '';
+
+  const flush = () => {
+    const seg = buffer.replace(/\n+/g, ' ').trim();
+    buffer = '';
+    if (seg) segments.push(seg);
+  };
+
+  for (const ch of normalized) {
+    buffer += ch;
+    if (ch === '\n') {
+      flush();
+      continue;
+    }
+    if ('。！？!?'.includes(ch)) {
+      flush();
+      continue;
+    }
+    if (ch === '、' && buffer.length >= 40) {
+      flush();
+      continue;
+    }
+    if (buffer.length >= 80) {
+      flush();
+    }
+  }
+  flush();
+
+  return segments;
+}
+
+function buildSsmlWithMarks(segments: string[]): string {
+  const body = segments
+    .map((seg, i) => `<mark name="m${i}"/>${escapeSsmlText(seg)}`)
+    .join('');
+  return `<speak>${body}</speak>`;
+}
+
 async function withRetry<T>(
   fn: () => Promise<T>,
   maxRetries: number = 3,
@@ -155,9 +237,13 @@ async function synthesizeGoogleTts(
     throw new Error('Google TTS APIキーが設定されていません。設定画面からAPIキーを入力してください。');
   }
 
-  const url = `https://texttospeech.googleapis.com/v1/text:synthesize?key=${apiKey}`;
+  const segments = splitScriptIntoSegments(text);
+  const enableSync = segments.length >= 2 && segments.length <= 200;
+  const url = `https://texttospeech.googleapis.com/${
+    enableSync ? 'v1beta1' : 'v1'
+  }/text:synthesize?key=${apiKey}`;
   const requestBody: Record<string, unknown> = {
-    input: { text },
+    input: enableSync ? { ssml: buildSsmlWithMarks(segments) } : { text },
     voice: {
       languageCode: options.languageCode,
       ...(options.voiceName ? { name: options.voiceName } : {}),
@@ -167,6 +253,7 @@ async function synthesizeGoogleTts(
       speakingRate: clamp(options.speakingRate, 0.25, 4.0),
       pitch: clamp(options.pitch, -20, 20),
     },
+    ...(enableSync ? { enableTimePointing: ['SSML_MARK'] } : {}),
   };
 
   const response = await withRetry(async () => {
@@ -179,6 +266,7 @@ async function synthesizeGoogleTts(
 
   const data = (await response.json().catch(() => ({}))) as {
     audioContent?: string;
+    timepoints?: Array<{ markName?: string; timeSeconds?: number }>;
     error?: { message?: string };
   };
 
@@ -203,12 +291,24 @@ async function synthesizeGoogleTts(
   await fs.writeFile(filePath, buffer);
   await fs.stat(filePath);
 
+  const timepoints = enableSync
+    ? (Array.isArray(data.timepoints) ? data.timepoints : [])
+        .map((tp) => ({
+          markName: String(tp.markName || ''),
+          timeSeconds: Number(tp.timeSeconds),
+        }))
+        .filter((tp) => tp.markName && Number.isFinite(tp.timeSeconds) && tp.timeSeconds >= 0)
+        .sort((a, b) => a.timeSeconds - b.timeSeconds)
+    : [];
+
   return {
     id: audioId,
     filePath,
     durationSec: estimateDurationSec(text, options.speakingRate),
     ttsEngine: 'google_tts',
     voiceId: options.voiceName || options.languageCode,
+    segments: enableSync ? segments : undefined,
+    timepoints: timepoints.length > 0 ? timepoints : undefined,
     settings: {
       speakingRate: options.speakingRate,
       pitch: options.pitch,
@@ -218,100 +318,108 @@ async function synthesizeGoogleTts(
   };
 }
 
-const GEMINI_TTS_MODEL_ID = 'gemini-2.5-pro-tts';
+const GEMINI_TTS_MODEL_ID = 'gemini-2.5-pro-preview-tts';
 const DEFAULT_GEMINI_TTS_PROMPT =
-  'あなたはプロのナレーターです。以下の文章を自然な日本語で、落ち着いたニュース調で読み上げてください。';
+  'ニュース番組のナレーションとして、次の文章を自然な日本語で、落ち着いたニュース調で読み上げてください。';
 
 async function synthesizeGeminiTts(
   text: string,
   options: TTSOptions,
   projectPath: string
 ): Promise<AudioAsset> {
-  const apiKey = await readApiKey('google_tts');
-  const accessToken = await getGcloudAccessToken();
-
-  if (!apiKey && !accessToken) {
+  const apiKey = await readApiKey('google_ai');
+  if (!apiKey) {
     throw new Error(
-      'Gemini-TTS を使うには、Google TTS APIキー（設定画面）または gcloud の認証（application-default）が必要です。'
+      'Google AI APIキーが設定されていません。設定画面から（Google AI Studio / Generative Language）用のAPIキーを入力してください。'
     );
   }
 
-  const url =
-    accessToken || !apiKey
-      ? 'https://texttospeech.googleapis.com/v1/text:synthesize'
-      : `https://texttospeech.googleapis.com/v1/text:synthesize?key=${apiKey}`;
-
-  const headers: Record<string, string> = {
-    'Content-Type': 'application/json',
-  };
-
-  if (accessToken) {
-    headers.Authorization = `Bearer ${accessToken}`;
-    const quotaProjectId = process.env.GOOGLE_CLOUD_PROJECT || process.env.GCLOUD_PROJECT;
-    if (quotaProjectId) headers['x-goog-user-project'] = quotaProjectId;
+  const voiceName = options.voiceName || 'Charon';
+  const promptText = text.trim();
+  if (!promptText) {
+    throw new Error('読み上げテキストが空です');
   }
 
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_TTS_MODEL_ID}:generateContent`;
   const requestBody: Record<string, unknown> = {
-    input: {
-      prompt: DEFAULT_GEMINI_TTS_PROMPT,
-      text,
-    },
-    voice: {
-      languageCode: options.languageCode,
-      ...(options.voiceName ? { name: options.voiceName } : {}),
-      modelName: GEMINI_TTS_MODEL_ID,
-    },
-    audioConfig: {
-      audioEncoding: options.audioEncoding,
-      speakingRate: clamp(options.speakingRate, 0.25, 4.0),
-      pitch: clamp(options.pitch, -20, 20),
+    model: GEMINI_TTS_MODEL_ID,
+    contents: [
+      {
+        role: 'user',
+        parts: [{ text: `${DEFAULT_GEMINI_TTS_PROMPT}\n\n${promptText}` }],
+      },
+    ],
+    generationConfig: {
+      responseModalities: ['AUDIO'],
+      speechConfig: {
+        voiceConfig: {
+          prebuiltVoiceConfig: { voiceName },
+        },
+      },
     },
   };
 
   const response = await withRetry(async () => {
     return fetch(url, {
       method: 'POST',
-      headers,
+      headers: {
+        'Content-Type': 'application/json',
+        'x-goog-api-key': apiKey,
+      },
       body: JSON.stringify(requestBody),
     });
   });
 
   const data = (await response.json().catch(() => ({}))) as {
-    audioContent?: string;
+    candidates?: Array<{
+      content?: {
+        parts?: Array<{
+          inlineData?: { data?: string; mimeType?: string };
+          text?: string;
+        }>;
+      };
+    }>;
     error?: { message?: string };
   };
 
   if (!response.ok) {
-    const hint =
-      response.status === 401 || response.status === 403
-        ? '（Gemini-TTS は Cloud 側の権限/課金設定が必要な場合があります。gcloud 認証 + 環境変数 GOOGLE_CLOUD_PROJECT の設定も試してください）'
-        : '';
     throw new Error(
-      `${data.error?.message || `Gemini-TTS APIエラー: ${response.status} ${response.statusText}`}${hint}`
+      data.error?.message || `Gemini TTS APIエラー: ${response.status} ${response.statusText}`
     );
   }
 
-  if (!data.audioContent) {
-    throw new Error('Gemini-TTSの応答に audioContent が含まれていません');
+  const parts = data.candidates?.[0]?.content?.parts || [];
+  const audioPart = parts.find((p) => p.inlineData?.data);
+  const base64 = audioPart?.inlineData?.data;
+  if (!base64) {
+    throw new Error('Gemini TTSの応答に音声データが含まれていません');
   }
+
+  const pcmData = Buffer.from(base64, 'base64');
+  const sampleRateHertz = 24000;
+  const channels = 1;
+  const wav = pcm16leToWavBuffer(pcmData, sampleRateHertz, channels);
 
   const now = new Date().toISOString();
   const audioId = randomUUID();
   const audioDir = path.join(projectPath, 'audio');
   await fs.mkdir(audioDir, { recursive: true });
 
-  const ext = options.audioEncoding === 'MP3' ? 'mp3' : 'wav';
-  const filePath = path.join(audioDir, `${audioId}.${ext}`);
-  const buffer = Buffer.from(data.audioContent, 'base64');
-  await fs.writeFile(filePath, buffer);
+  const filePath = path.join(audioDir, `${audioId}.wav`);
+  await fs.writeFile(filePath, wav);
   await fs.stat(filePath);
+
+  const durationSecRaw = pcmData.length / (sampleRateHertz * channels * 2);
+  const durationSec = Math.max(0.1, Math.round(durationSecRaw * 100) / 100);
+  const segments = splitScriptIntoSegments(text);
 
   return {
     id: audioId,
     filePath,
-    durationSec: estimateDurationSec(text, options.speakingRate),
+    durationSec,
     ttsEngine: 'gemini_tts',
-    voiceId: options.voiceName || options.languageCode,
+    voiceId: voiceName,
+    segments: segments.length > 0 ? segments : undefined,
     settings: {
       speakingRate: options.speakingRate,
       pitch: options.pitch,
@@ -417,19 +525,36 @@ async function listMacosVoices(): Promise<VoiceInfo[]> {
 
 async function listGeminiVoices(): Promise<VoiceInfo[]> {
   const names = [
-    'Kore',
-    'Puck',
     'Zephyr',
+    'Puck',
     'Charon',
+    'Kore',
     'Fenrir',
     'Leda',
     'Orus',
     'Aoede',
     'Callirrhoe',
-    'Eros',
+    'Autonoe',
+    'Enceladus',
     'Iapetus',
+    'Umbriel',
+    'Algieba',
+    'Despina',
+    'Erinome',
+    'Algenib',
+    'Rasalgethi',
     'Laomedeia',
-    'Phoebe',
+    'Achernar',
+    'Alnilam',
+    'Schedar',
+    'Gacrux',
+    'Pulcherrima',
+    'Achird',
+    'Zubenelgenubi',
+    'Vindemiatrix',
+    'Sadachbia',
+    'Sadaltager',
+    'Sulafat',
   ];
 
   return names.map((name) => ({

@@ -25,8 +25,8 @@ interface Settings {
 }
 
 const defaultSettings: Settings = {
-  ttsEngine: 'google_tts',
-  ttsVoice: 'ja-JP-Chirp3-HD-Zephyr',
+  ttsEngine: 'gemini_tts',
+  ttsVoice: 'Charon',
   ttsSpeakingRate: 1.0,
   ttsPitch: 0,
   imageStylePreset: 'news_panel',
@@ -347,10 +347,9 @@ export function SettingsPage() {
                       }))
                     }
                     className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    disabled
                   >
-                    <option value="google_tts">Google TTS (Chirp 3 HD)</option>
-                    <option value="gemini_tts">Gemini 2.5 Pro TTS</option>
-                    <option value="macos_tts">macOS標準TTS</option>
+                    <option value="gemini_tts">gemini-2.5-pro-preview-tts</option>
                   </select>
                 </div>
                 <div>
@@ -371,11 +370,15 @@ export function SettingsPage() {
                         }))
                       }
                       className="flex-1"
+                      disabled
                     />
                     <span className="text-sm text-gray-600 w-12 text-right">
                       {settings.ttsSpeakingRate.toFixed(1)}x
                     </span>
                   </div>
+                  <p className="text-xs text-gray-500 mt-1">
+                    Gemini TTS は現状「話速」の指定をサポートしていません
+                  </p>
                 </div>
               </div>
             </div>

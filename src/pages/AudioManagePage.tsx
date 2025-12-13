@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
+import { Waveform } from '../components/audio';
 import { Header } from '../components/layout';
 import type { AudioAsset, Project } from '../schemas';
 
@@ -20,8 +21,8 @@ interface Settings {
 }
 
 const defaultSettings: Settings = {
-  ttsEngine: 'google_tts',
-  ttsVoice: 'ja-JP-Chirp3-HD-Zephyr',
+  ttsEngine: 'gemini_tts',
+  ttsVoice: 'Charon',
   ttsSpeakingRate: 1.0,
   ttsPitch: 0,
 };
@@ -34,6 +35,49 @@ function toLocalFileUrl(filePath: string): string {
 function guessLanguageCode(voiceName: string): string {
   const match = voiceName.match(/^([a-z]{2}-[A-Z]{2})/);
   return match?.[1] || 'ja-JP';
+}
+
+function splitScriptIntoSegments(text: string): string[] {
+  const normalized = text.replace(/\r\n/g, '\n').trim();
+  if (!normalized) return [];
+
+  const segments: string[] = [];
+  let buffer = '';
+
+  const flush = () => {
+    const seg = buffer.replace(/\n+/g, ' ').trim();
+    buffer = '';
+    if (seg) segments.push(seg);
+  };
+
+  for (const ch of normalized) {
+    buffer += ch;
+    if (ch === '\n') {
+      flush();
+      continue;
+    }
+    if ('。！？!?'.includes(ch)) {
+      flush();
+      continue;
+    }
+    if (ch === '、' && buffer.length >= 40) {
+      flush();
+      continue;
+    }
+    if (buffer.length >= 80) {
+      flush();
+    }
+  }
+  flush();
+
+  return segments;
+}
+
+function parseMarkIndex(markName: string): number | null {
+  const match = markName.match(/^m(\d+)$/);
+  if (!match) return null;
+  const idx = Number(match[1]);
+  return Number.isFinite(idx) ? idx : null;
 }
 
 export function AudioManagePage() {
@@ -51,11 +95,17 @@ export function AudioManagePage() {
   const [error, setError] = useState<string | null>(null);
   const [isGenerating, setIsGenerating] = useState(false);
   const [isGeneratingAll, setIsGeneratingAll] = useState(false);
+  const [showSyncPreview, setShowSyncPreview] = useState(true);
+  const [showWaveform, setShowWaveform] = useState(true);
+  const [playbackTimeSec, setPlaybackTimeSec] = useState(0);
+  const [audioDurationSec, setAudioDurationSec] = useState<number | null>(null);
   const [batchProgress, setBatchProgress] = useState<{ current: number; total: number } | null>(
     null
   );
   const [generateOnlyMissing, setGenerateOnlyMissing] = useState(true);
   const cancelRef = useRef(false);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const syncListRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     projectRef.current = project;
@@ -125,6 +175,11 @@ export function AudioManagePage() {
   const selectedPart = useMemo(() => {
     return project?.parts.find((p) => p.id === selectedPartId) || null;
   }, [project, selectedPartId]);
+
+  useEffect(() => {
+    setPlaybackTimeSec(0);
+    setAudioDurationSec(null);
+  }, [selectedPartId]);
 
   const missingAudioCount = useMemo(() => {
     if (!project) return 0;
@@ -281,6 +336,103 @@ export function AudioManagePage() {
       cancelRef.current = false;
     }
   }, [applyAudioToPart, generateOnlyMissing, project, projectId, ttsOptions]);
+
+  const syncSegments = useMemo(() => {
+    if (!selectedPart) return [];
+    const stored = selectedPart.audio?.segments;
+    if (Array.isArray(stored) && stored.length > 0) return stored;
+    return splitScriptIntoSegments(selectedPart.scriptText);
+  }, [selectedPart]);
+
+  const syncTimepoints = useMemo(() => {
+    const tps = selectedPart?.audio?.timepoints;
+    if (!Array.isArray(tps) || tps.length === 0) return null;
+
+    return tps
+      .map((tp) => ({
+        index: parseMarkIndex(tp.markName),
+        timeSeconds: tp.timeSeconds,
+      }))
+      .filter(
+        (tp): tp is { index: number; timeSeconds: number } =>
+          typeof tp.index === 'number' && Number.isFinite(tp.timeSeconds) && tp.timeSeconds >= 0
+      )
+      .sort((a, b) => a.timeSeconds - b.timeSeconds);
+  }, [selectedPart?.audio?.timepoints]);
+
+  const activeSegmentIndex = useMemo(() => {
+    if (!showSyncPreview) return null;
+    if (!selectedPart?.audio) return null;
+    if (syncSegments.length === 0) return null;
+
+    const t = playbackTimeSec;
+    if (!Number.isFinite(t) || t < 0) return null;
+
+    if (syncTimepoints && syncTimepoints.length > 0) {
+      let active = 0;
+      for (const tp of syncTimepoints) {
+        if (t >= tp.timeSeconds) active = tp.index;
+        else break;
+      }
+      return Math.max(0, Math.min(syncSegments.length - 1, active));
+    }
+
+    const duration = audioDurationSec ?? selectedPart.audio.durationSec;
+    if (!Number.isFinite(duration) || duration <= 0) return null;
+
+    const totalChars = syncSegments.reduce((sum, seg) => sum + seg.replace(/\s+/g, '').length, 0);
+    if (totalChars <= 0) return null;
+
+    const target = Math.max(0, Math.min(1, t / duration)) * totalChars;
+    let acc = 0;
+    for (let i = 0; i < syncSegments.length; i++) {
+      acc += syncSegments[i].replace(/\s+/g, '').length;
+      if (acc >= target) return i;
+    }
+    return syncSegments.length - 1;
+  }, [
+    audioDurationSec,
+    playbackTimeSec,
+    selectedPart?.audio,
+    showSyncPreview,
+    syncSegments,
+    syncTimepoints,
+  ]);
+
+  const seekToSegment = useCallback(
+    (index: number) => {
+      const audioEl = audioRef.current;
+      if (!audioEl || !selectedPart?.audio) return;
+      if (syncSegments.length === 0) return;
+
+      const duration = audioDurationSec ?? selectedPart.audio.durationSec;
+      let targetTime = 0;
+
+      if (syncTimepoints && syncTimepoints.length > 0) {
+        const hit = syncTimepoints.find((tp) => tp.index === index);
+        if (hit) targetTime = hit.timeSeconds;
+      } else if (Number.isFinite(duration) && duration > 0) {
+        const totalChars = syncSegments.reduce((sum, seg) => sum + seg.replace(/\s+/g, '').length, 0);
+        const beforeChars = syncSegments
+          .slice(0, index)
+          .reduce((sum, seg) => sum + seg.replace(/\s+/g, '').length, 0);
+        const ratio = totalChars > 0 ? beforeChars / totalChars : 0;
+        targetTime = ratio * duration;
+      }
+
+      audioEl.currentTime = Math.max(0, targetTime);
+    },
+    [audioDurationSec, selectedPart?.audio, syncSegments, syncTimepoints]
+  );
+
+  useEffect(() => {
+    if (!showSyncPreview) return;
+    if (activeSegmentIndex === null) return;
+    const container = syncListRef.current;
+    if (!container) return;
+    const el = container.querySelector(`[data-seg-index="${activeSegmentIndex}"]`) as HTMLElement | null;
+    el?.scrollIntoView({ block: 'nearest' });
+  }, [activeSegmentIndex, showSyncPreview]);
 
   if (isLoading) {
     return (
@@ -449,10 +601,9 @@ export function AudioManagePage() {
                     }))
                   }
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  disabled
                 >
-                  <option value="google_tts">Google TTS</option>
-                  <option value="gemini_tts">Gemini 2.5 Pro TTS</option>
-                  <option value="macos_tts">macOS標準TTS</option>
+                  <option value="gemini_tts">gemini-2.5-pro-preview-tts</option>
                 </select>
               </div>
 
@@ -472,6 +623,7 @@ export function AudioManagePage() {
                       }))
                     }
                     className="flex-1"
+                    disabled
                   />
                   <span className="text-sm text-gray-600 w-12 text-right">
                     {settings.ttsSpeakingRate.toFixed(1)}x
@@ -493,6 +645,7 @@ export function AudioManagePage() {
                     }))
                   }
                   className="w-28 px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  disabled
                 />
               </div>
 
@@ -532,11 +685,7 @@ export function AudioManagePage() {
                   />
                 )}
                 <p className="text-xs text-gray-500 mt-1">
-                  {settings.ttsEngine === 'macos_tts'
-                    ? 'macOS: 端末にインストールされたボイスを使用します'
-                    : settings.ttsEngine === 'gemini_tts'
-                      ? 'Gemini 2.5 Pro TTS: まずは Google TTS のAPIキーで試し、403/401 なら gcloud 認証が必要です'
-                      : 'Google TTS: APIキーが必要です（設定で接続テスト可）'}
+                  Gemini TTS: 設定画面の「Google AI APIキー（AI Studio）」が必要です（話速/ピッチは未対応）
                 </p>
               </div>
             </div>
@@ -585,17 +734,107 @@ export function AudioManagePage() {
               <div className="bg-white rounded-lg border border-gray-200 p-6">
                 <h3 className="text-lg font-semibold text-gray-900 mb-4">音声プレビュー</h3>
 
-                {selectedPart.audio ? (
-                  <div className="space-y-3">
-                    <audio
-                      controls
-                      src={toLocalFileUrl(selectedPart.audio.filePath)}
-                      className="w-full"
-                    />
-                    <div className="text-sm text-gray-700">
-                      <div>
-                        <span className="text-gray-500">エンジン:</span> {selectedPart.audio.ttsEngine}
-                      </div>
+                  {selectedPart.audio ? (
+                    <div className="space-y-3">
+                      <audio
+                        ref={audioRef}
+                        controls
+                        src={toLocalFileUrl(selectedPart.audio.filePath)}
+                        className="w-full"
+                        onLoadedMetadata={(e) => {
+                          const duration = e.currentTarget.duration;
+                          setAudioDurationSec(
+                            typeof duration === 'number' && Number.isFinite(duration) ? duration : null
+                          );
+                          setPlaybackTimeSec(0);
+                        }}
+                        onDurationChange={(e) => {
+                          const duration = e.currentTarget.duration;
+                          setAudioDurationSec(
+                            typeof duration === 'number' && Number.isFinite(duration) ? duration : null
+                          );
+                        }}
+                        onTimeUpdate={(e) => {
+                          const t = e.currentTarget.currentTime;
+                          if (typeof t === 'number' && Number.isFinite(t)) setPlaybackTimeSec(t);
+                        }}
+                      />
+                      <div className="flex items-center gap-4 text-sm text-gray-700">
+                        <label className="inline-flex items-center gap-2 cursor-pointer select-none">
+                          <input
+                            type="checkbox"
+                            checked={showSyncPreview}
+                            onChange={(e) => setShowSyncPreview(e.target.checked)}
+                          />
+                          同期プレビュー
+                        </label>
+                        <label className="inline-flex items-center gap-2 cursor-pointer select-none">
+                          <input
+                            type="checkbox"
+                            checked={showWaveform}
+                            onChange={(e) => setShowWaveform(e.target.checked)}
+                          />
+                          波形
+                        </label>
+                          {showSyncPreview && (
+                            <span
+                              className={`text-xs px-2 py-0.5 rounded-full ${
+                                syncTimepoints ? 'bg-green-50 text-green-700' : 'bg-gray-100 text-gray-600'
+                              }`}
+                            >
+                              {syncTimepoints ? '精密（タイムポイント）' : '推定'}
+                            </span>
+                          )}
+                        </div>
+
+                        {showWaveform && (
+                          <Waveform
+                            src={toLocalFileUrl(selectedPart.audio.filePath)}
+                            currentTimeSec={playbackTimeSec}
+                            durationSec={audioDurationSec ?? selectedPart.audio.durationSec}
+                            onSeek={(timeSec) => {
+                              if (audioRef.current) audioRef.current.currentTime = timeSec;
+                            }}
+                          />
+                        )}
+  
+                        {showSyncPreview && syncSegments.length > 0 && (
+                          <div className="mt-2">
+                            <div className="text-xs text-gray-500 mb-2">
+                            行をクリックすると該当位置へシークします。
+                          </div>
+                          <div
+                            ref={syncListRef}
+                            className="border border-gray-200 rounded-lg bg-gray-50 max-h-56 overflow-auto"
+                          >
+                            {syncSegments.map((seg, idx) => {
+                              const active = idx === activeSegmentIndex;
+                              return (
+                                <button
+                                  key={idx}
+                                  type="button"
+                                  data-seg-index={idx}
+                                  onClick={() => seekToSegment(idx)}
+                                  className={`w-full text-left px-3 py-2 text-sm border-b last:border-b-0 ${
+                                    active
+                                      ? 'bg-blue-100 text-blue-900'
+                                      : 'hover:bg-white text-gray-700'
+                                  }`}
+                                >
+                                  <span className="inline-block w-7 text-right mr-2 text-xs text-gray-400">
+                                    {idx + 1}
+                                  </span>
+                                  {seg}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      )}
+                      <div className="text-sm text-gray-700">
+                        <div>
+                          <span className="text-gray-500">エンジン:</span> {selectedPart.audio.ttsEngine}
+                        </div>
                       <div>
                         <span className="text-gray-500">ボイス:</span> {selectedPart.audio.voiceId}
                       </div>
