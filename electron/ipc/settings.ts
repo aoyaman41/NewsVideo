@@ -166,7 +166,9 @@ ipcMain.handle(
       if (response.ok) {
         return { success: true, message: '接続成功', latencyMs };
       } else {
-        const errorData = await response.json().catch(() => ({}));
+        const errorData = (await response.json().catch(() => ({}))) as {
+          error?: { message?: string };
+        };
         return {
           success: false,
           message: `接続失敗: ${response.status} ${errorData.error?.message || response.statusText}`,

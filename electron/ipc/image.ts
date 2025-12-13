@@ -167,9 +167,6 @@ ipcMain.handle(
     // Nano Banana Pro (gemini-3-pro-image-preview) モデルを使用
     const model = genAI.getGenerativeModel({
       model: 'gemini-3-pro-image-preview',
-      generationConfig: {
-        responseModalities: ['TEXT', 'IMAGE'],
-      },
     });
 
     // 日本語ニュース向けのシステム指示を追加
@@ -191,9 +188,6 @@ ipcMain.handle(
           role: 'user',
           parts: [{ text: enhancedPrompt }],
         }],
-        generationConfig: {
-          responseModalities: ['TEXT', 'IMAGE'],
-        },
       });
     });
 
@@ -250,8 +244,7 @@ ipcMain.handle(
   async (
     _,
     prompts: ImagePrompt[],
-    projectId: string,
-    onProgress?: (current: number, total: number) => void
+    projectId: string
   ): Promise<ImageAsset[]> => {
     const apiKey = await readApiKey('google_ai');
 
@@ -268,9 +261,6 @@ ipcMain.handle(
     // Nano Banana Pro (gemini-3-pro-image-preview) モデルを使用
     const model = genAI.getGenerativeModel({
       model: 'gemini-3-pro-image-preview',
-      generationConfig: {
-        responseModalities: ['TEXT', 'IMAGE'],
-      },
     });
 
     const results: ImageAsset[] = [];
@@ -300,9 +290,6 @@ ipcMain.handle(
               role: 'user',
               parts: [{ text: enhancedPrompt }],
             }],
-            generationConfig: {
-              responseModalities: ['TEXT', 'IMAGE'],
-            },
           });
         });
 
