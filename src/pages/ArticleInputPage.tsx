@@ -36,6 +36,13 @@ export function ArticleInputPage() {
   }, []);
 
   const handleImageRemoved = useCallback((imageId: string) => {
+    const image = images.find((img) => img.id === imageId);
+    if (image) {
+      window.electronAPI.image.delete(image.filePath).catch((err) => {
+        console.warn('Failed to delete imported image file:', err);
+      });
+    }
+
     // blob URLを解放
     const blobUrl = imageBlobUrls.get(imageId);
     if (blobUrl) {
@@ -47,7 +54,7 @@ export function ArticleInputPage() {
       updated.delete(imageId);
       return updated;
     });
-  }, [imageBlobUrls]);
+  }, [imageBlobUrls, images]);
 
   const handleSubmit = async (data: ArticleInputType) => {
     if (!projectId) return;
@@ -135,6 +142,7 @@ export function ArticleInputPage() {
             </p>
             <ImageDropzone
               images={images}
+              projectId={projectId}
               onImagesAdded={handleImagesAdded}
               onImageRemoved={handleImageRemoved}
               blobUrlMap={imageBlobUrls}

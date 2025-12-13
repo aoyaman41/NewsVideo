@@ -1,8 +1,8 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { Header } from '../components/layout';
-import { ImageGallery, PromptEditor } from '../components/image';
-import type { Project, Part, ImagePrompt, ImageAsset } from '../schemas';
+import { ImageAssignment, ImageGallery, PromptEditor } from '../components/image';
+import type { Project, ImageAssetRef, ImagePrompt } from '../schemas';
 
 // ローカルファイルパスをカスタムプロトコルURLに変換
 function toLocalFileUrl(filePath: string): string {
@@ -141,18 +141,38 @@ export function ImageManagePage() {
     async (imageId: string) => {
       if (!project) return;
 
-      const image = project.images.find((img) => img.id === imageId);
+      const image =
+        project.images.find((img) => img.id === imageId) ||
+        project.article.importedImages.find((img) => img.id === imageId);
       if (!image) return;
 
-      if (!confirm('この画像を削除しますか？')) return;
+      if (!confirm('この画像を削除しますか？\n※割り当て/サムネイルからも自動的に解除されます')) return;
 
       try {
-        await window.electronAPI.image.delete(image.filePath);
+        const result = await window.electronAPI.image.delete(image.filePath);
+        if (!result.success) {
+          console.warn('Failed to delete image file:', image.filePath);
+        }
 
-        const updatedProject = {
+        const now = new Date().toISOString();
+
+        const updatedParts = project.parts.map((part) => {
+          const nextPanelImages = part.panelImages.filter((ref) => ref.imageId !== imageId);
+          if (nextPanelImages.length === part.panelImages.length) return part;
+          return { ...part, panelImages: nextPanelImages, updatedAt: now };
+        });
+
+        const updatedProject: Project = {
           ...project,
+          article: {
+            ...project.article,
+            importedImages: project.article.importedImages.filter((img) => img.id !== imageId),
+          },
+          parts: updatedParts,
           images: project.images.filter((img) => img.id !== imageId),
-          updatedAt: new Date().toISOString(),
+          thumbnail:
+            project.thumbnail?.imageId === imageId ? undefined : project.thumbnail,
+          updatedAt: now,
         };
 
         await window.electronAPI.project.save(updatedProject);
@@ -204,6 +224,20 @@ export function ImageManagePage() {
   // 選択中のパート
   const selectedPart = project?.parts.find((p) => p.id === selectedPartId);
 
+  const imageById = useMemo(() => {
+    const map = new Map<string, Project['images'][number]>();
+    if (!project) return map;
+    for (const image of [...project.images, ...project.article.importedImages]) {
+      map.set(image.id, image);
+    }
+    return map;
+  }, [project]);
+
+  const getImageById = useCallback(
+    (imageId: string) => imageById.get(imageId),
+    [imageById]
+  );
+
   // 選択中のパートのプロンプト
   const selectedPartPrompt = project?.prompts.find((p) => p.partId === selectedPartId);
 
@@ -216,6 +250,35 @@ export function ImageManagePage() {
 
   // インポート画像
   const importedImages = project?.article.importedImages || [];
+
+  const candidateImagesForPart = useMemo(() => {
+    return [...selectedPartImages, ...importedImages];
+  }, [importedImages, selectedPartImages]);
+
+  // パートへの割り当て（panelImages）更新
+  const handleUpdatePanelImages = useCallback(
+    async (partId: string, panelImages: ImageAssetRef[]) => {
+      if (!project) return;
+
+      try {
+        const now = new Date().toISOString();
+        const updatedProject: Project = {
+          ...project,
+          parts: project.parts.map((p) =>
+            p.id === partId ? { ...p, panelImages, updatedAt: now } : p
+          ),
+          updatedAt: now,
+        };
+
+        await window.electronAPI.project.save(updatedProject);
+        setProject(updatedProject);
+      } catch (err) {
+        console.error('Failed to update panel images:', err);
+        setError(err instanceof Error ? err.message : '画像の割り当て更新に失敗しました');
+      }
+    },
+    [project]
+  );
 
   if (isLoading) {
     return (
@@ -285,11 +348,7 @@ export function ImageManagePage() {
             <ul className="space-y-2">
               {project.parts.map((part, index) => {
                 const partPrompt = project.prompts.find((p) => p.partId === part.id);
-                const partImages = project.images.filter(
-                  (img) => img.metadata.promptId && project.prompts.find(
-                    (p) => p.id === img.metadata.promptId && p.partId === part.id
-                  )
-                );
+                const assignedCount = part.panelImages.length;
 
                 return (
                   <li key={part.id}>
@@ -314,8 +373,8 @@ export function ImageManagePage() {
                           {partPrompt ? 'プロンプト有' : 'プロンプト無'}
                         </span>
                         <span className="text-xs text-gray-400">|</span>
-                        <span className="text-xs text-purple-600">
-                          {partImages.length}枚
+                        <span className={`text-xs ${assignedCount > 0 ? 'text-blue-600' : 'text-gray-400'}`}>
+                          使用 {assignedCount}枚
                         </span>
                       </div>
                     </button>
@@ -433,13 +492,16 @@ export function ImageManagePage() {
                 )}
               </div>
 
-              {/* 生成された画像 */}
-              <ImageGallery
-                images={selectedPartImages}
-                title="生成された画像"
-                onDeleteImage={handleDeleteImage}
-                emptyMessage="画像はまだ生成されていません"
-              />
+              {/* 画像割り当て */}
+              <div className="bg-white rounded-lg border border-gray-200 p-6">
+                <ImageAssignment
+                  panelImages={selectedPart.panelImages}
+                  candidateImages={candidateImagesForPart}
+                  getImageById={getImageById}
+                  onChange={(next) => handleUpdatePanelImages(selectedPart.id, next)}
+                  onDeleteImage={handleDeleteImage}
+                />
+              </div>
             </div>
           )}
 
@@ -448,6 +510,7 @@ export function ImageManagePage() {
             <ImageGallery
               images={importedImages}
               title="インポートした画像"
+              onDeleteImage={handleDeleteImage}
               emptyMessage="インポートした画像はありません"
             />
           )}
@@ -463,31 +526,47 @@ export function ImageManagePage() {
                   動画のサムネイルとして使用する画像を選択してください
                 </p>
 
-                {/* 現在のサムネイル */}
-                {project.thumbnail && (
-                  <div className="mb-6">
-                    <h4 className="text-sm font-medium text-gray-700 mb-2">現在のサムネイル</h4>
-                    <div className="w-64">
-                      {project.images.find((img) => img.id === project.thumbnail?.imageId) && (
-                        <img
-                          src={toLocalFileUrl(project.images.find((img) => img.id === project.thumbnail?.imageId)!.filePath)}
-                          alt="サムネイル"
-                          className="w-full rounded-lg border border-blue-500"
-                        />
-                      )}
-                    </div>
-                  </div>
-                )}
-              </div>
+                {(() => {
+                  const allImages = [...project.images, ...importedImages];
+                  const currentThumbnail = project.thumbnail?.imageId
+                    ? allImages.find((img) => img.id === project.thumbnail?.imageId)
+                    : undefined;
 
-              {/* 全画像から選択 */}
-              <ImageGallery
-                images={project.images}
-                selectedImageIds={project.thumbnail ? [project.thumbnail.imageId] : []}
-                onSelectImage={handleSelectThumbnail}
-                title="画像を選択"
-                emptyMessage="画像がありません。先に画像を生成してください。"
-              />
+                  return (
+                    <>
+                      {/* 現在のサムネイル */}
+                      {project.thumbnail && (
+                        <div className="mb-6">
+                          <h4 className="text-sm font-medium text-gray-700 mb-2">現在のサムネイル</h4>
+                          <div className="w-64">
+                            {currentThumbnail && (
+                              <img
+                                src={toLocalFileUrl(currentThumbnail.filePath)}
+                                alt="サムネイル"
+                                className="w-full rounded-lg border border-blue-500"
+                              />
+                            )}
+                            {!currentThumbnail && (
+                              <div className="text-sm text-gray-500 bg-gray-50 border border-gray-200 rounded-lg p-4">
+                                サムネイル画像が見つかりません
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* 全画像から選択 */}
+                      <ImageGallery
+                        images={allImages}
+                        selectedImageIds={project.thumbnail ? [project.thumbnail.imageId] : []}
+                        onSelectImage={handleSelectThumbnail}
+                        title="画像を選択"
+                        emptyMessage="画像がありません。先に画像を生成/インポートしてください。"
+                      />
+                    </>
+                  );
+                })()}
+              </div>
             </div>
           )}
         </div>

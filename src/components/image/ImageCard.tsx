@@ -26,7 +26,6 @@ export function ImageCard({
         isSelected ? 'border-blue-500 ring-2 ring-blue-200' : 'border-transparent hover:border-gray-300'
       } ${isDraggable ? 'cursor-grab active:cursor-grabbing' : ''}`}
       onClick={onSelect}
-      draggable={isDraggable}
     >
       {/* 画像 */}
       <div className="aspect-video">
@@ -56,7 +55,9 @@ export function ImageCard({
 
       {/* 選択チェックマーク */}
       {isSelected && (
-        <div className="absolute top-2 right-2 w-6 h-6 bg-blue-500 rounded-full flex items-center justify-center">
+        <div
+          className={`absolute top-2 ${onDelete ? 'right-10' : 'right-2'} w-6 h-6 bg-blue-500 rounded-full flex items-center justify-center`}
+        >
           <svg className="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
           </svg>

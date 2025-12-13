@@ -1,10 +1,11 @@
 import { useCallback, useState } from 'react';
-import { useDropzone } from 'react-dropzone';
+import { useDropzone, type FileWithPath } from 'react-dropzone';
 import type { ImageAsset } from '../../schemas';
 import { ImageTagEditor } from '../common/ImageTagEditor';
 
 interface ImageDropzoneProps {
   images: ImageAsset[];
+  projectId?: string;
   onImagesAdded: (images: ImageAsset[], blobUrls: Map<string, string>) => void;
   onImageRemoved: (imageId: string) => void;
   onImageTagsUpdate?: (imageId: string, tags: string[]) => void;
@@ -18,53 +19,85 @@ const SUGGESTED_TAGS = [
   'イベント', 'スポーツ', '政治', '経済', 'テクノロジー',
 ];
 
-export function ImageDropzone({ images, onImagesAdded, onImageRemoved, onImageTagsUpdate, blobUrlMap = new Map() }: ImageDropzoneProps) {
+export function ImageDropzone({
+  images,
+  projectId,
+  onImagesAdded,
+  onImageRemoved,
+  onImageTagsUpdate,
+  blobUrlMap = new Map(),
+}: ImageDropzoneProps) {
   const [selectedImageId, setSelectedImageId] = useState<string | null>(null);
 
   const onDrop = useCallback(
-    async (acceptedFiles: File[]) => {
+    async (acceptedFiles: FileWithPath[]) => {
       const newImages: ImageAsset[] = [];
       const newBlobUrls = new Map<string, string>();
 
       for (const file of acceptedFiles) {
-        // ファイルをArrayBufferとして読み込み
-        const arrayBuffer = await file.arrayBuffer();
-        const uint8Array = new Uint8Array(arrayBuffer);
+        // 画像プレビュー用のblob URLを作成
+        const blobUrl = URL.createObjectURL(file);
 
-        // 画像のサイズを取得するためにImageを作成
-        const blob = new Blob([uint8Array], { type: file.type });
-        const blobUrl = URL.createObjectURL(blob);
+        try {
+          // 画像のサイズを取得
+          const img = new Image();
+          await new Promise<void>((resolve, reject) => {
+            img.onload = () => resolve();
+            img.onerror = () => reject(new Error('画像の読み込みに失敗しました'));
+            img.src = blobUrl;
+          });
 
-        const img = new Image();
-        await new Promise<void>((resolve) => {
-          img.onload = () => resolve();
-          img.src = blobUrl;
-        });
+          let imageAsset: ImageAsset;
 
-        const imageId = crypto.randomUUID();
+          // Electron環境ではメインプロセス側にコピーして永続化する
+          const isAbsolutePath =
+            typeof file.path === 'string' &&
+            (file.path.startsWith('/') || /^[A-Za-z]:\\\\/.test(file.path));
 
-        // 一時的なIDとパスを生成（実際の保存はメインプロセスで行う）
-        const imageAsset: ImageAsset = {
-          id: imageId,
-          filePath: file.name, // 仮のパス（後でメインプロセスで更新）
-          sourceType: 'imported',
-          metadata: {
-            width: img.width,
-            height: img.height,
-            mimeType: file.type,
-            fileSize: file.size,
-            createdAt: new Date().toISOString(),
-            tags: [],
-          },
-        };
+          if (projectId && isAbsolutePath) {
+            const imported = await window.electronAPI.image.import(file.path, projectId);
+            imageAsset = {
+              ...imported,
+              metadata: {
+                ...imported.metadata,
+                width: img.width,
+                height: img.height,
+                mimeType: file.type || imported.metadata.mimeType,
+                fileSize: file.size,
+                tags: imported.metadata.tags || [],
+              },
+            };
+          } else {
+            // フォールバック: 一時的なIDとパス（永続化されません）
+            const imageId = crypto.randomUUID();
+            imageAsset = {
+              id: imageId,
+              filePath: file.name,
+              sourceType: 'imported',
+              metadata: {
+                width: img.width,
+                height: img.height,
+                mimeType: file.type,
+                fileSize: file.size,
+                createdAt: new Date().toISOString(),
+                tags: [],
+              },
+            };
+          }
 
-        newImages.push(imageAsset);
-        newBlobUrls.set(imageId, blobUrl);
+          newImages.push(imageAsset);
+          newBlobUrls.set(imageAsset.id, blobUrl);
+        } catch (error) {
+          console.error('Failed to import image:', error);
+          URL.revokeObjectURL(blobUrl);
+        }
       }
 
-      onImagesAdded(newImages, newBlobUrls);
+      if (newImages.length > 0) {
+        onImagesAdded(newImages, newBlobUrls);
+      }
     },
-    [onImagesAdded]
+    [onImagesAdded, projectId]
   );
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
