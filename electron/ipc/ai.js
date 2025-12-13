@@ -89,7 +89,7 @@ ipcMain.handle('ai:generateScript', async (_, article, options = {}) => {
     const openai = new OpenAI({ apiKey });
     const response = await withRetry(async () => {
         return openai.chat.completions.create({
-            model: 'gpt-5.1',
+            model: 'gpt-5.2',
             messages: [
                 {
                     role: 'system',
@@ -159,7 +159,7 @@ ipcMain.handle('ai:generateImagePrompts', async (_, parts, stylePreset) => {
         .join('\n\n');
     const response = await withRetry(async () => {
         return openai.chat.completions.create({
-            model: 'gpt-5.1',
+            model: 'gpt-5.2',
             messages: [
                 {
                     role: 'system',
@@ -253,7 +253,7 @@ ipcMain.handle('ai:applyComment', async (_, target, comment) => {
         : 'あなたは画像生成プロンプトのエディターです。与えられたコメントに基づいてプロンプトを修正します。';
     const response = await withRetry(async () => {
         return openai.chat.completions.create({
-            model: 'gpt-5.1',
+            model: 'gpt-5.2',
             messages: [
                 {
                     role: 'system',

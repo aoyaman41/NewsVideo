@@ -138,7 +138,7 @@ ipcMain.handle(
 
     const response = await withRetry(async () => {
       return openai.chat.completions.create({
-        model: 'gpt-5.1',
+        model: 'gpt-5.2',
         messages: [
           {
             role: 'system',
@@ -242,7 +242,7 @@ ipcMain.handle(
 
     const response = await withRetry(async () => {
       return openai.chat.completions.create({
-        model: 'gpt-5.1',
+        model: 'gpt-5.2',
         messages: [
           {
             role: 'system',
@@ -366,7 +366,7 @@ ipcMain.handle(
 
     const response = await withRetry(async () => {
       return openai.chat.completions.create({
-        model: 'gpt-5.1',
+        model: 'gpt-5.2',
         messages: [
           {
             role: 'system',

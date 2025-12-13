@@ -152,7 +152,7 @@ export function SettingsPage() {
   const serviceLabels: Record<ApiKeyService, { name: string; description: string; url: string }> = {
     openai: {
       name: 'OpenAI（スクリプト生成）',
-      description: 'GPT-5.1を使用してスクリプトを生成します',
+      description: 'GPT-5.2を使用してスクリプトを生成します',
       url: 'https://platform.openai.com/',
     },
     google_ai: {
