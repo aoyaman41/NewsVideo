@@ -126,10 +126,19 @@ export function ImageManagePage() {
         const imageAsset = await window.electronAPI.image.generate(prompt, projectId);
 
         // プロジェクトを更新
-        const updatedProject = {
+        const now = new Date().toISOString();
+        const updatedParts = project.parts.map((part) => {
+          if (part.id !== prompt.partId) return part;
+          // 初回は自動で割り当て（既に割り当てがある場合はユーザーの選択を尊重して変更しない）
+          if ((part.panelImages?.length ?? 0) > 0) return part;
+          return { ...part, panelImages: [{ imageId: imageAsset.id }], updatedAt: now };
+        });
+
+        const updatedProject: Project = {
           ...project,
+          parts: updatedParts,
           images: [...project.images, imageAsset],
-          updatedAt: new Date().toISOString(),
+          updatedAt: now,
         };
 
         await window.electronAPI.project.save(updatedProject);
@@ -164,10 +173,28 @@ export function ImageManagePage() {
       const imageAssets = await window.electronAPI.image.generateBatch(targetPrompts, projectId);
 
       // プロジェクトを更新
-      const updatedProject = {
+      const now = new Date().toISOString();
+      const promptById = new Map(targetPrompts.map((p) => [p.id, p]));
+      const nextPartsById = new Map(project.parts.map((p) => [p.id, p]));
+
+      for (const imageAsset of imageAssets) {
+        const promptId = imageAsset.metadata.promptId;
+        if (!promptId) continue;
+        const p = promptById.get(promptId);
+        if (!p) continue;
+
+        const part = nextPartsById.get(p.partId);
+        if (!part) continue;
+        if ((part.panelImages?.length ?? 0) > 0) continue;
+
+        nextPartsById.set(p.partId, { ...part, panelImages: [{ imageId: imageAsset.id }], updatedAt: now });
+      }
+
+      const updatedProject: Project = {
         ...project,
+        parts: project.parts.map((p) => nextPartsById.get(p.id) ?? p),
         images: [...project.images, ...imageAssets],
-        updatedAt: new Date().toISOString(),
+        updatedAt: now,
       };
 
       await window.electronAPI.project.save(updatedProject);
