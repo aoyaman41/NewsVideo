@@ -1,4 +1,5 @@
-import { NavLink } from 'react-router-dom';
+import { useMemo } from 'react';
+import { NavLink, useLocation } from 'react-router-dom';
 
 interface NavItem {
   path: string;
@@ -54,6 +55,17 @@ const navItems: NavItem[] = [
 ];
 
 export function Sidebar() {
+  const location = useLocation();
+
+  const returnTo = useMemo(() => {
+    const state = location.state as { returnTo?: string } | null;
+    if (!state || typeof state.returnTo !== 'string') return null;
+    if (!state.returnTo || state.returnTo === '/settings') return null;
+    return state.returnTo;
+  }, [location.state]);
+
+  const shouldShowReturnToWork = location.pathname === '/settings' && Boolean(returnTo);
+
   return (
     <aside className="w-56 bg-gray-900 text-white flex flex-col">
       {/* ロゴ */}
@@ -67,7 +79,16 @@ export function Sidebar() {
           {navItems.map((item) => (
             <li key={item.path}>
               <NavLink
-                to={item.path}
+                to={
+                  item.path === '/projects' && shouldShowReturnToWork && returnTo
+                    ? returnTo
+                    : item.path
+                }
+                state={
+                  item.path === '/settings'
+                    ? { returnTo: `${location.pathname}${location.search}` }
+                    : undefined
+                }
                 className={({ isActive }) =>
                   `titlebar-no-drag flex items-center gap-3 px-3 py-2 rounded-lg transition-colors ${
                     isActive
@@ -76,8 +97,19 @@ export function Sidebar() {
                   }`
                 }
               >
-                {item.icon}
-                <span>{item.label}</span>
+                {item.path === '/projects' && shouldShowReturnToWork ? (
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2}
+                      d="M10 19l-7-7 7-7M3 12h18"
+                    />
+                  </svg>
+                ) : (
+                  item.icon
+                )}
+                <span>{item.path === '/projects' && shouldShowReturnToWork ? '作業に戻る' : item.label}</span>
               </NavLink>
             </li>
           ))}

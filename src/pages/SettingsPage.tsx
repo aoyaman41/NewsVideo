@@ -1,4 +1,5 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { Header } from '../components/layout';
 
 type ApiKeyService = 'openai' | 'google_ai' | 'google_tts';
@@ -46,6 +47,16 @@ const defaultSettings: Settings = {
 };
 
 export function SettingsPage() {
+  const navigate = useNavigate();
+  const location = useLocation();
+
+  const returnTo = useMemo(() => {
+    const state = location.state as { returnTo?: string } | null;
+    if (!state || typeof state.returnTo !== 'string') return null;
+    if (!state.returnTo || state.returnTo === '/settings') return null;
+    return state.returnTo;
+  }, [location.state]);
+
   const [apiKeys, setApiKeys] = useState<Record<ApiKeyService, string>>({
     openai: '',
     google_ai: '',
@@ -189,7 +200,24 @@ export function SettingsPage() {
 
   return (
     <div className="flex-1 flex flex-col overflow-hidden">
-      <Header title="設定" subtitle="APIキーとアプリケーション設定" />
+      <Header
+        title="設定"
+        subtitle="APIキーとアプリケーション設定"
+        actions={
+          <button
+            onClick={() => {
+              if (returnTo) {
+                navigate(returnTo);
+                return;
+              }
+              navigate('/projects');
+            }}
+            className="px-4 py-2 text-sm text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-lg transition-colors"
+          >
+            戻る
+          </button>
+        }
+      />
 
       {/* メインコンテンツ */}
       <div className="flex-1 overflow-auto p-6">

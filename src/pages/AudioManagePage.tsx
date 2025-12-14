@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import { Waveform } from '../components/audio';
 import { Header, WorkflowNav } from '../components/layout';
 import type { AudioAsset, Project } from '../schemas';
@@ -79,6 +79,7 @@ function parseMarkIndex(markName: string): number | null {
 export function AudioManagePage() {
   const { projectId } = useParams<{ projectId: string }>();
   const navigate = useNavigate();
+  const location = useLocation();
 
   const [project, setProject] = useState<Project | null>(null);
   const [settings, setSettings] = useState<Settings>(defaultSettings);
@@ -468,7 +469,7 @@ export function AudioManagePage() {
               画像管理に戻る
             </button>
             <button
-              onClick={() => navigate('/settings')}
+              onClick={() => navigate('/settings', { state: { returnTo: `${location.pathname}${location.search}` } })}
               className="px-4 py-2 text-sm text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-lg transition-colors"
             >
               設定
