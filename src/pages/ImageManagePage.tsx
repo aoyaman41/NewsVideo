@@ -519,6 +519,7 @@ export function ImageManagePage() {
                 {/* プロンプトエディタ */}
                 {selectedPartPrompt ? (
                   <PromptEditor
+                    key={selectedPartPrompt.id}
                     prompt={selectedPartPrompt}
                     onSave={handleUpdatePrompt}
                     onGenerate={handleGenerateImage}

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import type { ImagePrompt } from '../../schemas';
 
 interface PromptEditorProps {
@@ -27,6 +27,22 @@ export function PromptEditor({
   const [editedNegativePrompt, setEditedNegativePrompt] = useState(prompt.negativePrompt || '');
   const [selectedStylePreset, setSelectedStylePreset] = useState(prompt.stylePreset);
   const [isAdvancedMode, setIsAdvancedMode] = useState(false);
+
+  // パート選択切替時に、前のプロンプト編集状態が残らないよう同期する
+  useEffect(() => {
+    setEditedPrompt(prompt.prompt);
+    setEditedNegativePrompt(prompt.negativePrompt || '');
+    setSelectedStylePreset(prompt.stylePreset);
+  }, [prompt.id, prompt.prompt, prompt.negativePrompt, prompt.stylePreset]);
+
+  const hasChanges = useMemo(() => {
+    const baseNegative = prompt.negativePrompt || '';
+    return (
+      editedPrompt !== prompt.prompt ||
+      editedNegativePrompt !== baseNegative ||
+      selectedStylePreset !== prompt.stylePreset
+    );
+  }, [editedNegativePrompt, editedPrompt, prompt.negativePrompt, prompt.prompt, prompt.stylePreset, selectedStylePreset]);
 
   const handleSave = () => {
     onSave({
@@ -83,22 +99,16 @@ export function PromptEditor({
             onClick={() => setIsAdvancedMode(!isAdvancedMode)}
             className="text-sm text-purple-600 hover:text-purple-700"
           >
-            {isAdvancedMode ? '簡易モード' : '上級者モード'}
+            {isAdvancedMode ? '詳細を閉じる' : '詳細設定'}
           </button>
         </div>
 
-        {isAdvancedMode ? (
-          <textarea
-            value={editedPrompt}
-            onChange={(e) => setEditedPrompt(e.target.value)}
-            className="w-full h-32 px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500 resize-none"
-            placeholder="画像生成プロンプト（英語）"
-          />
-        ) : (
-          <div className="p-3 bg-gray-50 rounded-lg text-sm text-gray-700 min-h-[80px]">
-            {editedPrompt}
-          </div>
-        )}
+        <textarea
+          value={editedPrompt}
+          onChange={(e) => setEditedPrompt(e.target.value)}
+          className="w-full h-32 px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500 resize-none"
+          placeholder="画像生成プロンプト（英語）"
+        />
       </div>
 
       {/* ネガティブプロンプト（上級者モードのみ） */}
@@ -147,14 +157,13 @@ export function PromptEditor({
 
       {/* アクションボタン */}
       <div className="flex justify-end gap-2 pt-4 border-t">
-        {isAdvancedMode && (
-          <button
-            onClick={handleSave}
-            className="px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 rounded-lg transition-colors"
-          >
-            保存
-          </button>
-        )}
+        <button
+          onClick={handleSave}
+          disabled={!hasChanges}
+          className="px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed rounded-lg transition-colors"
+        >
+          保存
+        </button>
         <button
           onClick={handleGenerate}
           disabled={isGenerating}
