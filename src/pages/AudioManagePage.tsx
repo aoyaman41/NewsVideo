@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { Waveform } from '../components/audio';
-import { Header } from '../components/layout';
+import { Header, WorkflowNav } from '../components/layout';
 import type { AudioAsset, Project } from '../schemas';
 import { toLocalFileUrl } from '../utils/toLocalFileUrl';
 
@@ -482,6 +482,8 @@ export function AudioManagePage() {
           </div>
         }
       />
+
+      {projectId && <WorkflowNav projectId={projectId} current="audio" project={project} />}
 
       {error && (
         <div className="mx-6 mt-4 bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg">

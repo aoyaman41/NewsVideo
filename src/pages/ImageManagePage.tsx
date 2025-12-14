@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { Header } from '../components/layout';
+import { Header, WorkflowNav } from '../components/layout';
 import { ImageAssignment, ImageGallery, PromptEditor } from '../components/image';
 import type { Project, ImageAssetRef, ImagePrompt } from '../schemas';
 import { toLocalFileUrl } from '../utils/toLocalFileUrl';
@@ -378,6 +378,8 @@ export function ImageManagePage() {
           </div>
         }
       />
+
+      {projectId && <WorkflowNav projectId={projectId} current="image" project={project} />}
 
       {/* エラー表示 */}
       {error && (

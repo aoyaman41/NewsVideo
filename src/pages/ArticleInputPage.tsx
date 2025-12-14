@@ -1,14 +1,15 @@
 import { useEffect, useState, useCallback } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { Header } from '../components/layout';
+import { Header, WorkflowNav } from '../components/layout';
 import { ArticleInput, FileImport, ImageDropzone } from '../components/article';
-import type { ArticleInput as ArticleInputType, ImageAsset } from '../schemas';
+import type { ArticleInput as ArticleInputType, ImageAsset, Project } from '../schemas';
 import { toLocalFileUrl } from '../utils/toLocalFileUrl';
 
 export function ArticleInputPage() {
   const { projectId } = useParams<{ projectId: string }>();
   const navigate = useNavigate();
 
+  const [project, setProject] = useState<Project | null>(null);
   const [articleData, setArticleData] = useState<Partial<ArticleInputType>>({
     title: '',
     source: '',
@@ -27,6 +28,7 @@ export function ArticleInputPage() {
         const project = await window.electronAPI.project.load(projectId);
         if (cancelled) return;
 
+        setProject(project);
         setArticleData({
           title: project.article?.title ?? '',
           source: project.article?.source ?? '',
@@ -142,6 +144,8 @@ export function ArticleInputPage() {
           </button>
         }
       />
+
+      {projectId && <WorkflowNav projectId={projectId} current="article" project={project} />}
 
       <div className="flex-1 overflow-auto p-6">
         <div className="max-w-4xl mx-auto space-y-8">

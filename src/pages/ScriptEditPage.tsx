@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { Header } from '../components/layout';
+import { Header, WorkflowNav } from '../components/layout';
 import { PartList, ScriptEditor } from '../components/script';
 import { useAutoSave } from '../hooks';
 import type { Project, PartEdit } from '../schemas';
@@ -249,6 +249,8 @@ export function ScriptEditPage() {
           </div>
         }
       />
+
+      {projectId && <WorkflowNav projectId={projectId} current="script" project={project} />}
 
       {/* エラー表示 */}
       {error && (
