@@ -31,7 +31,7 @@ interface ElectronAPI {
 
   ai: {
     generateScript: (article: Article, options: ScriptOptions) => Promise<Part[]>;
-    generateImagePrompts: (parts: Part[], stylePreset: string) => Promise<ImagePrompt[]>;
+    generateImagePrompts: (parts: Part[], article: Article, stylePreset: string) => Promise<ImagePrompt[]>;
     applyComment: (target: CommentTarget, comment: string) => Promise<string>;
   };
 

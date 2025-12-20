@@ -94,6 +94,7 @@ export function ImageManagePage() {
 
       const prompts = await window.electronAPI.ai.generateImagePrompts(
         project.parts,
+        project.article,
         'news_broadcast'
       );
 
