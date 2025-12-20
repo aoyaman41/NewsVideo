@@ -118,7 +118,7 @@ export function ImageAssignment({
 
         {uniqueCandidates.length === 0 ? (
           <div className="text-center py-8 text-gray-500 bg-gray-50 rounded-lg border border-gray-200">
-            候補画像がありません（先に画像を生成/インポートしてください）
+            候補画像がありません（先に画像を生成してください）
           </div>
         ) : (
           <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
