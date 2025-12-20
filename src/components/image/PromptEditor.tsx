@@ -6,6 +6,10 @@ interface PromptEditorProps {
   onSave: (updatedPrompt: ImagePrompt) => void;
   onGenerate: (prompt: ImagePrompt) => void;
   isGenerating?: boolean;
+  onRegeneratePrompt?: () => void;
+  isGeneratingPrompt?: boolean;
+  onApplyComment?: (comment: string) => void;
+  isApplyingComment?: boolean;
 }
 
 // スタイルプリセット
@@ -22,17 +26,25 @@ export function PromptEditor({
   onSave,
   onGenerate,
   isGenerating = false,
+  onRegeneratePrompt,
+  isGeneratingPrompt = false,
+  onApplyComment,
+  isApplyingComment = false,
 }: PromptEditorProps) {
   const [editedPrompt, setEditedPrompt] = useState(prompt.prompt);
   const [editedNegativePrompt, setEditedNegativePrompt] = useState(prompt.negativePrompt || '');
   const [selectedStylePreset, setSelectedStylePreset] = useState(prompt.stylePreset);
   const [isAdvancedMode, setIsAdvancedMode] = useState(false);
+  const [showCommentInput, setShowCommentInput] = useState(false);
+  const [comment, setComment] = useState('');
 
   // パート選択切替時に、前のプロンプト編集状態が残らないよう同期する
   useEffect(() => {
     setEditedPrompt(prompt.prompt);
     setEditedNegativePrompt(prompt.negativePrompt || '');
     setSelectedStylePreset(prompt.stylePreset);
+    setShowCommentInput(false);
+    setComment('');
   }, [prompt.id, prompt.prompt, prompt.negativePrompt, prompt.stylePreset]);
 
   const hasChanges = useMemo(() => {
@@ -62,6 +74,14 @@ export function PromptEditor({
       stylePreset: selectedStylePreset,
     };
     onGenerate(updatedPrompt);
+  };
+
+  const handleApplyComment = () => {
+    if (!onApplyComment) return;
+    if (!comment.trim()) return;
+    onApplyComment(comment.trim());
+    setShowCommentInput(false);
+    setComment('');
   };
 
   return (
@@ -95,12 +115,23 @@ export function PromptEditor({
           <label className="block text-sm font-medium text-gray-700">
             画像プロンプト
           </label>
-          <button
-            onClick={() => setIsAdvancedMode(!isAdvancedMode)}
-            className="text-sm text-purple-600 hover:text-purple-700"
-          >
-            {isAdvancedMode ? '詳細を閉じる' : '詳細設定'}
-          </button>
+          <div className="flex items-center gap-3">
+            {onRegeneratePrompt && (
+              <button
+                onClick={onRegeneratePrompt}
+                disabled={isGeneratingPrompt}
+                className="text-sm text-blue-600 hover:text-blue-700 disabled:opacity-50"
+              >
+                {isGeneratingPrompt ? '生成中...' : 'このパートだけ再生成'}
+              </button>
+            )}
+            <button
+              onClick={() => setIsAdvancedMode(!isAdvancedMode)}
+              className="text-sm text-purple-600 hover:text-purple-700"
+            >
+              {isAdvancedMode ? '詳細を閉じる' : '詳細設定'}
+            </button>
+          </div>
         </div>
 
         <textarea
@@ -123,6 +154,47 @@ export function PromptEditor({
             className="w-full h-20 px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500 resize-none"
             placeholder="除外したい要素（英語）"
           />
+        </div>
+      )}
+
+      {/* コメントでAI修正 */}
+      {onApplyComment && (
+        <div className="border rounded-lg p-3 bg-amber-50 border-amber-200">
+          <div className="flex items-center justify-between">
+            <div className="text-sm font-medium text-amber-800">コメントでAI修正</div>
+            <button
+              onClick={() => setShowCommentInput(!showCommentInput)}
+              className="text-xs text-amber-700 hover:text-amber-900"
+            >
+              {showCommentInput ? '閉じる' : '開く'}
+            </button>
+          </div>
+          {showCommentInput && (
+            <>
+              <textarea
+                value={comment}
+                onChange={(e) => setComment(e.target.value)}
+                rows={2}
+                placeholder="例: もう少し具体的に、地図を強調して"
+                className="mt-2 w-full px-3 py-2 border border-amber-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-amber-500 text-sm"
+              />
+              <div className="flex justify-end gap-2 mt-2">
+                <button
+                  onClick={() => setShowCommentInput(false)}
+                  className="px-3 py-1.5 text-sm text-amber-700 hover:bg-amber-100 rounded-lg"
+                >
+                  キャンセル
+                </button>
+                <button
+                  onClick={handleApplyComment}
+                  disabled={!comment.trim() || isApplyingComment}
+                  className="px-3 py-1.5 text-sm bg-amber-600 text-white rounded-lg hover:bg-amber-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+                >
+                  {isApplyingComment ? '修正中...' : 'AIで修正'}
+                </button>
+              </div>
+            </>
+          )}
         </div>
       )}
 

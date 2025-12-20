@@ -16,6 +16,8 @@ export function ImageManagePage() {
   const [isGeneratingPrompts, setIsGeneratingPrompts] = useState(false);
   const [isGeneratingImage, setIsGeneratingImage] = useState(false);
   const [selectedTab, setSelectedTab] = useState<'parts' | 'thumbnail'>('parts');
+  const [generatingPromptPartId, setGeneratingPromptPartId] = useState<string | null>(null);
+  const [applyingPromptId, setApplyingPromptId] = useState<string | null>(null);
 
   const latestPromptByPartId = useMemo(() => {
     const map = new Map<string, ImagePrompt>();
@@ -114,6 +116,40 @@ export function ImageManagePage() {
       setIsGeneratingPrompts(false);
     }
   }, [project]);
+
+  // パート単位のプロンプト生成
+  const handleGeneratePromptForPart = useCallback(
+    async (partId: string) => {
+      if (!project) return;
+      const part = project.parts.find((p) => p.id === partId);
+      if (!part) return;
+
+      try {
+        setGeneratingPromptPartId(partId);
+        setError(null);
+        const prompts = await window.electronAPI.ai.generateImagePrompts(
+          [part],
+          project.article,
+          'news_broadcast'
+        );
+
+        const updatedProject = {
+          ...project,
+          prompts: [...project.prompts, ...prompts],
+          updatedAt: new Date().toISOString(),
+        };
+
+        await window.electronAPI.project.save(updatedProject);
+        setProject(updatedProject);
+      } catch (err) {
+        console.error('Failed to generate prompt for part:', err);
+        setError(err instanceof Error ? err.message : 'プロンプト生成に失敗しました');
+      } finally {
+        setGeneratingPromptPartId(null);
+      }
+    },
+    [project]
+  );
 
   // 画像生成
   const handleGenerateImage = useCallback(
@@ -272,6 +308,43 @@ export function ImageManagePage() {
 
       await window.electronAPI.project.save(updatedProject);
       setProject(updatedProject);
+    },
+    [project]
+  );
+
+  const handleApplyPromptComment = useCallback(
+    async (prompt: ImagePrompt, comment: string) => {
+      if (!project) return;
+      try {
+        setApplyingPromptId(prompt.id);
+        setError(null);
+        const revisedText = await window.electronAPI.ai.applyComment(
+          { type: 'imagePrompt', id: prompt.id, currentText: prompt.prompt },
+          comment
+        );
+        const updatedPrompt: ImagePrompt = {
+          ...prompt,
+          prompt: revisedText,
+          version: prompt.version + 1,
+          createdAt: new Date().toISOString(),
+        };
+
+        const updatedProject = {
+          ...project,
+          prompts: project.prompts.map((p) =>
+            p.id === updatedPrompt.id ? updatedPrompt : p
+          ),
+          updatedAt: new Date().toISOString(),
+        };
+
+        await window.electronAPI.project.save(updatedProject);
+        setProject(updatedProject);
+      } catch (err) {
+        console.error('Failed to apply comment to prompt:', err);
+        setError(err instanceof Error ? err.message : 'プロンプト修正に失敗しました');
+      } finally {
+        setApplyingPromptId(null);
+      }
     },
     [project]
   );
@@ -529,16 +602,22 @@ export function ImageManagePage() {
                     onSave={handleUpdatePrompt}
                     onGenerate={handleGenerateImage}
                     isGenerating={isGeneratingImage}
+                    onRegeneratePrompt={() => handleGeneratePromptForPart(selectedPart.id)}
+                    isGeneratingPrompt={generatingPromptPartId === selectedPart.id}
+                    onApplyComment={(comment) =>
+                      handleApplyPromptComment(selectedPartPrompt, comment)
+                    }
+                    isApplyingComment={applyingPromptId === selectedPartPrompt.id}
                   />
                 ) : (
                   <div className="text-center py-8 text-gray-500">
                     <p>このパートのプロンプトはまだ生成されていません</p>
                     <button
-                      onClick={handleGeneratePrompts}
-                      disabled={isGeneratingPrompts}
+                      onClick={() => handleGeneratePromptForPart(selectedPart.id)}
+                      disabled={generatingPromptPartId === selectedPart.id}
                       className="mt-4 px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 disabled:opacity-50"
                     >
-                      プロンプトを生成
+                      {generatingPromptPartId === selectedPart.id ? '生成中...' : 'このパートだけ生成'}
                     </button>
                   </div>
                 )}
