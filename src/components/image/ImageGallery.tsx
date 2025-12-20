@@ -1,5 +1,7 @@
+import { useMemo, useState } from 'react';
 import type { ImageAsset } from '../../schemas';
 import { ImageCard } from './ImageCard';
+import { ImagePreviewModal } from './ImagePreviewModal';
 
 interface ImageGalleryProps {
   images: ImageAsset[];
@@ -11,6 +13,7 @@ interface ImageGalleryProps {
   showGenerateButton?: boolean;
   onGenerate?: () => void;
   isGenerating?: boolean;
+  selectLabel?: string;
 }
 
 export function ImageGallery({
@@ -23,7 +26,14 @@ export function ImageGallery({
   showGenerateButton = false,
   onGenerate,
   isGenerating = false,
+  selectLabel,
 }: ImageGalleryProps) {
+  const [previewImageId, setPreviewImageId] = useState<string | null>(null);
+  const previewImage = useMemo(
+    () => images.find((img) => img.id === previewImageId) ?? null,
+    [images, previewImageId]
+  );
+
   return (
     <div className="space-y-4">
       {/* ヘッダー */}
@@ -97,11 +107,19 @@ export function ImageGallery({
               image={image}
               isSelected={selectedImageIds.includes(image.id)}
               onSelect={onSelectImage ? () => onSelectImage(image.id) : undefined}
+              selectLabel={selectLabel}
+              onPreview={() => setPreviewImageId(image.id)}
               onDelete={onDeleteImage ? () => onDeleteImage(image.id) : undefined}
             />
           ))}
         </div>
       )}
+
+      <ImagePreviewModal
+        image={previewImage}
+        open={previewImage != null}
+        onClose={() => setPreviewImageId(null)}
+      />
     </div>
   );
 }

@@ -19,6 +19,7 @@ export function ArticleInputPage() {
   const [imageBlobUrls, setImageBlobUrls] = useState<Map<string, string>>(new Map());
   const [isGenerating, setIsGenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [targetPartCount, setTargetPartCount] = useState<number>(5);
 
   useEffect(() => {
     let cancelled = false;
@@ -34,6 +35,10 @@ export function ArticleInputPage() {
           source: project.article?.source ?? '',
           bodyText: project.article?.bodyText ?? '',
         });
+        if (project.parts?.length) {
+          const nextCount = Math.min(20, Math.max(1, project.parts.length));
+          setTargetPartCount(nextCount);
+        }
 
         const imported = (project.article?.importedImages ?? []) as ImageAsset[];
         setImages(imported);
@@ -113,6 +118,7 @@ export function ArticleInputPage() {
       // スクリプト生成を実行
       const parts = await window.electronAPI.ai.generateScript(project.article, {
         tone: 'news',
+        targetPartCount,
       });
 
       // 生成されたパートをプロジェクトに保存
@@ -155,6 +161,29 @@ export function ArticleInputPage() {
           </div>
 
           {/* 記事入力フォーム */}
+          <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
+            <h2 className="text-lg font-semibold text-gray-900 mb-4">スクリプト生成設定</h2>
+            <div className="flex flex-wrap items-center gap-4">
+              <label className="text-sm font-medium text-gray-700">パート数</label>
+              <input
+                type="number"
+                min={1}
+                max={20}
+                value={targetPartCount}
+                onChange={(e) => {
+                  const next = Number(e.target.value);
+                  if (!Number.isFinite(next)) return;
+                  setTargetPartCount(Math.min(20, Math.max(1, Math.round(next))));
+                }}
+                className="w-24 px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              />
+              <span className="text-sm text-gray-500">1〜20</span>
+            </div>
+            <p className="text-xs text-gray-500 mt-2">
+              画像を分けたい場合はパートを増やす運用を推奨します（後から編集も可能です）
+            </p>
+          </div>
+
           <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
             <h2 className="text-lg font-semibold text-gray-900 mb-4">記事情報</h2>
             <ArticleInput

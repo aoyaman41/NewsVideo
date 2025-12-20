@@ -336,10 +336,11 @@ export function ImageManagePage() {
 
       try {
         const now = new Date().toISOString();
+        const normalizedPanelImages = panelImages.filter((ref) => ref?.imageId).slice(0, 1);
         const updatedProject: Project = {
           ...project,
           parts: project.parts.map((p) =>
-            p.id === partId ? { ...p, panelImages, updatedAt: now } : p
+            p.id === partId ? { ...p, panelImages: normalizedPanelImages, updatedAt: now } : p
           ),
           updatedAt: now,
         };
@@ -621,6 +622,7 @@ export function ImageManagePage() {
                         images={allImages}
                         selectedImageIds={project.thumbnail ? [project.thumbnail.imageId] : []}
                         onSelectImage={handleSelectThumbnail}
+                        selectLabel="サムネイルに設定"
                         title="画像を選択"
                         emptyMessage="画像がありません。先に画像を生成/インポートしてください。"
                       />

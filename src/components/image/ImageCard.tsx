@@ -7,6 +7,9 @@ interface ImageCardProps {
   onSelect?: () => void;
   onDelete?: () => void;
   isDraggable?: boolean;
+  onPreview?: () => void;
+  selectLabel?: string;
+  selectTone?: 'primary' | 'ghost';
 }
 
 export function ImageCard({
@@ -15,13 +18,16 @@ export function ImageCard({
   onSelect,
   onDelete,
   isDraggable = false,
+  onPreview,
+  selectLabel,
+  selectTone = 'ghost',
 }: ImageCardProps) {
   return (
     <div
       className={`relative group bg-gray-100 rounded-lg overflow-hidden border-2 transition-colors cursor-pointer ${
         isSelected ? 'border-blue-500 ring-2 ring-blue-200' : 'border-transparent hover:border-gray-300'
-      } ${isDraggable ? 'cursor-grab active:cursor-grabbing' : ''}`}
-      onClick={onSelect}
+      } ${isDraggable ? 'cursor-grab active:cursor-grabbing' : ''} ${onPreview ? 'cursor-zoom-in' : ''}`}
+      onClick={onPreview ?? onSelect}
     >
       {/* 画像 */}
       <div className="aspect-video">
@@ -76,13 +82,30 @@ export function ImageCard({
         </button>
       )}
 
-      {/* メタ情報 */}
+      {/* メタ情報 + 操作 */}
       <div className="p-2 bg-white border-t">
-        <div className="flex items-center justify-between text-xs text-gray-500">
+        <div className="flex items-center justify-between gap-2 text-xs text-gray-500">
           <span>{image.metadata.width} x {image.metadata.height}</span>
-          {image.metadata.tags.length > 0 && (
-            <span className="text-blue-600">{image.metadata.tags.length}タグ</span>
-          )}
+          <div className="flex items-center gap-2">
+            {image.metadata.tags.length > 0 && (
+              <span className="text-blue-600">{image.metadata.tags.length}タグ</span>
+            )}
+            {onSelect && (
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onSelect();
+                }}
+                className={`px-3 py-1.5 text-xs font-semibold rounded-md border transition-colors ${
+                  selectTone === 'primary'
+                    ? 'bg-blue-600 text-white border-blue-600 hover:bg-blue-700'
+                    : 'bg-white text-gray-700 border-gray-200 hover:bg-gray-50'
+                }`}
+              >
+                {selectLabel || '選択'}
+              </button>
+            )}
+          </div>
         </div>
       </div>
     </div>
