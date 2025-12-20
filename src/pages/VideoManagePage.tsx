@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useLocation, useNavigate, useParams } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router-dom';
 import { Header, WorkflowNav } from '../components/layout';
 import type { Project } from '../schemas';
 import { toLocalFileUrl } from '../utils/toLocalFileUrl';
@@ -34,7 +34,6 @@ type VideoProgress = {
 export function VideoManagePage() {
   const { projectId } = useParams<{ projectId: string }>();
   const navigate = useNavigate();
-  const location = useLocation();
 
   const [project, setProject] = useState<Project | null>(null);
   const [settings, setSettings] = useState<Settings | null>(null);
@@ -280,24 +279,8 @@ export function VideoManagePage() {
   return (
     <div className="flex-1 flex flex-col overflow-hidden">
       <Header
-        title="動画プレビュー"
+        title="動画"
         subtitle={project.name}
-        actions={
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => navigate(`/projects/${projectId}/audio`)}
-              className="px-4 py-2 text-sm text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-lg transition-colors"
-            >
-              音声生成に戻る
-            </button>
-            <button
-              onClick={() => navigate('/settings', { state: { returnTo: `${location.pathname}${location.search}` } })}
-              className="px-4 py-2 text-sm text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-lg transition-colors"
-            >
-              設定
-            </button>
-          </div>
-        }
       />
 
       {projectId && <WorkflowNav projectId={projectId} current="video" project={project} />}

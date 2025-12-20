@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useLocation, useNavigate, useParams } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router-dom';
 import { Waveform } from '../components/audio';
 import { Header, WorkflowNav } from '../components/layout';
 import type { AudioAsset, Project } from '../schemas';
@@ -79,7 +79,6 @@ function parseMarkIndex(markName: string): number | null {
 export function AudioManagePage() {
   const { projectId } = useParams<{ projectId: string }>();
   const navigate = useNavigate();
-  const location = useLocation();
 
   const [project, setProject] = useState<Project | null>(null);
   const [settings, setSettings] = useState<Settings>(defaultSettings);
@@ -458,30 +457,8 @@ export function AudioManagePage() {
   return (
     <div className="flex-1 flex flex-col overflow-hidden">
       <Header
-        title="音声生成"
+        title="音声"
         subtitle={project.name}
-        actions={
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => navigate(`/projects/${projectId}/image`)}
-              className="px-4 py-2 text-sm text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-lg transition-colors"
-            >
-              画像管理に戻る
-            </button>
-            <button
-              onClick={() => navigate('/settings', { state: { returnTo: `${location.pathname}${location.search}` } })}
-              className="px-4 py-2 text-sm text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-lg transition-colors"
-            >
-              設定
-            </button>
-            <button
-              onClick={() => navigate(`/projects/${projectId}/video`)}
-              className="px-4 py-2 text-sm bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors"
-            >
-              動画へ
-            </button>
-          </div>
-        }
       />
 
       {projectId && <WorkflowNav projectId={projectId} current="audio" project={project} />}

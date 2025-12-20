@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useParams } from 'react-router-dom';
 import { Header, WorkflowNav } from '../components/layout';
 import { PartList, ScriptEditor } from '../components/script';
 import { useAutoSave } from '../hooks';
@@ -8,7 +8,6 @@ import { createNewPart } from '../schemas';
 
 export function ScriptEditPage() {
   const { projectId } = useParams<{ projectId: string }>();
-  const navigate = useNavigate();
 
   const [project, setProject] = useState<Project | null>(null);
   const [selectedPartId, setSelectedPartId] = useState<string | null>(null);
@@ -195,19 +194,6 @@ export function ScriptEditPage() {
     [project]
   );
 
-  // 次のステップへ
-  const handleNext = async () => {
-    if (!project) return;
-
-    try {
-      await window.electronAPI.project.save(project);
-      navigate(`/projects/${projectId}/image`);
-    } catch (err) {
-      console.error('Failed to save project:', err);
-      setError('保存に失敗しました');
-    }
-  };
-
   const selectedPart = project?.parts.find((p) => p.id === selectedPartId);
 
   if (isLoading) {
@@ -229,25 +215,8 @@ export function ScriptEditPage() {
   return (
     <div className="flex-1 flex flex-col overflow-hidden">
       <Header
-        title="スクリプト編集"
+        title="スクリプト"
         subtitle={project.name}
-        actions={
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => navigate(`/projects/${projectId}/article`)}
-              className="px-4 py-2 text-sm text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-lg transition-colors"
-            >
-              記事に戻る
-            </button>
-            <button
-              onClick={handleNext}
-              disabled={project.parts.length === 0}
-              className="px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-            >
-              画像生成へ
-            </button>
-          </div>
-        }
       />
 
       {projectId && <WorkflowNav projectId={projectId} current="script" project={project} />}

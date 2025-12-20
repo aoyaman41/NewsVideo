@@ -386,24 +386,8 @@ export function ImageManagePage() {
   return (
     <div className="flex-1 flex flex-col overflow-hidden">
       <Header
-        title="画像管理"
+        title="画像"
         subtitle={project.name}
-        actions={
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => navigate(`/projects/${projectId}/script`)}
-              className="px-4 py-2 text-sm text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-lg transition-colors"
-            >
-              スクリプト編集に戻る
-            </button>
-            <button
-              onClick={() => navigate(`/projects/${projectId}/audio`)}
-              className="px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
-            >
-              音声生成へ
-            </button>
-          </div>
-        }
       />
 
       {projectId && <WorkflowNav projectId={projectId} current="image" project={project} />}

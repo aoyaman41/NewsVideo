@@ -133,16 +133,8 @@ export function ArticleInputPage() {
   return (
     <div className="flex-1 flex flex-col overflow-hidden">
       <Header
-        title="記事入力"
-        subtitle="スクリプト生成のための記事を入力"
-        actions={
-          <button
-            onClick={() => navigate('/projects')}
-            className="px-4 py-2 text-sm text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-lg transition-colors"
-          >
-            キャンセル
-          </button>
-        }
+        title="記事"
+        subtitle={project?.name}
       />
 
       {projectId && <WorkflowNav projectId={projectId} current="article" project={project} />}
