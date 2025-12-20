@@ -8,6 +8,7 @@ interface ScriptEditorProps {
   onSave: (partId: string, data: PartEdit) => void;
   onRegenerateWithComment: (partId: string, comment: string) => void;
   isProcessing?: boolean;
+  lastCommentAppliedAt?: string | null;
 }
 
 export function ScriptEditor({
@@ -15,9 +16,11 @@ export function ScriptEditor({
   onSave,
   onRegenerateWithComment,
   isProcessing,
+  lastCommentAppliedAt,
 }: ScriptEditorProps) {
   const [showCommentInput, setShowCommentInput] = useState(false);
   const [comment, setComment] = useState('');
+  const [showAppliedPulse, setShowAppliedPulse] = useState(false);
 
   const {
     register,
@@ -41,6 +44,13 @@ export function ScriptEditor({
     setShowCommentInput(false);
     setComment('');
   }, [part.id, part.title, part.scriptText, reset]);
+
+  useEffect(() => {
+    if (!lastCommentAppliedAt) return;
+    setShowAppliedPulse(true);
+    const timer = window.setTimeout(() => setShowAppliedPulse(false), 1600);
+    return () => window.clearTimeout(timer);
+  }, [lastCommentAppliedAt]);
 
   const onSubmit = (data: PartEdit) => {
     onSave(part.id, data);
@@ -70,6 +80,39 @@ export function ScriptEditor({
             {isDirty && (
               <span className="text-xs text-orange-600 bg-orange-50 px-2 py-1 rounded">
                 未保存の変更があります
+              </span>
+            )}
+            {isProcessing && (
+              <span className="text-xs text-blue-700 bg-blue-50 px-2 py-1 rounded flex items-center gap-2">
+                <svg className="h-3 w-3 animate-spin" viewBox="0 0 24 24">
+                  <circle
+                    className="opacity-25"
+                    cx="12"
+                    cy="12"
+                    r="10"
+                    stroke="currentColor"
+                    strokeWidth="4"
+                    fill="none"
+                  />
+                  <path
+                    className="opacity-75"
+                    fill="currentColor"
+                    d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+                  />
+                </svg>
+                修正中...
+              </span>
+            )}
+            {showAppliedPulse && (
+              <span className="text-xs text-emerald-700 bg-emerald-50 px-2 py-1 rounded flex items-center gap-1">
+                <svg className="h-3 w-3" viewBox="0 0 20 20" fill="currentColor">
+                  <path
+                    fillRule="evenodd"
+                    d="M16.704 5.29a1 1 0 0 1 0 1.42l-7.5 7.5a1 1 0 0 1-1.414 0l-3.5-3.5a1 1 0 1 1 1.414-1.42L8.5 12.086l6.793-6.796a1 1 0 0 1 1.411 0Z"
+                    clipRule="evenodd"
+                  />
+                </svg>
+                修正完了
               </span>
             )}
             <button
@@ -113,9 +156,31 @@ export function ScriptEditor({
             <button
               onClick={handleRegenerate}
               disabled={!comment.trim() || isProcessing}
-              className="px-3 py-1.5 text-sm bg-yellow-600 text-white rounded-lg hover:bg-yellow-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+              className="px-3 py-1.5 text-sm bg-yellow-600 text-white rounded-lg hover:bg-yellow-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center gap-2"
             >
-              {isProcessing ? 'AIで修正中...' : 'AIで修正'}
+              {isProcessing ? (
+                <>
+                  <svg className="h-4 w-4 animate-spin" viewBox="0 0 24 24">
+                    <circle
+                      className="opacity-25"
+                      cx="12"
+                      cy="12"
+                      r="10"
+                      stroke="currentColor"
+                      strokeWidth="4"
+                      fill="none"
+                    />
+                    <path
+                      className="opacity-75"
+                      fill="currentColor"
+                      d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+                    />
+                  </svg>
+                  修正中...
+                </>
+              ) : (
+                'AIで修正'
+              )}
             </button>
           </div>
         </div>

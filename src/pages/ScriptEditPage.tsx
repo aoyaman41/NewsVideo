@@ -14,6 +14,7 @@ export function ScriptEditPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [isProcessing, setIsProcessing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [lastCommentAppliedAt, setLastCommentAppliedAt] = useState<string | null>(null);
 
   // プロジェクト読み込み
   useEffect(() => {
@@ -184,6 +185,7 @@ export function ScriptEditPage() {
           parts: updatedParts,
           updatedAt: new Date().toISOString(),
         });
+        setLastCommentAppliedAt(new Date().toISOString());
       } catch (err) {
         console.error('Failed to regenerate script:', err);
         setError(err instanceof Error ? err.message : 'スクリプト修正に失敗しました');
@@ -256,6 +258,7 @@ export function ScriptEditPage() {
               onSave={handleSavePart}
               onRegenerateWithComment={handleRegenerateWithComment}
               isProcessing={isProcessing}
+              lastCommentAppliedAt={lastCommentAppliedAt}
             />
           ) : (
             <div className="flex-1 flex items-center justify-center text-gray-500">
