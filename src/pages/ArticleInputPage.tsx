@@ -1,9 +1,8 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { Header, WorkflowNav } from '../components/layout';
-import { ArticleInput, FileImport, ImageDropzone } from '../components/article';
+import { ArticleInput } from '../components/article';
 import type { ArticleInput as ArticleInputType, ImageAsset, Project } from '../schemas';
-import { toLocalFileUrl } from '../utils/toLocalFileUrl';
 
 export function ArticleInputPage() {
   const { projectId } = useParams<{ projectId: string }>();
@@ -16,7 +15,6 @@ export function ArticleInputPage() {
     bodyText: '',
   });
   const [images, setImages] = useState<ImageAsset[]>([]);
-  const [imageBlobUrls, setImageBlobUrls] = useState<Map<string, string>>(new Map());
   const [isGenerating, setIsGenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [targetPartCount, setTargetPartCount] = useState<number>(5);
@@ -42,11 +40,6 @@ export function ArticleInputPage() {
 
         const imported = (project.article?.importedImages ?? []) as ImageAsset[];
         setImages(imported);
-        const map = new Map<string, string>();
-        for (const img of imported) {
-          map.set(img.id, toLocalFileUrl(img.filePath));
-        }
-        setImageBlobUrls(map);
       } catch (err) {
         console.error('Failed to load project:', err);
         setError(err instanceof Error ? err.message : 'プロジェクトの読み込みに失敗しました');
@@ -58,44 +51,6 @@ export function ArticleInputPage() {
       cancelled = true;
     };
   }, [projectId]);
-
-  const handleTextImported = useCallback((title: string, text: string) => {
-    setArticleData((prev) => ({
-      ...prev,
-      title: prev?.title || title,
-      bodyText: text,
-    }));
-  }, []);
-
-  const handleImagesAdded = useCallback((newImages: ImageAsset[], newBlobUrls: Map<string, string>) => {
-    setImages((prev) => [...prev, ...newImages]);
-    setImageBlobUrls((prev) => {
-      const updated = new Map(prev);
-      newBlobUrls.forEach((value, key) => updated.set(key, value));
-      return updated;
-    });
-  }, []);
-
-  const handleImageRemoved = useCallback((imageId: string) => {
-    const image = images.find((img) => img.id === imageId);
-    if (image) {
-      window.electronAPI.image.delete(image.filePath).catch((err) => {
-        console.warn('Failed to delete imported image file:', err);
-      });
-    }
-
-    // blob URLを解放
-    const blobUrl = imageBlobUrls.get(imageId);
-    if (blobUrl && blobUrl.startsWith('blob:')) {
-      URL.revokeObjectURL(blobUrl);
-    }
-    setImages((prev) => prev.filter((img) => img.id !== imageId));
-    setImageBlobUrls((prev) => {
-      const updated = new Map(prev);
-      updated.delete(imageId);
-      return updated;
-    });
-  }, [imageBlobUrls, images]);
 
   const handleSubmit = async (data: ArticleInputType) => {
     if (!projectId) return;
@@ -154,12 +109,6 @@ export function ArticleInputPage() {
             </div>
           )}
 
-          {/* ファイルインポート */}
-          <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
-            <h2 className="text-lg font-semibold text-gray-900 mb-4">ファイルからインポート</h2>
-            <FileImport onTextImported={handleTextImported} />
-          </div>
-
           {/* 記事入力フォーム */}
           <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
             <h2 className="text-lg font-semibold text-gray-900 mb-4">スクリプト生成設定</h2>
@@ -193,20 +142,6 @@ export function ArticleInputPage() {
             />
           </div>
 
-          {/* 画像インポート */}
-          <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
-            <h2 className="text-lg font-semibold text-gray-900 mb-4">記事画像（任意）</h2>
-            <p className="text-sm text-gray-500 mb-4">
-              記事に関連する画像をインポートできます。これらの画像はパネル画像として使用できます。
-            </p>
-            <ImageDropzone
-              images={images}
-              projectId={projectId}
-              onImagesAdded={handleImagesAdded}
-              onImageRemoved={handleImageRemoved}
-              blobUrlMap={imageBlobUrls}
-            />
-          </div>
         </div>
       </div>
     </div>
