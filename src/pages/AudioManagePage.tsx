@@ -2,8 +2,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { Waveform } from '../components/audio';
 import { Header, WorkflowNav } from '../components/layout';
-import type { AudioAsset, Project } from '../schemas';
+import type { AudioAsset, Project, UsageRecord } from '../schemas';
 import { toLocalFileUrl } from '../utils/toLocalFileUrl';
+import { createGeminiTtsUsageRecord } from '../utils/usage';
 
 type TTSEngine = 'google_tts' | 'gemini_tts' | 'macos_tts';
 
@@ -200,13 +201,16 @@ export function AudioManagePage() {
   }, []);
 
   const applyAudioToPart = useCallback(
-    async (partId: string, audio: AudioAsset) => {
+    async (partId: string, audio: AudioAsset, usageRecord?: UsageRecord | null) => {
       const currentProject = projectRef.current;
       if (!currentProject) return;
 
       const now = new Date().toISOString();
       const targetPart = currentProject.parts.find((p) => p.id === partId);
       const prevAudioId = targetPart?.audio?.id;
+      const nextUsage = usageRecord
+        ? [...(currentProject.usage ?? []), usageRecord]
+        : currentProject.usage ?? [];
 
       const updatedProject: Project = {
         ...currentProject,
@@ -217,6 +221,7 @@ export function AudioManagePage() {
           ...currentProject.audio.filter((a) => a.id !== prevAudioId),
           audio,
         ],
+        usage: nextUsage,
         updatedAt: now,
       };
 
@@ -232,13 +237,13 @@ export function AudioManagePage() {
       setIsGenerating(true);
       setError(null);
 
-      const audio = await window.electronAPI.tts.generate(
+      const result = await window.electronAPI.tts.generate(
         selectedPart.scriptText,
         ttsOptions,
         projectId
       );
-
-      await applyAudioToPart(selectedPart.id, audio);
+      const usageRecord = createGeminiTtsUsageRecord('tts_generate', result.usage);
+      await applyAudioToPart(selectedPart.id, result.audio, usageRecord);
     } catch (err) {
       console.error('Failed to generate audio:', err);
       setError(err instanceof Error ? err.message : '音声生成に失敗しました');
@@ -301,9 +306,10 @@ export function AudioManagePage() {
           if (cancelRef.current) return;
 
           try {
-            const audio = await window.electronAPI.tts.generate(part.scriptText, ttsOptions, projectId);
+            const result = await window.electronAPI.tts.generate(part.scriptText, ttsOptions, projectId);
+            const usageRecord = createGeminiTtsUsageRecord('tts_generate', result.usage);
             // 保存は競合しやすいので直列化（ただし生成自体は無制限に並列）
-            saveChain = saveChain.then(() => applyAudioToPart(part.id, audio));
+            saveChain = saveChain.then(() => applyAudioToPart(part.id, result.audio, usageRecord));
           } catch (err) {
             const message = err instanceof Error ? err.message : String(err);
             errors.push(`${part.index + 1}: ${message}`);

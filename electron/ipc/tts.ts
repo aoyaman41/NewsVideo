@@ -18,6 +18,13 @@ interface TTSOptions {
   audioEncoding: 'MP3' | 'LINEAR16';
 }
 
+type TokenUsage = {
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens?: number;
+  model?: string;
+};
+
 interface AudioAsset {
   id: string;
   filePath: string;
@@ -326,7 +333,7 @@ async function synthesizeGeminiTts(
   text: string,
   options: TTSOptions,
   projectPath: string
-): Promise<AudioAsset> {
+): Promise<{ audio: AudioAsset; usage: TokenUsage | null }> {
   const apiKey = await readApiKey('google_ai');
   if (!apiKey) {
     throw new Error(
@@ -379,6 +386,11 @@ async function synthesizeGeminiTts(
         }>;
       };
     }>;
+    usageMetadata?: {
+      promptTokenCount?: number;
+      candidatesTokenCount?: number;
+      totalTokenCount?: number;
+    };
     error?: { message?: string };
   };
 
@@ -412,8 +424,7 @@ async function synthesizeGeminiTts(
   const durationSecRaw = pcmData.length / (sampleRateHertz * channels * 2);
   const durationSec = Math.max(0.1, Math.round(durationSecRaw * 100) / 100);
   const segments = splitScriptIntoSegments(text);
-
-  return {
+  const audio: AudioAsset = {
     id: audioId,
     filePath,
     durationSec,
@@ -427,6 +438,16 @@ async function synthesizeGeminiTts(
     },
     generatedAt: now,
   };
+  const usage = data.usageMetadata
+    ? {
+        inputTokens: data.usageMetadata.promptTokenCount ?? 0,
+        outputTokens: data.usageMetadata.candidatesTokenCount ?? 0,
+        totalTokens: data.usageMetadata.totalTokenCount,
+        model: GEMINI_TTS_MODEL_ID,
+      }
+    : null;
+
+  return { audio, usage };
 }
 
 async function synthesizeMacosTts(
@@ -585,17 +606,19 @@ ipcMain.handle(
     text: string,
     options: TTSOptions,
     projectId: string
-  ): Promise<AudioAsset> => {
+  ): Promise<{ audio: AudioAsset; usage: TokenUsage | null }> => {
     if (!projectId) throw new Error('projectId が指定されていません');
     const projectPath = await getProjectPath(projectId);
 
     if (options.ttsEngine === 'macos_tts') {
-      return synthesizeMacosTts(text, options, projectPath);
+      const audio = await synthesizeMacosTts(text, options, projectPath);
+      return { audio, usage: null };
     }
     if (options.ttsEngine === 'gemini_tts') {
       return synthesizeGeminiTts(text, options, projectPath);
     }
-    return synthesizeGoogleTts(text, options, projectPath);
+    const audio = await synthesizeGoogleTts(text, options, projectPath);
+    return { audio, usage: null };
   }
 );
 
@@ -606,7 +629,7 @@ ipcMain.handle(
     parts: PartLike[],
     options: TTSOptions,
     projectId: string
-  ): Promise<AudioAsset[]> => {
+  ): Promise<Array<{ audio: AudioAsset; usage: TokenUsage | null }>> => {
     if (!projectId) throw new Error('projectId が指定されていません');
     const projectPath = await getProjectPath(projectId);
 
@@ -615,19 +638,20 @@ ipcMain.handle(
       .filter((item) => item.text.trim().length > 0)
       .map((item, index) => ({ ...item, index }));
 
-    const out: Array<AudioAsset | null> = Array(targets.length).fill(null);
+    const out: Array<{ audio: AudioAsset; usage: TokenUsage | null } | null> =
+      Array(targets.length).fill(null);
     const errors: { index: number; error: string }[] = [];
 
     await Promise.all(
       targets.map(async (item) => {
         try {
-          const audio =
+          const result =
             options.ttsEngine === 'macos_tts'
-              ? await synthesizeMacosTts(item.text, options, projectPath)
+              ? { audio: await synthesizeMacosTts(item.text, options, projectPath), usage: null }
               : options.ttsEngine === 'gemini_tts'
                 ? await synthesizeGeminiTts(item.text, options, projectPath)
-                : await synthesizeGoogleTts(item.text, options, projectPath);
-          out[item.index] = audio;
+                : { audio: await synthesizeGoogleTts(item.text, options, projectPath), usage: null };
+          out[item.index] = result;
         } catch (error) {
           errors.push({
             index: item.index,
@@ -637,7 +661,9 @@ ipcMain.handle(
       })
     );
 
-    const results = out.filter((value): value is AudioAsset => !!value);
+    const results = out.filter(
+      (value): value is { audio: AudioAsset; usage: TokenUsage | null } => !!value
+    );
 
     if (errors.length > 0 && results.length === 0) {
       throw new Error(`全ての音声生成に失敗しました: ${errors.map((e) => e.error).join(', ')}`);

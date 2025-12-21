@@ -3,6 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { Header, WorkflowNav } from '../components/layout';
 import { ArticleInput } from '../components/article';
 import type { ArticleInput as ArticleInputType, ImageAsset, Project } from '../schemas';
+import { createOpenAIUsageRecord } from '../utils/usage';
 
 export function ArticleInputPage() {
   const { projectId } = useParams<{ projectId: string }>();
@@ -71,13 +72,17 @@ export function ArticleInputPage() {
       await window.electronAPI.project.save(project);
 
       // スクリプト生成を実行
-      const parts = await window.electronAPI.ai.generateScript(project.article, {
+      const result = await window.electronAPI.ai.generateScript(project.article, {
         tone: 'news',
         targetPartCount,
       });
+      const usageRecord = createOpenAIUsageRecord('script_generate', result.usage);
 
       // 生成されたパートをプロジェクトに保存
-      project.parts = parts;
+      project.parts = result.parts;
+      if (usageRecord) {
+        project.usage = [...(project.usage ?? []), usageRecord];
+      }
       project.updatedAt = new Date().toISOString();
       await window.electronAPI.project.save(project);
 

@@ -5,6 +5,7 @@ import { PartList, ScriptEditor } from '../components/script';
 import { useAutoSave } from '../hooks';
 import type { Project, PartEdit } from '../schemas';
 import { createNewPart } from '../schemas';
+import { createOpenAIUsageRecord } from '../utils/usage';
 
 export function ScriptEditPage() {
   const { projectId } = useParams<{ projectId: string }>();
@@ -175,16 +176,17 @@ export function ScriptEditPage() {
       setError(null);
 
       try {
-        const newScriptText = await window.electronAPI.ai.applyComment(
+        const result = await window.electronAPI.ai.applyComment(
           { type: 'script', id: partId, currentText: part.scriptText },
           comment
         );
+        const usageRecord = createOpenAIUsageRecord('script_comment', result.usage);
 
         const updatedParts = project.parts.map((p) =>
           p.id === partId
             ? {
                 ...p,
-                scriptText: newScriptText,
+                scriptText: result.text,
                 updatedAt: new Date().toISOString(),
                 comments: [
                   ...p.comments,
@@ -202,6 +204,7 @@ export function ScriptEditPage() {
         setProject({
           ...project,
           parts: updatedParts,
+          usage: usageRecord ? [...(project.usage ?? []), usageRecord] : project.usage ?? [],
           updatedAt: new Date().toISOString(),
         });
         setLastCommentAppliedAt(new Date().toISOString());

@@ -80,6 +80,21 @@ export const commentSchema = z.object({
 
 export type Comment = z.infer<typeof commentSchema>;
 
+// 使用量記録
+export const usageRecordSchema = z.object({
+  id: z.string().uuid(),
+  provider: z.enum(['openai', 'gemini']),
+  category: z.enum(['text', 'image', 'tts']),
+  model: z.string(),
+  operation: z.string(),
+  inputTokens: z.number().int().nonnegative().optional(),
+  outputTokens: z.number().int().nonnegative().optional(),
+  imageCount: z.number().int().nonnegative().optional(),
+  createdAt: z.string().datetime(),
+});
+
+export type UsageRecord = z.infer<typeof usageRecordSchema>;
+
 // パート
 export const partSchema = z.object({
   id: z.string().uuid(),
@@ -128,6 +143,7 @@ export const projectSchema = projectMetaSchema.extend({
   images: z.array(imageAssetSchema),
   prompts: z.array(imagePromptSchema),
   audio: z.array(audioAssetSchema),
+  usage: z.array(usageRecordSchema),
   thumbnail: imageAssetRefSchema.optional(),
 });
 
@@ -240,6 +256,7 @@ export function createNewProject(name: string, projectPath: string): Project {
     images: [],
     prompts: [],
     audio: [],
+    usage: [],
     thumbnail: undefined,
   };
 }

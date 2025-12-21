@@ -3,6 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { Header, WorkflowNav } from '../components/layout';
 import { ImageAssignment, PromptEditor } from '../components/image';
 import type { Project, ImageAssetRef, ImagePrompt } from '../schemas';
+import { createGeminiImageUsageRecord, createOpenAIUsageRecord } from '../utils/usage';
 
 type ImageCommonSettings = {
   imageStylePreset: string;
@@ -125,20 +126,22 @@ export function ImageManagePage() {
       setIsGeneratingPrompts(true);
       setError(null);
 
-      const prompts = await window.electronAPI.ai.generateImagePrompts(
+      const result = await window.electronAPI.ai.generateImagePrompts(
         project.parts,
         project.article,
         commonSettings.imageStylePreset
       );
-      const nextPrompts = prompts.map((prompt) => ({
+      const nextPrompts = result.prompts.map((prompt) => ({
         ...prompt,
         aspectRatio: commonSettings.defaultAspectRatio,
       }));
+      const usageRecord = createOpenAIUsageRecord('image_prompt_generate', result.usage);
 
       // プロジェクトを更新
       const updatedProject = {
         ...project,
         prompts: [...project.prompts, ...nextPrompts],
+        usage: usageRecord ? [...(project.usage ?? []), usageRecord] : project.usage ?? [],
         updatedAt: new Date().toISOString(),
       };
 
@@ -162,19 +165,21 @@ export function ImageManagePage() {
       try {
         setGeneratingPromptPartId(partId);
         setError(null);
-        const prompts = await window.electronAPI.ai.generateImagePrompts(
+        const result = await window.electronAPI.ai.generateImagePrompts(
           [part],
           project.article,
           commonSettings.imageStylePreset
         );
-        const nextPrompts = prompts.map((prompt) => ({
+        const nextPrompts = result.prompts.map((prompt) => ({
           ...prompt,
           aspectRatio: commonSettings.defaultAspectRatio,
         }));
+        const usageRecord = createOpenAIUsageRecord('image_prompt_generate', result.usage);
 
         const updatedProject = {
           ...project,
           prompts: [...project.prompts, ...nextPrompts],
+          usage: usageRecord ? [...(project.usage ?? []), usageRecord] : project.usage ?? [],
           updatedAt: new Date().toISOString(),
         };
 
@@ -203,6 +208,7 @@ export function ImageManagePage() {
           { ...prompt, aspectRatio: commonSettings.defaultAspectRatio },
           projectId
         );
+        const usageRecord = createGeminiImageUsageRecord(1, 'image_generate');
 
         // プロジェクトを更新
         const now = new Date().toISOString();
@@ -217,6 +223,7 @@ export function ImageManagePage() {
           ...project,
           parts: updatedParts,
           images: [...project.images, imageAsset],
+          usage: usageRecord ? [...(project.usage ?? []), usageRecord] : project.usage ?? [],
           updatedAt: now,
         };
 
@@ -253,6 +260,7 @@ export function ImageManagePage() {
         targetPrompts.map((p) => ({ ...p, aspectRatio: commonSettings.defaultAspectRatio })),
         projectId
       );
+      const usageRecord = createGeminiImageUsageRecord(imageAssets.length, 'image_generate_batch');
 
       // プロジェクトを更新
       const now = new Date().toISOString();
@@ -276,6 +284,7 @@ export function ImageManagePage() {
         ...project,
         parts: project.parts.map((p) => nextPartsById.get(p.id) ?? p),
         images: [...project.images, ...imageAssets],
+        usage: usageRecord ? [...(project.usage ?? []), usageRecord] : project.usage ?? [],
         updatedAt: now,
       };
 
@@ -379,13 +388,14 @@ export function ImageManagePage() {
       try {
         setApplyingPromptId(prompt.id);
         setError(null);
-        const revisedText = await window.electronAPI.ai.applyComment(
+        const result = await window.electronAPI.ai.applyComment(
           { type: 'imagePrompt', id: prompt.id, currentText: prompt.prompt },
           comment
         );
+        const usageRecord = createOpenAIUsageRecord('image_prompt_comment', result.usage);
         const updatedPrompt: ImagePrompt = {
           ...prompt,
-          prompt: revisedText,
+          prompt: result.text,
           version: prompt.version + 1,
           createdAt: new Date().toISOString(),
         };
@@ -395,6 +405,7 @@ export function ImageManagePage() {
           prompts: project.prompts.map((p) =>
             p.id === updatedPrompt.id ? updatedPrompt : p
           ),
+          usage: usageRecord ? [...(project.usage ?? []), usageRecord] : project.usage ?? [],
           updatedAt: new Date().toISOString(),
         };
 

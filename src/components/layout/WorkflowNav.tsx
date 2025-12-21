@@ -1,6 +1,7 @@
-import { useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import type { Project } from '../../schemas';
+import { DEFAULT_COST_RATES, formatUsd, sumUsageCostUsd, type CostRates } from '../../utils/cost';
 
 export type WorkflowStage = 'article' | 'script' | 'image' | 'audio' | 'video';
 
@@ -121,8 +122,41 @@ export function WorkflowNav({
   project?: Project | null;
 }) {
   const navigate = useNavigate();
+  const [costRates, setCostRates] = useState<CostRates>(DEFAULT_COST_RATES);
   const progress = useMemo(() => computeProgress(project), [project]);
   const currentIndex = useMemo(() => steps.findIndex((s) => s.key === current), [current]);
+  const usageRecords = project?.usage ?? [];
+  const totalCost = useMemo(
+    () => sumUsageCostUsd(usageRecords, costRates),
+    [usageRecords, costRates]
+  );
+  const openaiCost = useMemo(
+    () => sumUsageCostUsd(usageRecords.filter((r) => r.provider === 'openai'), costRates),
+    [usageRecords, costRates]
+  );
+  const geminiCost = useMemo(
+    () => sumUsageCostUsd(usageRecords.filter((r) => r.provider === 'gemini'), costRates),
+    [usageRecords, costRates]
+  );
+
+  useEffect(() => {
+    let cancelled = false;
+    const loadRates = async () => {
+      try {
+        const settings = await window.electronAPI.settings.get();
+        if (cancelled) return;
+        if (settings?.cost) {
+          setCostRates(settings.cost);
+        }
+      } catch {
+        // fallback to default
+      }
+    };
+    loadRates();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   return (
     <nav aria-label="Workflow" className="titlebar-no-drag bg-white border-b border-gray-200">
@@ -137,6 +171,14 @@ export function WorkflowNav({
           {project && (
             <div className="text-xs text-gray-500 truncate">
               {progress.totalParts > 0 ? `パート ${progress.totalParts}` : 'パート未生成'}
+            </div>
+          )}
+          {project && (
+            <div
+              className="text-xs text-gray-600"
+              title={`OpenAI ${formatUsd(openaiCost)} / Gemini ${formatUsd(geminiCost)}`}
+            >
+              推定コスト {formatUsd(totalCost)}
             </div>
           )}
         </div>

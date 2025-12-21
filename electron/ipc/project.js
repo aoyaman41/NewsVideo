@@ -78,6 +78,7 @@ ipcMain.handle('project:create', async (_, name) => {
         await fs.writeFile(path.join(projectPath, 'images.json'), JSON.stringify([], null, 2));
         await fs.writeFile(path.join(projectPath, 'prompts.json'), JSON.stringify([], null, 2));
         await fs.writeFile(path.join(projectPath, 'audio.json'), JSON.stringify([], null, 2));
+        await fs.writeFile(path.join(projectPath, 'usage.json'), JSON.stringify([], null, 2));
         console.log('[project:create] Project created successfully:', id);
         return {
             id,
@@ -105,12 +106,15 @@ ipcMain.handle('project:load', async (_, projectId) => {
                 const meta = JSON.parse(metaContent);
                 if (meta.id === projectId) {
                     // 全データを読み込み
-                    const [article, parts, images, prompts, audio] = await Promise.all([
+                    const [article, parts, images, prompts, audio, usage] = await Promise.all([
                         fs.readFile(path.join(projectPath, 'article.json'), 'utf-8').then(JSON.parse),
                         fs.readFile(path.join(projectPath, 'parts.json'), 'utf-8').then(JSON.parse),
                         fs.readFile(path.join(projectPath, 'images.json'), 'utf-8').then(JSON.parse),
                         fs.readFile(path.join(projectPath, 'prompts.json'), 'utf-8').then(JSON.parse),
                         fs.readFile(path.join(projectPath, 'audio.json'), 'utf-8').then(JSON.parse),
+                        fs.readFile(path.join(projectPath, 'usage.json'), 'utf-8')
+                            .then(JSON.parse)
+                            .catch(() => []),
                     ]);
                     return {
                         ...meta,
@@ -120,6 +124,7 @@ ipcMain.handle('project:load', async (_, projectId) => {
                         images,
                         prompts,
                         audio,
+                        usage,
                     };
                 }
             }
@@ -149,6 +154,7 @@ ipcMain.handle('project:save', async (_, project) => {
         fs.writeFile(path.join(projectPath, 'images.json'), JSON.stringify(project.images, null, 2)),
         fs.writeFile(path.join(projectPath, 'prompts.json'), JSON.stringify(project.prompts, null, 2)),
         fs.writeFile(path.join(projectPath, 'audio.json'), JSON.stringify(project.audio, null, 2)),
+        fs.writeFile(path.join(projectPath, 'usage.json'), JSON.stringify(project.usage ?? [], null, 2)),
     ]);
     return { success: true, savedAt: now };
 });

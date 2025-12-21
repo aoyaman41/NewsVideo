@@ -39,6 +39,16 @@ async function withRetry(fn, maxRetries = 3, baseDelay = 1000) {
     }
     throw lastError;
 }
+function toTokenUsage(response) {
+    if (!response.usage)
+        return null;
+    return {
+        inputTokens: response.usage.prompt_tokens ?? 0,
+        outputTokens: response.usage.completion_tokens ?? 0,
+        totalTokens: response.usage.total_tokens,
+        model: response.model,
+    };
+}
 // スクリプト生成プロンプト
 function createScriptGenerationPrompt(article, options) {
     const toneDescription = {
@@ -125,67 +135,298 @@ ipcMain.handle('ai:generateScript', async (_, article, options = {}) => {
         scriptGeneratedAt: now,
         scriptModifiedByUser: false,
     }));
-    return parts;
+    return { parts, usage: toTokenUsage(response) };
 });
-// 報道スライドショー用のベーステンプレート（日本語）
-const NEWS_SLIDESHOW_TEMPLATE = {
-    // 共通のスタイル指示（全画像に適用）
-    baseStyle: `日本の報道番組向けインフォグラフィック、シンプルで洗練されたデザイン、16:9アスペクト比、高解像度、テレビ放送品質`,
-    // 共通の除外要素
-    baseNegative: `人物、顔、ポートレート、ニュースキャスター、記者、カメラ、マイク、記者会見、インタビュー、漫画、アニメ、低画質、ぼやけ、テキストオーバーレイ、ウォーターマーク、ロゴ`,
-    // コンテンツタイプ別のテンプレート
-    contentTypes: {
-        // データ・統計を表現
-        data: `データ可視化、チャート、グラフ、統計インフォグラフィック、整理されたレイアウト`,
-        // 場所・地理を表現
-        location: `俯瞰図、衛星画像風、地理マップ、位置表示、クリーンな地図デザイン`,
-        // 技術・科学を表現
-        technology: `技術イラスト、設計図風、概念図、コンセプトビジュアライゼーション`,
-        // 経済・ビジネスを表現
-        business: `ビジネスインフォグラフィック、財務データ可視化、コーポレート抽象デザイン`,
-        // 一般的なニューストピック
-        general: `抽象的なニュース背景、プロフェッショナルなグラデーション、幾何学パターン`,
+const STYLE_PRESETS = {
+    news_broadcast: {
+        id: 'news_broadcast',
+        baseStyle: 'Japanese TV news infographic, clean, minimal, vector-like, broadcast quality',
+        colorPalette: 'cool blue/gray base with subtle cyan accents, low saturation',
+        lighting: 'neutral matte lighting, low contrast',
+        background: 'subtle gradient with thin grid lines and soft vignette',
+        density: 'medium',
+        layoutVariants: {
+            dataAndLocation: 'top header band (empty), left data panel, right map panel',
+            dataOnly: 'top header band (empty), left data panel, right diagram panel',
+            locationOnly: 'top header band (empty), left map panel, right diagram panel',
+            general: 'top header band (empty), center diagram panel',
+        },
+        negative: 'no people, no faces, no anchors, no reporters, no cameras, no microphones, no interviews, no logos, no watermark, no readable text, no show titles, no station names, no program names',
+    },
+    documentary: {
+        id: 'documentary',
+        baseStyle: 'Documentary-style news infographic, clean, semi-realistic, broadcast quality',
+        colorPalette: 'cool gray base with muted teal accents, natural tone',
+        lighting: 'soft neutral lighting, slightly cinematic',
+        background: 'subtle texture with light grain, restrained gradients',
+        density: 'medium',
+        layoutVariants: {
+            dataAndLocation: 'top header band (empty), left data panel, right map panel',
+            dataOnly: 'top header band (empty), left data panel, right diagram panel',
+            locationOnly: 'top header band (empty), left map panel, right diagram panel',
+            general: 'top header band (empty), center diagram panel',
+        },
+        negative: 'no people, no faces, no anchors, no reporters, no logos, no watermark, no readable text, no show titles, no station names, no program names',
+    },
+    infographic: {
+        id: 'infographic',
+        baseStyle: 'High-clarity infographic, crisp vector look, balanced grid, broadcast quality',
+        colorPalette: 'blue/gray base with clean cyan accents, flat tones',
+        lighting: 'flat neutral lighting, minimal shadows',
+        background: 'light grid background, clean white space',
+        density: 'high',
+        layoutVariants: {
+            dataAndLocation: 'top header band (empty), left data panel, right map panel',
+            dataOnly: 'top header band (empty), left data panel, right diagram panel',
+            locationOnly: 'top header band (empty), left map panel, right diagram panel',
+            general: 'top header band (empty), center diagram panel',
+        },
+        negative: 'no people, no faces, no logos, no watermark, no readable text, no show titles, no station names, no program names',
+    },
+    photorealistic: {
+        id: 'photorealistic',
+        baseStyle: 'Photorealistic-style news graphic, clean, professional broadcast look',
+        colorPalette: 'cool blue/gray with subtle cyan accents, realistic tones',
+        lighting: 'soft neutral lighting, realistic shading',
+        background: 'soft gradient with minimal texture',
+        density: 'medium',
+        layoutVariants: {
+            dataAndLocation: 'top header band (empty), left data panel, right map panel',
+            dataOnly: 'top header band (empty), left data panel, right diagram panel',
+            locationOnly: 'top header band (empty), left map panel, right diagram panel',
+            general: 'top header band (empty), center diagram panel',
+        },
+        negative: 'no people, no faces, no logos, no watermark, no readable text, no show titles, no station names, no program names',
+    },
+    illustration: {
+        id: 'illustration',
+        baseStyle: 'Illustrative news infographic, clean, minimal, flat illustration, broadcast quality',
+        colorPalette: 'cool blue/gray with cyan accents, flat colors',
+        lighting: 'flat neutral lighting, minimal shadows',
+        background: 'subtle gradient with light grid pattern',
+        density: 'medium',
+        layoutVariants: {
+            dataAndLocation: 'top header band (empty), left data panel, right map panel',
+            dataOnly: 'top header band (empty), left data panel, right diagram panel',
+            locationOnly: 'top header band (empty), left map panel, right diagram panel',
+            general: 'top header band (empty), center diagram panel',
+        },
+        negative: 'no people, no faces, no logos, no watermark, no readable text, no show titles, no station names, no program names',
     },
 };
+const STYLE_PRESET_ALIASES = {
+    news_panel: 'news_broadcast',
+};
+function getStylePreset(stylePreset) {
+    const resolved = STYLE_PRESET_ALIASES[stylePreset] || stylePreset;
+    return STYLE_PRESETS[resolved] || STYLE_PRESETS.news_broadcast;
+}
+function normalizeString(value) {
+    return typeof value === 'string' ? value.trim() : '';
+}
+function normalizeStringArray(value, limit) {
+    if (!Array.isArray(value))
+        return [];
+    const items = value
+        .map((item) => normalizeString(item))
+        .filter((item) => item.length > 0);
+    return items.slice(0, limit);
+}
+function pickLayoutVariant(style, hasData, hasLocation) {
+    if (hasData && hasLocation)
+        return style.layoutVariants.dataAndLocation;
+    if (hasData)
+        return style.layoutVariants.dataOnly;
+    if (hasLocation)
+        return style.layoutVariants.locationOnly;
+    return style.layoutVariants.general;
+}
+function normalizeQuantFacts(value, limit) {
+    if (!Array.isArray(value))
+        return [];
+    const items = value
+        .map((fact) => {
+        if (!fact || typeof fact !== 'object')
+            return null;
+        const metric = normalizeString(fact.metric);
+        if (!metric)
+            return null;
+        const directionRaw = normalizeString(fact.direction);
+        const direction = directionRaw === 'increase' ||
+            directionRaw === 'decrease' ||
+            directionRaw === 'stable' ||
+            directionRaw === 'comparison'
+            ? directionRaw
+            : 'unknown';
+        const valueStr = normalizeString(fact.value);
+        const unit = normalizeString(fact.unit);
+        const timeframe = normalizeString(fact.timeframe);
+        return {
+            metric,
+            direction,
+            value: valueStr,
+            unit,
+            timeframe,
+        };
+    })
+        .filter((item) => item !== null);
+    return items.slice(0, limit);
+}
+function describeQuantFacts(facts) {
+    return facts
+        .map((fact) => {
+        const parts = [];
+        parts.push(fact.metric);
+        if (fact.direction && fact.direction !== 'unknown') {
+            const directionWord = fact.direction === 'increase'
+                ? 'increasing'
+                : fact.direction === 'decrease'
+                    ? 'decreasing'
+                    : fact.direction === 'stable'
+                        ? 'stable'
+                        : 'comparison';
+            parts.push(`(${directionWord})`);
+        }
+        if (fact.value) {
+            parts.push(`value ${fact.value}${fact.unit || ''}`);
+        }
+        if (fact.timeframe) {
+            parts.push(`timeframe ${fact.timeframe}`);
+        }
+        return parts.join(' ');
+    })
+        .join('; ');
+}
+const ALLOWED_ELEMENT_TYPES = [
+    'barChart',
+    'lineChart',
+    'areaChart',
+    'pieChart',
+    'map',
+    'diagram',
+    'iconCluster',
+    'abstractPattern',
+    'flowArrows',
+    'timeline',
+];
+const ELEMENT_TYPE_LABELS = {
+    barChart: 'bar chart',
+    lineChart: 'line chart',
+    areaChart: 'area chart',
+    pieChart: 'pie chart',
+    map: 'simplified map',
+    diagram: 'diagram',
+    iconCluster: 'icon cluster',
+    abstractPattern: 'abstract pattern',
+    flowArrows: 'flow arrows',
+    timeline: 'timeline',
+};
+const DATA_ELEMENT_TYPES = new Set([
+    'barChart',
+    'lineChart',
+    'areaChart',
+    'pieChart',
+    'timeline',
+]);
+const LOCATION_ELEMENT_TYPES = new Set(['map']);
+const ALLOWED_SLOT_NAMES = new Set(['left', 'right', 'center', 'top', 'bottom']);
+function normalizeElementType(value) {
+    const raw = normalizeString(value).toLowerCase();
+    if (!raw)
+        return null;
+    const normalized = raw.replace(/[_\s-]/g, '');
+    const map = {
+        barchart: 'barChart',
+        linechart: 'lineChart',
+        areachart: 'areaChart',
+        piechart: 'pieChart',
+        map: 'map',
+        geomap: 'map',
+        regionmap: 'map',
+        diagram: 'diagram',
+        iconcluster: 'iconCluster',
+        abstractpattern: 'abstractPattern',
+        flowarrows: 'flowArrows',
+        timeline: 'timeline',
+    };
+    return map[normalized] || null;
+}
+function normalizeSlotName(value) {
+    const name = normalizeString(value).toLowerCase();
+    if (!name || !ALLOWED_SLOT_NAMES.has(name))
+        return null;
+    return name;
+}
+function normalizeVisualSlots(value, limit) {
+    if (!Array.isArray(value))
+        return [];
+    const items = value
+        .map((slot) => {
+        if (!slot || typeof slot !== 'object')
+            return null;
+        const slotName = normalizeSlotName(slot.slot);
+        const elementType = normalizeElementType(slot.elementType);
+        if (!slotName || !elementType)
+            return null;
+        const source = normalizeString(slot.source);
+        return {
+            slot: slotName,
+            elementType,
+            source: source || undefined,
+        };
+    })
+        .filter((item) => item !== null);
+    return items.slice(0, limit);
+}
 // 画像プロンプト生成ハンドラ
-ipcMain.handle('ai:generateImagePrompts', async (_, parts, stylePreset) => {
+ipcMain.handle('ai:generateImagePrompts', async (_, parts, article, stylePreset) => {
     const apiKey = await readApiKey('openai');
     if (!apiKey) {
         throw new Error('OpenAI APIキーが設定されていません。設定画面からAPIキーを入力してください。');
     }
     const openai = new OpenAI({ apiKey });
-    const partsDescription = parts
-        .map((p, i) => `パート${i + 1}: ${p.title}\nスクリプト: ${p.scriptText}`)
-        .join('\n\n');
+    const styleConfig = getStylePreset(stylePreset);
+    const partsDescription = parts.map((p, i) => `パート${i + 1}: ${p.title}`).join('\n');
+    const articleText = `${article.title}\n${article.source ?? ''}\n${article.bodyText}`.trim();
+    const articleContext = `タイトル: ${article.title}\n${article.source ? `出典: ${article.source}` : ''}\n本文:\n${article.bodyText}`;
     const response = await withRetry(async () => {
         return openai.chat.completions.create({
             model: 'gpt-5.2',
             messages: [
                 {
                     role: 'system',
-                    content: `あなたは日本の報道番組向けインフォグラフィックデザイナーです。
-ニュース記事の内容を視覚的に表現する「図解・イラスト」の要素を日本語で抽出します。
+                    content: `あなたは日本の報道番組向けインフォグラフィックの仕様抽出担当です。
+与えられた記事本文から「本文に書かれている事実」だけを抽出し、画像生成仕様をJSONで出力します。
 
 重要なルール:
-- 人物、キャスター、記者、インタビューシーンは絶対に含めない
-- 日本人視聴者向けの報道スライドショー用の背景画像・図解を想定
-- 出力は全て日本語で記述`,
+- 本文にない情報は絶対に追加しない（推測・補完禁止）
+- 固有名詞・地名・数値は本文の表現をそのまま使う（言い換え禁止）
+- 本文に書かれている語句のみを使い、本文に無い語句は出力しない
+- 架空のニュース番組名・放送局名・番組タイトルは絶対に出力しない（本文にあっても除外）
+- 人物、顔、キャスター、記者、インタビューは絶対に含めない
+- 出力はJSONのみ`,
                 },
                 {
                     role: 'user',
-                    content: `以下のスクリプトパートそれぞれに対して、ニュースの内容を図解・インフォグラフィックとして表現するための要素を日本語で抽出してください。
+                    content: `以下の「記事全文」と「パート見出し」を基に、画像生成に必要な「抽出情報」をJSONで出力してください。
+抽出は必ず記事本文にある語のみを使い、本文に無い情報は空にしてください。
 
+## 記事全文
+${articleContext}
+
+## パート見出し
 ${partsDescription}
 
 ## 要件
-1. 各パートの「主題」を視覚的に表現する要素を日本語で記述
-2. 人物・顔・キャスター・記者・インタビューは絶対に含めない
-3. 以下のコンテンツタイプから最適なものを選択:
-   - data: 数値・統計・データを表現する場合
-   - location: 地理・場所・地図を表現する場合
-   - technology: 技術・科学・機器を表現する場合
-   - business: 経済・ビジネス・投資を表現する場合
-   - general: 上記に当てはまらない一般的なトピック
+1. topic/entities/locations/quantFacts/visualSlots は記事本文にある語だけを使う
+2. 数値・単位・期間が記事本文に無い場合は空文字にする
+3. 本文に記載が無い項目は空配列または空文字で出力する
+4. 架空のニュース番組名・放送局名・番組タイトルは出力しない（本文にあっても除外）
+5. visualSlots.elementType は以下の固定候補のみ:
+   - barChart, lineChart, areaChart, pieChart, map, diagram, iconCluster, abstractPattern, flowArrows, timeline
+6. visualSlots.slot は以下の固定候補のみ:
+   - left, right, center, top, bottom
+7. visualSlots.source は記事本文からの短い引用（抜き出し）にする
 
 ## 出力形式
 以下のJSON形式で出力してください。partIndexは0から始まる数値です（パート1 = partIndex:0、パート2 = partIndex:1、...）：
@@ -194,9 +435,15 @@ ${partsDescription}
   "prompts": [
     {
       "partIndex": 0,
-      "contentType": "technology",
-      "subject": "主題を表す日本語キーワード（例: AI学習システム、教育テクノロジー）",
-      "visualElements": "視覚要素の日本語説明（例: タブレット端末、学習グラフ、教室のイメージ図）"
+      "topic": "本文にある主題を短く",
+      "entities": ["本文にある名詞のみ"],
+      "locations": ["本文にある地名のみ"],
+      "quantFacts": [
+        { "metric": "本文にある指標名", "direction": "increase|decrease|stable|comparison|unknown", "value": "数値", "unit": "単位", "timeframe": "期間" }
+      ],
+      "visualSlots": [
+        { "slot": "left", "elementType": "barChart", "source": "本文からの抜き出し" }
+      ]
     }
   ]
 }
@@ -205,7 +452,7 @@ JSONのみを出力してください。`,
                 },
             ],
             response_format: { type: 'json_object' },
-            temperature: 0.7,
+            temperature: 0.3,
         });
     });
     const content = response.choices[0]?.message?.content;
@@ -214,32 +461,117 @@ JSONのみを出力してください。`,
     }
     const parsed = JSON.parse(content);
     const now = new Date().toISOString();
-    return parsed.prompts.map((p, index) => {
+    const prompts = parsed.prompts.map((p, index) => {
         // AIが1始まりのインデックスを返した場合のフォールバック
-        let partIndex = p.partIndex;
+        let partIndex = typeof p.partIndex === 'number' ? p.partIndex : index;
         if (partIndex >= parts.length && partIndex > 0) {
-            partIndex = p.partIndex - 1;
+            partIndex -= 1;
         }
         if (partIndex < 0 || partIndex >= parts.length) {
             partIndex = index;
         }
-        // コンテンツタイプに応じたテンプレートを取得
-        const contentTypeKey = p.contentType;
-        const contentTypeStyle = NEWS_SLIDESHOW_TEMPLATE.contentTypes[contentTypeKey] ||
-            NEWS_SLIDESHOW_TEMPLATE.contentTypes.general;
-        // テンプレート + AIが生成したコンテンツ要素を組み合わせ
-        const finalPrompt = `${NEWS_SLIDESHOW_TEMPLATE.baseStyle}, ${contentTypeStyle}, ${p.subject}, ${p.visualElements}`;
+        const part = parts[partIndex] || parts[index];
+        const sourceText = articleText;
+        const rawTopic = normalizeString(p.topic ?? p.subject);
+        const topic = rawTopic && sourceText.includes(rawTopic) ? rawTopic : '';
+        const entities = normalizeStringArray(p.entities, 6).filter((item) => sourceText.includes(item));
+        const locations = normalizeStringArray(p.locations, 4).filter((item) => sourceText.includes(item));
+        const quantFactsRaw = normalizeQuantFacts(p.quantFacts, 4);
+        const quantFacts = quantFactsRaw.filter((fact) => {
+            return ((fact.metric && sourceText.includes(fact.metric)) ||
+                (fact.value && sourceText.includes(fact.value)) ||
+                (fact.timeframe && sourceText.includes(fact.timeframe)));
+        });
+        const visualSlotsRaw = normalizeVisualSlots(p.visualSlots, 4);
+        const visualSlots = visualSlotsRaw
+            .map((slot) => {
+            const nextSource = slot.source && sourceText.includes(slot.source) ? slot.source : undefined;
+            return { ...slot, source: nextSource };
+        })
+            .filter((slot) => {
+            if (DATA_ELEMENT_TYPES.has(slot.elementType)) {
+                return quantFacts.length > 0;
+            }
+            if (LOCATION_ELEMENT_TYPES.has(slot.elementType)) {
+                return locations.length > 0;
+            }
+            return true;
+        });
+        const hasData = quantFacts.length > 0 || visualSlots.some((slot) => DATA_ELEMENT_TYPES.has(slot.elementType));
+        const hasLocation = locations.length > 0 || visualSlots.some((slot) => LOCATION_ELEMENT_TYPES.has(slot.elementType));
+        const resolvedSlots = visualSlots.length > 0
+            ? visualSlots
+            : (() => {
+                if (hasData && hasLocation) {
+                    return [
+                        { slot: 'left', elementType: 'barChart' },
+                        { slot: 'right', elementType: 'map' },
+                    ];
+                }
+                if (hasData) {
+                    return [
+                        { slot: 'left', elementType: 'barChart' },
+                        { slot: 'right', elementType: 'diagram' },
+                    ];
+                }
+                if (hasLocation) {
+                    return [
+                        { slot: 'left', elementType: 'map' },
+                        { slot: 'right', elementType: 'diagram' },
+                    ];
+                }
+                return [{ slot: 'center', elementType: 'abstractPattern' }];
+            })();
+        const layout = pickLayoutVariant(styleConfig, hasData, hasLocation);
+        const slotDescriptions = resolvedSlots
+            .map((slot) => {
+            const label = ELEMENT_TYPE_LABELS[slot.elementType];
+            if (slot.source) {
+                return `${slot.slot} panel: ${label} based on "${slot.source}"`;
+            }
+            return `${slot.slot} panel: ${label}`;
+        })
+            .join('; ');
+        const detailLines = [];
+        if (topic) {
+            detailLines.push(`Represent the topic: ${topic}.`);
+        }
+        if (entities.length > 0) {
+            detailLines.push(`Include simplified icons for ${entities.join(', ')}.`);
+        }
+        if (locations.length > 0) {
+            detailLines.push(`Highlight locations: ${locations.join(', ')} (no labels).`);
+        }
+        if (quantFacts.length > 0) {
+            detailLines.push(`Data cues: ${describeQuantFacts(quantFacts)}.`);
+        }
+        if (slotDescriptions) {
+            detailLines.push(`Panels: ${slotDescriptions}.`);
+        }
+        const promptParts = [
+            styleConfig.baseStyle,
+            `Color palette: ${styleConfig.colorPalette}.`,
+            `Lighting: ${styleConfig.lighting}.`,
+            `Background: ${styleConfig.background}.`,
+            `Layout: ${layout}.`,
+            `Information density: ${styleConfig.density}.`,
+            ...detailLines,
+            'No readable text.',
+            'No show titles, station names, or program names.',
+        ];
+        const finalPrompt = promptParts.join(' ');
         return {
             id: crypto.randomUUID(),
-            partId: parts[partIndex]?.id || parts[index]?.id || '',
-            stylePreset,
+            partId: part?.id || '',
+            stylePreset: styleConfig.id,
             prompt: finalPrompt,
-            negativePrompt: NEWS_SLIDESHOW_TEMPLATE.baseNegative,
+            negativePrompt: styleConfig.negative,
             aspectRatio: '16:9',
             version: 1,
             createdAt: now,
         };
     });
+    return { prompts, usage: toTokenUsage(response) };
 });
 // コメント反映ハンドラ
 ipcMain.handle('ai:applyComment', async (_, target, comment) => {
@@ -282,5 +614,5 @@ ${comment}
     if (!content) {
         throw new Error('AIからの応答が空でした');
     }
-    return content;
+    return { text: content, usage: toTokenUsage(response) };
 });

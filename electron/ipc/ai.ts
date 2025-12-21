@@ -49,6 +49,26 @@ async function withRetry<T>(
   throw lastError;
 }
 
+type TokenUsage = {
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens?: number;
+  model?: string;
+};
+
+function toTokenUsage(response: {
+  usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number };
+  model?: string;
+}): TokenUsage | null {
+  if (!response.usage) return null;
+  return {
+    inputTokens: response.usage.prompt_tokens ?? 0,
+    outputTokens: response.usage.completion_tokens ?? 0,
+    totalTokens: response.usage.total_tokens,
+    model: response.model,
+  };
+}
+
 // 記事データの型
 interface Article {
   title: string;
@@ -127,7 +147,11 @@ JSONのみを出力してください。説明や補足は不要です。`;
 // スクリプト生成ハンドラ
 ipcMain.handle(
   'ai:generateScript',
-  async (_, article: Article, options: ScriptOptions = {}): Promise<GeneratedPart[]> => {
+  async (
+    _,
+    article: Article,
+    options: ScriptOptions = {}
+  ): Promise<{ parts: GeneratedPart[]; usage: TokenUsage | null }> => {
     const apiKey = await readApiKey('openai');
 
     if (!apiKey) {
@@ -184,7 +208,7 @@ ipcMain.handle(
       })
     );
 
-    return parts;
+    return { parts, usage: toTokenUsage(response) };
   }
 );
 
@@ -483,16 +507,19 @@ ipcMain.handle(
     article: Article,
     stylePreset: string
   ): Promise<
-    Array<{
-      id: string;
-      partId: string;
-      stylePreset: string;
-      prompt: string;
-      negativePrompt: string;
-      aspectRatio: '16:9' | '1:1' | '9:16';
-      version: number;
-      createdAt: string;
-    }>
+    {
+      prompts: Array<{
+        id: string;
+        partId: string;
+        stylePreset: string;
+        prompt: string;
+        negativePrompt: string;
+        aspectRatio: '16:9' | '1:1' | '9:16';
+        version: number;
+        createdAt: string;
+      }>;
+      usage: TokenUsage | null;
+    }
   > => {
     const apiKey = await readApiKey('openai');
 
@@ -582,7 +609,7 @@ JSONのみを出力してください。`,
     const parsed = JSON.parse(content);
     const now = new Date().toISOString();
 
-    return parsed.prompts.map((p: Record<string, unknown>, index: number) => {
+    const prompts = parsed.prompts.map((p: Record<string, unknown>, index: number) => {
       // AIが1始まりのインデックスを返した場合のフォールバック
       let partIndex = typeof p.partIndex === 'number' ? p.partIndex : index;
       if (partIndex >= parts.length && partIndex > 0) {
@@ -709,6 +736,7 @@ JSONのみを出力してください。`,
         createdAt: now,
       };
     });
+    return { prompts, usage: toTokenUsage(response) };
   }
 );
 
@@ -719,7 +747,7 @@ ipcMain.handle(
     _,
     target: { type: 'script' | 'imagePrompt'; id: string; currentText: string },
     comment: string
-  ): Promise<string> => {
+  ): Promise<{ text: string; usage: TokenUsage | null }> => {
     const apiKey = await readApiKey('openai');
 
     if (!apiKey) {
@@ -766,6 +794,6 @@ ${comment}
       throw new Error('AIからの応答が空でした');
     }
 
-    return content;
+    return { text: content, usage: toTokenUsage(response) };
   }
 );

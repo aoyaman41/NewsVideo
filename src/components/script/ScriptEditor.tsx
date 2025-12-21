@@ -86,11 +86,12 @@ export function ScriptEditor({
     }
   };
 
-  const estimateCharCount = (text: string) => text.length;
-  const estimateDuration = (text: string) => Math.round(text.length / 4); // 4文字/秒
+  const estimateCharCount = (text?: string) => text?.length ?? 0;
+  const estimateDuration = (text?: string) =>
+    Math.round((text?.length ?? 0) / 4); // 4文字/秒
 
-  const watchedTitle = watch('title');
-  const watchedScript = watch('scriptText');
+  const watchedTitle = watch('title') ?? '';
+  const watchedScript = watch('scriptText') ?? '';
 
   useEffect(() => {
     if (!isDirty || isProcessing) return;
