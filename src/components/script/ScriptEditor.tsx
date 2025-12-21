@@ -1,7 +1,13 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { partEditSchema, type PartEdit, type Part } from '../../schemas';
+
+interface AutoSaveStatus {
+  isDirty: boolean;
+  isSaving: boolean;
+  lastSavedAt: Date | null;
+}
 
 interface ScriptEditorProps {
   part: Part;
@@ -9,6 +15,8 @@ interface ScriptEditorProps {
   onRegenerateWithComment: (partId: string, comment: string) => void;
   isProcessing?: boolean;
   lastCommentAppliedAt?: string | null;
+  autoSaveStatus?: AutoSaveStatus;
+  autoSaveDelayMs?: number;
 }
 
 export function ScriptEditor({
@@ -17,16 +25,22 @@ export function ScriptEditor({
   onRegenerateWithComment,
   isProcessing,
   lastCommentAppliedAt,
+  autoSaveStatus,
+  autoSaveDelayMs = 1500,
 }: ScriptEditorProps) {
   const [showCommentInput, setShowCommentInput] = useState(false);
   const [comment, setComment] = useState('');
   const [showAppliedPulse, setShowAppliedPulse] = useState(false);
+  const autoSaveTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const prevPartIdRef = useRef<string | null>(null);
 
   const {
     register,
     handleSubmit,
     formState: { errors, isDirty },
     reset,
+    watch,
+    getValues,
   } = useForm<PartEdit>({
     resolver: zodResolver(partEditSchema),
     defaultValues: {
@@ -37,13 +51,21 @@ export function ScriptEditor({
 
   // パートが変わったらフォームをリセット
   useEffect(() => {
-    reset({
-      title: part.title,
-      scriptText: part.scriptText,
-    });
+    const current = getValues();
+    const isNewPart = prevPartIdRef.current !== part.id;
+    const isExternalUpdate =
+      part.title !== current.title || part.scriptText !== current.scriptText;
+
+    if (isNewPart || isExternalUpdate) {
+      reset({
+        title: part.title,
+        scriptText: part.scriptText,
+      });
+    }
+    prevPartIdRef.current = part.id;
     setShowCommentInput(false);
     setComment('');
-  }, [part.id, part.title, part.scriptText, reset]);
+  }, [part.id, part.title, part.scriptText, reset, getValues]);
 
   useEffect(() => {
     if (!lastCommentAppliedAt) return;
@@ -67,6 +89,29 @@ export function ScriptEditor({
   const estimateCharCount = (text: string) => text.length;
   const estimateDuration = (text: string) => Math.round(text.length / 4); // 4文字/秒
 
+  const watchedTitle = watch('title');
+  const watchedScript = watch('scriptText');
+
+  useEffect(() => {
+    if (!isDirty || isProcessing) return;
+    if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current);
+    autoSaveTimerRef.current = setTimeout(() => {
+      onSave(part.id, { title: watchedTitle, scriptText: watchedScript });
+      reset({ title: watchedTitle, scriptText: watchedScript });
+    }, autoSaveDelayMs);
+    return () => {
+      if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current);
+    };
+  }, [autoSaveDelayMs, isDirty, isProcessing, onSave, part.id, reset, watchedTitle, watchedScript]);
+
+  const saveStatusLabel = useMemo(() => {
+    if (!autoSaveStatus) return null;
+    if (autoSaveStatus.isSaving) return { tone: 'info', label: '自動保存中...' };
+    if (autoSaveStatus.isDirty) return { tone: 'warn', label: '未保存' };
+    if (autoSaveStatus.lastSavedAt) return { tone: 'ok', label: '保存済み' };
+    return null;
+  }, [autoSaveStatus]);
+
   return (
     <div className="flex flex-col h-full">
       {/* ヘッダー */}
@@ -80,6 +125,19 @@ export function ScriptEditor({
             {isDirty && (
               <span className="text-xs text-orange-600 bg-orange-50 px-2 py-1 rounded">
                 未保存の変更があります
+              </span>
+            )}
+            {saveStatusLabel && (
+              <span
+                className={`text-xs px-2 py-1 rounded ${
+                  saveStatusLabel.tone === 'ok'
+                    ? 'text-emerald-700 bg-emerald-50'
+                    : saveStatusLabel.tone === 'warn'
+                      ? 'text-orange-600 bg-orange-50'
+                      : 'text-blue-700 bg-blue-50'
+                }`}
+              >
+                {saveStatusLabel.label}
               </span>
             )}
             {isProcessing && (

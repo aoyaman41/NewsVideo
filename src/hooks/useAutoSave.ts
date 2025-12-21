@@ -1,4 +1,4 @@
-import { useEffect, useRef, useCallback } from 'react';
+import { useEffect, useRef, useCallback, useState } from 'react';
 
 interface UseAutoSaveOptions<T> {
   data: T;
@@ -11,6 +11,7 @@ interface UseAutoSaveReturn {
   isDirty: boolean;
   lastSavedAt: Date | null;
   saveNow: () => Promise<void>;
+  isSaving: boolean;
 }
 
 export function useAutoSave<T>({
@@ -23,10 +24,29 @@ export function useAutoSave<T>({
   const lastSavedAtRef = useRef<Date | null>(null);
   const timeoutRef = useRef<NodeJS.Timeout | null>(null);
   const isSavingRef = useRef(false);
+  const isMountedRef = useRef(true);
+  const [lastSavedAt, setLastSavedAt] = useState<Date | null>(null);
+  const [isSaving, setIsSaving] = useState(false);
 
   const serialize = useCallback((d: T) => JSON.stringify(d), []);
 
   const isDirty = lastSavedDataRef.current !== serialize(data);
+
+  useEffect(() => {
+    return () => {
+      isMountedRef.current = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!enabled) return;
+    if (lastSavedDataRef.current !== null) return;
+    const snapshot = serialize(data);
+    lastSavedDataRef.current = snapshot;
+    const now = new Date();
+    lastSavedAtRef.current = now;
+    setLastSavedAt(now);
+  }, [data, enabled, serialize]);
 
   const save = useCallback(async () => {
     if (isSavingRef.current) return;
@@ -35,14 +55,18 @@ export function useAutoSave<T>({
     if (lastSavedDataRef.current === currentData) return;
 
     isSavingRef.current = true;
+    if (isMountedRef.current) setIsSaving(true);
     try {
       await onSave(data);
       lastSavedDataRef.current = currentData;
-      lastSavedAtRef.current = new Date();
+      const now = new Date();
+      lastSavedAtRef.current = now;
+      if (isMountedRef.current) setLastSavedAt(now);
     } catch (error) {
       console.error('Auto-save failed:', error);
     } finally {
       isSavingRef.current = false;
+      if (isMountedRef.current) setIsSaving(false);
     }
   }, [data, onSave, serialize]);
 
@@ -80,7 +104,8 @@ export function useAutoSave<T>({
 
   return {
     isDirty,
-    lastSavedAt: lastSavedAtRef.current,
+    lastSavedAt,
     saveNow: save,
+    isSaving,
   };
 }

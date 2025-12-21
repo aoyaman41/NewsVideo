@@ -52,15 +52,15 @@ export function ScriptEditPage() {
     []
   );
 
-  useAutoSave({
+  const autoSaveState = useAutoSave({
     data: project!,
     onSave: handleSave,
-    interval: 30000,
+    interval: 1500,
     enabled: !!project,
   });
 
   // パート追加
-  const handleAddPart = useCallback(() => {
+  const handleAddPart = useCallback(async () => {
     if (!project) return;
 
     const newPart = createNewPart(project.parts.length);
@@ -71,11 +71,17 @@ export function ScriptEditPage() {
     };
     setProject(updatedProject);
     setSelectedPartId(newPart.id);
+    try {
+      await window.electronAPI.project.save(updatedProject);
+    } catch (err) {
+      console.error('Failed to save project after adding part:', err);
+      setError('パート追加の保存に失敗しました');
+    }
   }, [project]);
 
   // パート削除
   const handleDeletePart = useCallback(
-    (partId: string) => {
+    async (partId: string) => {
       if (!project) return;
 
       const updatedParts = project.parts
@@ -93,13 +99,19 @@ export function ScriptEditPage() {
       if (selectedPartId === partId) {
         setSelectedPartId(updatedParts.length > 0 ? updatedParts[0].id : null);
       }
+      try {
+        await window.electronAPI.project.save(updatedProject);
+      } catch (err) {
+        console.error('Failed to save project after deleting part:', err);
+        setError('パート削除の保存に失敗しました');
+      }
     },
     [project, selectedPartId]
   );
 
   // パート並び替え
   const handleReorderParts = useCallback(
-    (fromIndex: number, toIndex: number) => {
+    async (fromIndex: number, toIndex: number) => {
       if (!project) return;
 
       const newParts = [...project.parts];
@@ -109,11 +121,18 @@ export function ScriptEditPage() {
       // インデックスを更新
       const updatedParts = newParts.map((p, index) => ({ ...p, index }));
 
-      setProject({
+      const updatedProject = {
         ...project,
         parts: updatedParts,
         updatedAt: new Date().toISOString(),
-      });
+      };
+      setProject(updatedProject);
+      try {
+        await window.electronAPI.project.save(updatedProject);
+      } catch (err) {
+        console.error('Failed to save project after reordering parts:', err);
+        setError('パート並び替えの保存に失敗しました');
+      }
     },
     [project]
   );
@@ -259,6 +278,8 @@ export function ScriptEditPage() {
               onRegenerateWithComment={handleRegenerateWithComment}
               isProcessing={isProcessing}
               lastCommentAppliedAt={lastCommentAppliedAt}
+              autoSaveStatus={autoSaveState}
+              autoSaveDelayMs={1200}
             />
           ) : (
             <div className="flex-1 flex items-center justify-center text-gray-500">
