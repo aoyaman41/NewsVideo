@@ -208,7 +208,7 @@ const STYLE_PRESETS: Record<string, StylePresetConfig> = {
   news_broadcast: {
     id: 'news_broadcast',
     baseStyle:
-      'Japanese TV news infographic, 16:9, clean, minimal, vector-like, broadcast quality',
+      'Japanese TV news infographic, clean, minimal, vector-like, broadcast quality',
     colorPalette: 'cool blue/gray base with subtle cyan accents, low saturation',
     lighting: 'neutral matte lighting, low contrast',
     background: 'subtle gradient with thin grid lines and soft vignette',
@@ -225,7 +225,7 @@ const STYLE_PRESETS: Record<string, StylePresetConfig> = {
   documentary: {
     id: 'documentary',
     baseStyle:
-      'Documentary-style news infographic, 16:9, clean, semi-realistic, broadcast quality',
+      'Documentary-style news infographic, clean, semi-realistic, broadcast quality',
     colorPalette: 'cool gray base with muted teal accents, natural tone',
     lighting: 'soft neutral lighting, slightly cinematic',
     background: 'subtle texture with light grain, restrained gradients',
@@ -242,7 +242,7 @@ const STYLE_PRESETS: Record<string, StylePresetConfig> = {
   infographic: {
     id: 'infographic',
     baseStyle:
-      'High-clarity infographic, 16:9, crisp vector look, balanced grid, broadcast quality',
+      'High-clarity infographic, crisp vector look, balanced grid, broadcast quality',
     colorPalette: 'blue/gray base with clean cyan accents, flat tones',
     lighting: 'flat neutral lighting, minimal shadows',
     background: 'light grid background, clean white space',
@@ -258,7 +258,7 @@ const STYLE_PRESETS: Record<string, StylePresetConfig> = {
   photorealistic: {
     id: 'photorealistic',
     baseStyle:
-      'Photorealistic-style news graphic, 16:9, clean, professional broadcast look',
+      'Photorealistic-style news graphic, clean, professional broadcast look',
     colorPalette: 'cool blue/gray with subtle cyan accents, realistic tones',
     lighting: 'soft neutral lighting, realistic shading',
     background: 'soft gradient with minimal texture',
@@ -274,7 +274,7 @@ const STYLE_PRESETS: Record<string, StylePresetConfig> = {
   illustration: {
     id: 'illustration',
     baseStyle:
-      'Illustrative news infographic, 16:9, clean, minimal, flat illustration, broadcast quality',
+      'Illustrative news infographic, clean, minimal, flat illustration, broadcast quality',
     colorPalette: 'cool blue/gray with cyan accents, flat colors',
     lighting: 'flat neutral lighting, minimal shadows',
     background: 'subtle gradient with light grid pattern',
@@ -489,7 +489,7 @@ ipcMain.handle(
       stylePreset: string;
       prompt: string;
       negativePrompt: string;
-      aspectRatio: '16:9';
+      aspectRatio: '16:9' | '1:1' | '9:16';
       version: number;
       createdAt: string;
     }>
