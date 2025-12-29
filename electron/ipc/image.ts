@@ -111,6 +111,17 @@ function buildAspectRatioHint(
   return `Aspect ratio: ${aspectRatio} (${label}). Target resolution: ${dimensions.width}x${dimensions.height}. Keep this aspect ratio strictly.`;
 }
 
+function buildNegativePromptHint(negativePrompt?: string): string {
+  if (!negativePrompt) return '';
+  const cleaned = negativePrompt
+    .split(',')
+    .map((item) => item.trim())
+    .filter((item) => item.length > 0)
+    .map((item) => item.replace(/^no\s+/i, ''))
+    .join(', ');
+  return cleaned ? `Strictly avoid: ${cleaned}.` : '';
+}
+
 // プロジェクトパスを取得（IDからフォルダを検索）
 async function getProjectPath(projectId: string): Promise<string> {
   const projectsDir = getProjectsPath();
@@ -189,15 +200,17 @@ ipcMain.handle(
     // 日本語ニュース向けのシステム指示を追加
     const japaneseNewsContext = `日本の報道番組向けのインフォグラフィック画像を生成してください。
 日本人視聴者向けのデザインで、信頼性があり、プロフェッショナルな印象を与える画像にしてください。
-人物、顔、キャスター、記者は含めないでください。`;
+人物、顔、キャスター、記者は含めないでください。
+文字・数字・記号などの可読なテキスト、ラベル、キャプションは入れないでください。`;
 
     const imageId = crypto.randomUUID();
     const dimensions = getDimensions(prompt.aspectRatio);
     const ratioHint = buildAspectRatioHint(prompt.aspectRatio, dimensions);
     const promptText = stripAspectRatioHints(prompt.prompt);
+    const negativeHint = buildNegativePromptHint(prompt.negativePrompt);
 
     // スタイルプリセットを反映したプロンプトを構築
-    const enhancedPrompt = `${japaneseNewsContext}\n${ratioHint}\n\n${promptText}`;
+    const enhancedPrompt = `${japaneseNewsContext}\n${ratioHint}\n\n${promptText}${negativeHint ? `\n\n${negativeHint}` : ''}`;
 
     console.log('[image:generate] Starting image generation with prompt:', enhancedPrompt);
 
@@ -287,7 +300,8 @@ ipcMain.handle(
     // 日本語ニュース向けのシステム指示を追加（全件共通）
     const japaneseNewsContext = `日本の報道番組向けのインフォグラフィック画像を生成してください。
 日本人視聴者向けのデザインで、信頼性があり、プロフェッショナルな印象を与える画像にしてください。
-人物、顔、キャスター、記者は含めないでください。`;
+人物、顔、キャスター、記者は含めないでください。
+文字・数字・記号などの可読なテキスト、ラベル、キャプションは入れないでください。`;
 
     const settled = await Promise.all(
       prompts.map(async (prompt, index) => {
@@ -295,7 +309,8 @@ ipcMain.handle(
           const dimensions = getDimensions(prompt.aspectRatio);
           const ratioHint = buildAspectRatioHint(prompt.aspectRatio, dimensions);
           const promptText = stripAspectRatioHints(prompt.prompt);
-          const enhancedPrompt = `${japaneseNewsContext}\n${ratioHint}\n\n${promptText}`;
+          const negativeHint = buildNegativePromptHint(prompt.negativePrompt);
+          const enhancedPrompt = `${japaneseNewsContext}\n${ratioHint}\n\n${promptText}${negativeHint ? `\n\n${negativeHint}` : ''}`;
 
           console.log(
             `[image:generateBatch] Generating image ${index + 1}/${prompts.length}:`,

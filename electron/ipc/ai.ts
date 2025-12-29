@@ -687,22 +687,19 @@ JSONのみを出力してください。`,
       const slotDescriptions = resolvedSlots
         .map((slot) => {
           const label = ELEMENT_TYPE_LABELS[slot.elementType];
-          if (slot.source) {
-            return `${slot.slot} panel: ${label} based on "${slot.source}"`;
-          }
           return `${slot.slot} panel: ${label}`;
         })
         .join('; ');
 
       const detailLines: string[] = [];
       if (topic) {
-        detailLines.push(`Represent the topic: ${topic}.`);
+        detailLines.push(`Represent the topic with symbolic imagery (no labels): ${topic}.`);
       }
       if (entities.length > 0) {
-        detailLines.push(`Include simplified icons for ${entities.join(', ')}.`);
+        detailLines.push(`Include simplified icons for ${entities.join(', ')} (no labels).`);
       }
       if (locations.length > 0) {
-        detailLines.push(`Highlight locations: ${locations.join(', ')} (no labels).`);
+        detailLines.push(`Highlight locations: ${locations.join(', ')} (no labels, no text).`);
       }
       if (quantFacts.length > 0) {
         detailLines.push(`Data cues: ${describeQuantFacts(quantFacts)}.`);
@@ -720,6 +717,7 @@ JSONのみを出力してください。`,
         `Information density: ${styleConfig.density}.`,
         ...detailLines,
         'No readable text.',
+        'No labels or captions; avoid letters, numbers, kana, or kanji.',
         'No show titles, station names, or program names.',
       ];
 
