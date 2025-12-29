@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { Header } from '../components/layout';
-import { DEFAULT_COST_RATES, type CostRates } from '../utils/cost';
 
 type ApiKeyService = 'openai' | 'google_ai' | 'google_tts';
 
@@ -27,7 +26,6 @@ interface Settings {
   endingVideoPath: string;
   autoSaveInterval: number;
   defaultProjectDir: string;
-  cost: CostRates;
 }
 
 const defaultSettings: Settings = {
@@ -46,7 +44,6 @@ const defaultSettings: Settings = {
   endingVideoPath: '',
   autoSaveInterval: 60,
   defaultProjectDir: '',
-  cost: DEFAULT_COST_RATES,
 };
 
 export function SettingsPage() {
@@ -304,182 +301,6 @@ export function SettingsPage() {
                 )}
               </div>
             ))}
-          </div>
-        </div>
-
-        {/* コスト設定 */}
-        <div className="max-w-2xl mx-auto mt-6 bg-white rounded-lg shadow-sm border border-gray-200">
-          <div className="px-6 py-4 border-b border-gray-200">
-            <h2 className="text-lg font-semibold text-gray-900">コスト設定（USD）</h2>
-            <p className="text-sm text-gray-500 mt-1">
-              推定コストの計算に使用する単価です（USD固定）
-            </p>
-          </div>
-
-          <div className="px-6 py-6 space-y-6">
-            <div>
-              <h3 className="text-base font-medium text-gray-900 mb-3">OpenAI（{settings.cost.openai.model}）</h3>
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    入力（USD / 1M tokens）
-                  </label>
-                  <input
-                    type="number"
-                    min="0"
-                    step="0.0001"
-                    value={settings.cost.openai.inputPer1MTokensUsd}
-                    onChange={(e) =>
-                      setSettings((prev) => ({
-                        ...prev,
-                        cost: {
-                          ...prev.cost,
-                          openai: {
-                            ...prev.cost.openai,
-                            inputPer1MTokensUsd: Number(e.target.value),
-                          },
-                        },
-                      }))
-                    }
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    出力（USD / 1M tokens）
-                  </label>
-                  <input
-                    type="number"
-                    min="0"
-                    step="0.0001"
-                    value={settings.cost.openai.outputPer1MTokensUsd}
-                    onChange={(e) =>
-                      setSettings((prev) => ({
-                        ...prev,
-                        cost: {
-                          ...prev.cost,
-                          openai: {
-                            ...prev.cost.openai,
-                            outputPer1MTokensUsd: Number(e.target.value),
-                          },
-                        },
-                      }))
-                    }
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  />
-                </div>
-              </div>
-            </div>
-
-            <div>
-              <h3 className="text-base font-medium text-gray-900 mb-3">Gemini TTS（{settings.cost.gemini.ttsModel}）</h3>
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    入力（USD / 1M tokens）
-                  </label>
-                  <input
-                    type="number"
-                    min="0"
-                    step="0.0001"
-                    value={settings.cost.gemini.ttsInputPer1MTokensUsd}
-                    onChange={(e) =>
-                      setSettings((prev) => ({
-                        ...prev,
-                        cost: {
-                          ...prev.cost,
-                          gemini: {
-                            ...prev.cost.gemini,
-                            ttsInputPer1MTokensUsd: Number(e.target.value),
-                          },
-                        },
-                      }))
-                    }
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    出力（USD / 1M tokens）
-                  </label>
-                  <input
-                    type="number"
-                    min="0"
-                    step="0.0001"
-                    value={settings.cost.gemini.ttsOutputPer1MTokensUsd}
-                    onChange={(e) =>
-                      setSettings((prev) => ({
-                        ...prev,
-                        cost: {
-                          ...prev.cost,
-                          gemini: {
-                            ...prev.cost.gemini,
-                            ttsOutputPer1MTokensUsd: Number(e.target.value),
-                          },
-                        },
-                      }))
-                    }
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  />
-                </div>
-              </div>
-            </div>
-
-            <div>
-              <h3 className="text-base font-medium text-gray-900 mb-3">Gemini 画像（{settings.cost.gemini.imageModel}）</h3>
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    入力（USD / image）
-                  </label>
-                  <input
-                    type="number"
-                    min="0"
-                    step="0.0001"
-                    value={settings.cost.gemini.imageInputPerImageUsd}
-                    onChange={(e) =>
-                      setSettings((prev) => ({
-                        ...prev,
-                        cost: {
-                          ...prev.cost,
-                          gemini: {
-                            ...prev.cost.gemini,
-                            imageInputPerImageUsd: Number(e.target.value),
-                          },
-                        },
-                      }))
-                    }
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  />
-                  <p className="text-xs text-gray-500 mt-1">1K/2K 相当の目安</p>
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    出力（USD / image）
-                  </label>
-                  <input
-                    type="number"
-                    min="0"
-                    step="0.0001"
-                    value={settings.cost.gemini.imageOutputPerImageUsd}
-                    onChange={(e) =>
-                      setSettings((prev) => ({
-                        ...prev,
-                        cost: {
-                          ...prev.cost,
-                          gemini: {
-                            ...prev.cost.gemini,
-                            imageOutputPerImageUsd: Number(e.target.value),
-                          },
-                        },
-                      }))
-                    }
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  />
-                  <p className="text-xs text-gray-500 mt-1">1K/2K 相当の目安</p>
-                </div>
-              </div>
-            </div>
           </div>
         </div>
 

@@ -33,24 +33,6 @@ const defaultSettings = {
   // その他
   autoSaveInterval: 60, // 秒
   defaultProjectDir: '',
-
-  // コスト設定（USD）
-  cost: {
-    currency: 'USD' as const,
-    openai: {
-      model: 'gpt-5.2',
-      inputPer1MTokensUsd: 1.75,
-      outputPer1MTokensUsd: 14.0,
-    },
-    gemini: {
-      ttsModel: 'gemini-2.5-pro-preview-tts',
-      ttsInputPer1MTokensUsd: 1.0,
-      ttsOutputPer1MTokensUsd: 20.0,
-      imageModel: 'gemini-3-pro-image-preview',
-      imageInputPerImageUsd: 0.0011,
-      imageOutputPerImageUsd: 0.134,
-    },
-  },
 };
 
 type Settings = typeof defaultSettings;
@@ -66,23 +48,7 @@ async function readSettings(): Promise<Settings> {
   try {
     const settingsPath = getSettingsPath();
     const content = await fs.readFile(settingsPath, 'utf-8');
-    const parsed = JSON.parse(content) as Partial<Settings>;
-    const merged = {
-      ...defaultSettings,
-      ...parsed,
-      cost: {
-        ...defaultSettings.cost,
-        ...(parsed.cost ?? {}),
-        openai: {
-          ...defaultSettings.cost.openai,
-          ...(parsed.cost?.openai ?? {}),
-        },
-        gemini: {
-          ...defaultSettings.cost.gemini,
-          ...(parsed.cost?.gemini ?? {}),
-        },
-      },
-    } as Settings;
+    const merged = { ...defaultSettings, ...JSON.parse(content) } as Settings;
     // 旧ボイス名の移行
     if (merged.ttsVoice === 'ja-JP-Chirp3-HD-Aoife') {
       merged.ttsVoice = defaultSettings.ttsVoice;
@@ -93,7 +59,6 @@ async function readSettings(): Promise<Settings> {
     if (!merged.ttsVoice || merged.ttsVoice.includes('-')) {
       merged.ttsVoice = defaultSettings.ttsVoice;
     }
-    merged.cost.currency = 'USD';
     return merged;
   } catch {
     return defaultSettings;

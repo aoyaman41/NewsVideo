@@ -1,27 +1,9 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { Header, WorkflowNav } from '../components/layout';
-import { ImageAssignment, PromptEditor } from '../components/image';
+import { ImageAssignment, ImageGallery, PromptEditor } from '../components/image';
 import type { Project, ImageAssetRef, ImagePrompt } from '../schemas';
-import { createGeminiImageUsageRecord, createOpenAIUsageRecord } from '../utils/usage';
-
-type ImageCommonSettings = {
-  imageStylePreset: string;
-  defaultAspectRatio: '16:9' | '1:1' | '9:16';
-};
-
-const DEFAULT_IMAGE_SETTINGS: ImageCommonSettings = {
-  imageStylePreset: 'news_broadcast',
-  defaultAspectRatio: '16:9',
-};
-
-const STYLE_PRESET_OPTIONS = [
-  { id: 'news_broadcast', label: 'ニュース報道', description: 'プロフェッショナルなニュース映像風' },
-  { id: 'documentary', label: 'ドキュメンタリー', description: 'ドキュメンタリー映像風' },
-  { id: 'infographic', label: 'インフォグラフィック', description: 'データビジュアライゼーション' },
-  { id: 'photorealistic', label: 'フォトリアリスティック', description: '写真のようなリアルな映像' },
-  { id: 'illustration', label: 'イラストレーション', description: 'イラスト風の表現' },
-];
+import { toLocalFileUrl } from '../utils/toLocalFileUrl';
 
 export function ImageManagePage() {
   const { projectId } = useParams<{ projectId: string }>();
@@ -33,10 +15,7 @@ export function ImageManagePage() {
   const [error, setError] = useState<string | null>(null);
   const [isGeneratingPrompts, setIsGeneratingPrompts] = useState(false);
   const [isGeneratingImage, setIsGeneratingImage] = useState(false);
-  const [generatingPromptPartId, setGeneratingPromptPartId] = useState<string | null>(null);
-  const [applyingPromptId, setApplyingPromptId] = useState<string | null>(null);
-  const [isCommonSettingsOpen, setIsCommonSettingsOpen] = useState(false);
-  const [commonSettings, setCommonSettings] = useState<ImageCommonSettings>(DEFAULT_IMAGE_SETTINGS);
+  const [selectedTab, setSelectedTab] = useState<'parts' | 'imported' | 'thumbnail'>('parts');
 
   const latestPromptByPartId = useMemo(() => {
     const map = new Map<string, ImagePrompt>();
@@ -87,21 +66,8 @@ export function ImageManagePage() {
 
       try {
         setIsLoading(true);
-        const [loadedProject, loadedSettings] = await Promise.all([
-          window.electronAPI.project.load(projectId),
-          window.electronAPI.settings.get().catch(() => null),
-        ]);
+        const loadedProject = await window.electronAPI.project.load(projectId);
         setProject(loadedProject);
-        if (loadedSettings) {
-          const preset = loadedSettings.imageStylePreset === 'news_panel'
-            ? 'news_broadcast'
-            : loadedSettings.imageStylePreset;
-          setCommonSettings({
-            imageStylePreset: preset || DEFAULT_IMAGE_SETTINGS.imageStylePreset,
-            defaultAspectRatio:
-              loadedSettings.defaultAspectRatio || DEFAULT_IMAGE_SETTINGS.defaultAspectRatio,
-          });
-        }
 
         // 最初のパートを選択
         if (loadedProject.parts.length > 0) {
@@ -126,22 +92,16 @@ export function ImageManagePage() {
       setIsGeneratingPrompts(true);
       setError(null);
 
-      const result = await window.electronAPI.ai.generateImagePrompts(
+      const prompts = await window.electronAPI.ai.generateImagePrompts(
         project.parts,
         project.article,
-        commonSettings.imageStylePreset
+        'news_broadcast'
       );
-      const nextPrompts = result.prompts.map((prompt) => ({
-        ...prompt,
-        aspectRatio: commonSettings.defaultAspectRatio,
-      }));
-      const usageRecord = createOpenAIUsageRecord('image_prompt_generate', result.usage);
 
       // プロジェクトを更新
       const updatedProject = {
         ...project,
-        prompts: [...project.prompts, ...nextPrompts],
-        usage: usageRecord ? [...(project.usage ?? []), usageRecord] : project.usage ?? [],
+        prompts: [...project.prompts, ...prompts],
         updatedAt: new Date().toISOString(),
       };
 
@@ -153,47 +113,7 @@ export function ImageManagePage() {
     } finally {
       setIsGeneratingPrompts(false);
     }
-  }, [project, commonSettings.imageStylePreset, commonSettings.defaultAspectRatio]);
-
-  // パート単位のプロンプト生成
-  const handleGeneratePromptForPart = useCallback(
-    async (partId: string) => {
-      if (!project) return;
-      const part = project.parts.find((p) => p.id === partId);
-      if (!part) return;
-
-      try {
-        setGeneratingPromptPartId(partId);
-        setError(null);
-        const result = await window.electronAPI.ai.generateImagePrompts(
-          [part],
-          project.article,
-          commonSettings.imageStylePreset
-        );
-        const nextPrompts = result.prompts.map((prompt) => ({
-          ...prompt,
-          aspectRatio: commonSettings.defaultAspectRatio,
-        }));
-        const usageRecord = createOpenAIUsageRecord('image_prompt_generate', result.usage);
-
-        const updatedProject = {
-          ...project,
-          prompts: [...project.prompts, ...nextPrompts],
-          usage: usageRecord ? [...(project.usage ?? []), usageRecord] : project.usage ?? [],
-          updatedAt: new Date().toISOString(),
-        };
-
-        await window.electronAPI.project.save(updatedProject);
-        setProject(updatedProject);
-      } catch (err) {
-        console.error('Failed to generate prompt for part:', err);
-        setError(err instanceof Error ? err.message : 'プロンプト生成に失敗しました');
-      } finally {
-        setGeneratingPromptPartId(null);
-      }
-    },
-    [project, commonSettings.imageStylePreset, commonSettings.defaultAspectRatio]
-  );
+  }, [project]);
 
   // 画像生成
   const handleGenerateImage = useCallback(
@@ -204,11 +124,7 @@ export function ImageManagePage() {
         setIsGeneratingImage(true);
         setError(null);
 
-        const imageAsset = await window.electronAPI.image.generate(
-          { ...prompt, aspectRatio: commonSettings.defaultAspectRatio },
-          projectId
-        );
-        const usageRecord = createGeminiImageUsageRecord(1, 'image_generate');
+        const imageAsset = await window.electronAPI.image.generate(prompt, projectId);
 
         // プロジェクトを更新
         const now = new Date().toISOString();
@@ -223,7 +139,6 @@ export function ImageManagePage() {
           ...project,
           parts: updatedParts,
           images: [...project.images, imageAsset],
-          usage: usageRecord ? [...(project.usage ?? []), usageRecord] : project.usage ?? [],
           updatedAt: now,
         };
 
@@ -236,7 +151,7 @@ export function ImageManagePage() {
         setIsGeneratingImage(false);
       }
     },
-    [project, projectId, commonSettings.defaultAspectRatio]
+    [project, projectId]
   );
 
   // 全パートの画像を一括生成
@@ -256,11 +171,7 @@ export function ImageManagePage() {
       setIsGeneratingImage(true);
       setError(null);
 
-      const imageAssets = await window.electronAPI.image.generateBatch(
-        targetPrompts.map((p) => ({ ...p, aspectRatio: commonSettings.defaultAspectRatio })),
-        projectId
-      );
-      const usageRecord = createGeminiImageUsageRecord(imageAssets.length, 'image_generate_batch');
+      const imageAssets = await window.electronAPI.image.generateBatch(targetPrompts, projectId);
 
       // プロジェクトを更新
       const now = new Date().toISOString();
@@ -284,7 +195,6 @@ export function ImageManagePage() {
         ...project,
         parts: project.parts.map((p) => nextPartsById.get(p.id) ?? p),
         images: [...project.images, ...imageAssets],
-        usage: usageRecord ? [...(project.usage ?? []), usageRecord] : project.usage ?? [],
         updatedAt: now,
       };
 
@@ -296,23 +206,7 @@ export function ImageManagePage() {
     } finally {
       setIsGeneratingImage(false);
     }
-  }, [project, projectId, activePrompts, promptIdsWithAnyImage, commonSettings.defaultAspectRatio]);
-
-  const handleUpdateCommonSettings = useCallback(
-    async (next: Partial<ImageCommonSettings>) => {
-      const updated = { ...commonSettings, ...next };
-      setCommonSettings(updated);
-      try {
-        await window.electronAPI.settings.set({
-          imageStylePreset: updated.imageStylePreset,
-          defaultAspectRatio: updated.defaultAspectRatio,
-        });
-      } catch (err) {
-        console.warn('Failed to save image settings:', err);
-      }
-    },
-    [commonSettings]
-  );
+  }, [project, projectId, activePrompts, promptIdsWithAnyImage]);
 
   // 画像削除
   const handleDeleteImage = useCallback(
@@ -382,41 +276,19 @@ export function ImageManagePage() {
     [project]
   );
 
-  const handleApplyPromptComment = useCallback(
-    async (prompt: ImagePrompt, comment: string) => {
+  // サムネイル選択
+  const handleSelectThumbnail = useCallback(
+    async (imageId: string) => {
       if (!project) return;
-      try {
-        setApplyingPromptId(prompt.id);
-        setError(null);
-        const result = await window.electronAPI.ai.applyComment(
-          { type: 'imagePrompt', id: prompt.id, currentText: prompt.prompt },
-          comment
-        );
-        const usageRecord = createOpenAIUsageRecord('image_prompt_comment', result.usage);
-        const updatedPrompt: ImagePrompt = {
-          ...prompt,
-          prompt: result.text,
-          version: prompt.version + 1,
-          createdAt: new Date().toISOString(),
-        };
 
-        const updatedProject = {
-          ...project,
-          prompts: project.prompts.map((p) =>
-            p.id === updatedPrompt.id ? updatedPrompt : p
-          ),
-          usage: usageRecord ? [...(project.usage ?? []), usageRecord] : project.usage ?? [],
-          updatedAt: new Date().toISOString(),
-        };
+      const updatedProject = {
+        ...project,
+        thumbnail: { imageId },
+        updatedAt: new Date().toISOString(),
+      };
 
-        await window.electronAPI.project.save(updatedProject);
-        setProject(updatedProject);
-      } catch (err) {
-        console.error('Failed to apply comment to prompt:', err);
-        setError(err instanceof Error ? err.message : 'プロンプト修正に失敗しました');
-      } finally {
-        setApplyingPromptId(null);
-      }
+      await window.electronAPI.project.save(updatedProject);
+      setProject(updatedProject);
     },
     [project]
   );
@@ -457,13 +329,6 @@ export function ImageManagePage() {
     return [...selectedPartImages, ...importedImages];
   }, [importedImages, selectedPartImages]);
 
-  const commonStyleLabel = useMemo(() => {
-    return (
-      STYLE_PRESET_OPTIONS.find((preset) => preset.id === commonSettings.imageStylePreset)
-        ?.label || commonSettings.imageStylePreset
-    );
-  }, [commonSettings.imageStylePreset]);
-
   // パートへの割り当て（panelImages）更新
   const handleUpdatePanelImages = useCallback(
     async (partId: string, panelImages: ImageAssetRef[]) => {
@@ -471,11 +336,10 @@ export function ImageManagePage() {
 
       try {
         const now = new Date().toISOString();
-        const normalizedPanelImages = panelImages.filter((ref) => ref?.imageId).slice(0, 1);
         const updatedProject: Project = {
           ...project,
           parts: project.parts.map((p) =>
-            p.id === partId ? { ...p, panelImages: normalizedPanelImages, updatedAt: now } : p
+            p.id === partId ? { ...p, panelImages, updatedAt: now } : p
           ),
           updatedAt: now,
         };
@@ -623,86 +487,43 @@ export function ImageManagePage() {
 
         {/* メインコンテンツ */}
         <div className="flex-1 overflow-auto p-6">
-          {selectedPart && (
+          {/* タブ */}
+          <div className="flex gap-4 border-b border-gray-200 mb-6">
+            <button
+              onClick={() => setSelectedTab('parts')}
+              className={`px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors ${
+                selectedTab === 'parts'
+                  ? 'border-blue-600 text-blue-600'
+                  : 'border-transparent text-gray-500 hover:text-gray-700'
+              }`}
+            >
+              パート画像
+            </button>
+            <button
+              onClick={() => setSelectedTab('imported')}
+              className={`px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors ${
+                selectedTab === 'imported'
+                  ? 'border-blue-600 text-blue-600'
+                  : 'border-transparent text-gray-500 hover:text-gray-700'
+              }`}
+            >
+              インポート画像 ({importedImages.length})
+            </button>
+            <button
+              onClick={() => setSelectedTab('thumbnail')}
+              className={`px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors ${
+                selectedTab === 'thumbnail'
+                  ? 'border-blue-600 text-blue-600'
+                  : 'border-transparent text-gray-500 hover:text-gray-700'
+              }`}
+            >
+              サムネイル
+            </button>
+          </div>
+
+          {/* パート画像タブ */}
+          {selectedTab === 'parts' && selectedPart && (
             <div className="space-y-6">
-              <div className="bg-white rounded-lg border border-gray-200 p-6">
-                <button
-                  onClick={() => setIsCommonSettingsOpen((prev) => !prev)}
-                  className="w-full flex items-center justify-between text-left"
-                >
-                  <div>
-                    <h3 className="text-lg font-semibold text-gray-900">共通設定</h3>
-                    <p className="text-xs text-gray-500 mt-1">
-                      スタイル: {commonStyleLabel} ・ アスペクト比: {commonSettings.defaultAspectRatio}
-                    </p>
-                  </div>
-                  <svg
-                    className={`w-5 h-5 text-gray-400 transition-transform ${
-                      isCommonSettingsOpen ? 'rotate-180' : ''
-                    }`}
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                  >
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                  </svg>
-                </button>
-
-                {isCommonSettingsOpen && (
-                  <div className="mt-5 space-y-5">
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-2">
-                        スタイルプリセット（全パート共通）
-                      </label>
-                      <div className="grid grid-cols-2 gap-2">
-                        {STYLE_PRESET_OPTIONS.map((preset) => (
-                          <button
-                            key={preset.id}
-                            onClick={() => handleUpdateCommonSettings({ imageStylePreset: preset.id })}
-                            className={`p-3 text-left rounded-lg border transition-colors ${
-                              commonSettings.imageStylePreset === preset.id
-                                ? 'border-blue-500 bg-blue-50'
-                                : 'border-gray-200 hover:border-gray-300'
-                            }`}
-                          >
-                            <div className="font-medium text-sm">{preset.label}</div>
-                            <div className="text-xs text-gray-500 mt-0.5">{preset.description}</div>
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-2">
-                        アスペクト比（全パート共通）
-                      </label>
-                      <div className="flex gap-2">
-                        {([
-                          { value: '16:9', label: '16:9 (横長)' },
-                          { value: '1:1', label: '1:1 (正方形)' },
-                          { value: '9:16', label: '9:16 (縦長)' },
-                        ] as const).map((option) => (
-                          <button
-                            key={option.value}
-                            onClick={() => handleUpdateCommonSettings({ defaultAspectRatio: option.value })}
-                            className={`px-4 py-2 text-sm rounded-lg border transition-colors ${
-                              commonSettings.defaultAspectRatio === option.value
-                                ? 'border-blue-500 bg-blue-50 text-blue-700'
-                                : 'border-gray-200 text-gray-500 hover:border-gray-300'
-                            }`}
-                          >
-                            {option.label}
-                          </button>
-                        ))}
-                      </div>
-                      <p className="text-xs text-gray-500 mt-2">
-                        変更後に生成する画像へ反映されます
-                      </p>
-                    </div>
-                  </div>
-                )}
-              </div>
-
               <div className="bg-white rounded-lg border border-gray-200 p-6">
                 <h3 className="text-lg font-semibold text-gray-900 mb-2">
                   {selectedPart.title}
@@ -717,22 +538,16 @@ export function ImageManagePage() {
                     onSave={handleUpdatePrompt}
                     onGenerate={handleGenerateImage}
                     isGenerating={isGeneratingImage}
-                    onRegeneratePrompt={() => handleGeneratePromptForPart(selectedPart.id)}
-                    isGeneratingPrompt={generatingPromptPartId === selectedPart.id}
-                    onApplyComment={(comment) =>
-                      handleApplyPromptComment(selectedPartPrompt, comment)
-                    }
-                    isApplyingComment={applyingPromptId === selectedPartPrompt.id}
                   />
                 ) : (
                   <div className="text-center py-8 text-gray-500">
                     <p>このパートのプロンプトはまだ生成されていません</p>
                     <button
-                      onClick={() => handleGeneratePromptForPart(selectedPart.id)}
-                      disabled={generatingPromptPartId === selectedPart.id}
+                      onClick={handleGeneratePrompts}
+                      disabled={isGeneratingPrompts}
                       className="mt-4 px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 disabled:opacity-50"
                     >
-                      {generatingPromptPartId === selectedPart.id ? '生成中...' : 'このパートだけ生成'}
+                      プロンプトを生成
                     </button>
                   </div>
                 )}
@@ -751,6 +566,70 @@ export function ImageManagePage() {
             </div>
           )}
 
+          {/* インポート画像タブ */}
+          {selectedTab === 'imported' && (
+            <ImageGallery
+              images={importedImages}
+              title="インポートした画像"
+              onDeleteImage={handleDeleteImage}
+              emptyMessage="インポートした画像はありません"
+            />
+          )}
+
+          {/* サムネイルタブ */}
+          {selectedTab === 'thumbnail' && (
+            <div className="space-y-6">
+              <div className="bg-white rounded-lg border border-gray-200 p-6">
+                <h3 className="text-lg font-semibold text-gray-900 mb-4">
+                  サムネイル選択
+                </h3>
+                <p className="text-sm text-gray-500 mb-4">
+                  動画のサムネイルとして使用する画像を選択してください
+                </p>
+
+                {(() => {
+                  const allImages = [...project.images, ...importedImages];
+                  const currentThumbnail = project.thumbnail?.imageId
+                    ? allImages.find((img) => img.id === project.thumbnail?.imageId)
+                    : undefined;
+
+                  return (
+                    <>
+                      {/* 現在のサムネイル */}
+                      {project.thumbnail && (
+                        <div className="mb-6">
+                          <h4 className="text-sm font-medium text-gray-700 mb-2">現在のサムネイル</h4>
+                          <div className="w-64">
+                            {currentThumbnail && (
+                              <img
+                                src={toLocalFileUrl(currentThumbnail.filePath)}
+                                alt="サムネイル"
+                                className="w-full rounded-lg border border-blue-500"
+                              />
+                            )}
+                            {!currentThumbnail && (
+                              <div className="text-sm text-gray-500 bg-gray-50 border border-gray-200 rounded-lg p-4">
+                                サムネイル画像が見つかりません
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* 全画像から選択 */}
+                      <ImageGallery
+                        images={allImages}
+                        selectedImageIds={project.thumbnail ? [project.thumbnail.imageId] : []}
+                        onSelectImage={handleSelectThumbnail}
+                        title="画像を選択"
+                        emptyMessage="画像がありません。先に画像を生成/インポートしてください。"
+                      />
+                    </>
+                  );
+                })()}
+              </div>
+            </div>
+          )}
         </div>
       </div>
     </div>

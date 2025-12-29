@@ -30,9 +30,9 @@ interface ElectronAPI {
   };
 
   ai: {
-    generateScript: (article: Article, options: ScriptOptions) => Promise<{ parts: Part[]; usage: TokenUsage | null }>;
-    generateImagePrompts: (parts: Part[], article: Article, stylePreset: string) => Promise<{ prompts: ImagePrompt[]; usage: TokenUsage | null }>;
-    applyComment: (target: CommentTarget, comment: string) => Promise<{ text: string; usage: TokenUsage | null }>;
+    generateScript: (article: Article, options: ScriptOptions) => Promise<Part[]>;
+    generateImagePrompts: (parts: Part[], article: Article, stylePreset: string) => Promise<ImagePrompt[]>;
+    applyComment: (target: CommentTarget, comment: string) => Promise<string>;
   };
 
   image: {
@@ -43,8 +43,8 @@ interface ElectronAPI {
   };
 
   tts: {
-    generate: (text: string, options: TTSOptions, projectId: string) => Promise<{ audio: AudioAsset; usage: TokenUsage | null }>;
-    generateBatch: (parts: Part[], options: TTSOptions, projectId: string) => Promise<Array<{ audio: AudioAsset; usage: TokenUsage | null }>>;
+    generate: (text: string, options: TTSOptions, projectId: string) => Promise<AudioAsset>;
+    generateBatch: (parts: Part[], options: TTSOptions, projectId: string) => Promise<AudioAsset[]>;
     getVoices: (engine?: 'google_tts' | 'gemini_tts' | 'macos_tts') => Promise<VoiceInfo[]>;
   };
 
@@ -86,7 +86,6 @@ interface Project extends ProjectMeta {
   images: ImageAsset[];
   prompts: ImagePrompt[];
   audio: AudioAsset[];
-  usage: UsageRecord[];
   thumbnail?: ImageAssetRef;
 }
 
@@ -170,25 +169,6 @@ interface Comment {
   appliedAt?: string;
 }
 
-interface UsageRecord {
-  id: string;
-  provider: 'openai' | 'gemini';
-  category: 'text' | 'image' | 'tts';
-  model: string;
-  operation: string;
-  inputTokens?: number;
-  outputTokens?: number;
-  imageCount?: number;
-  createdAt: string;
-}
-
-interface TokenUsage {
-  inputTokens: number;
-  outputTokens: number;
-  totalTokens?: number;
-  model?: string;
-}
-
 // 設定関連の型
 interface Settings {
   ttsEngine: 'google_tts' | 'gemini_tts' | 'macos_tts';
@@ -206,22 +186,6 @@ interface Settings {
   endingVideoPath: string;
   autoSaveInterval: number;
   defaultProjectDir: string;
-  cost: {
-    currency: 'USD';
-    openai: {
-      model: string;
-      inputPer1MTokensUsd: number;
-      outputPer1MTokensUsd: number;
-    };
-    gemini: {
-      ttsModel: string;
-      ttsInputPer1MTokensUsd: number;
-      ttsOutputPer1MTokensUsd: number;
-      imageModel: string;
-      imageInputPerImageUsd: number;
-      imageOutputPerImageUsd: number;
-    };
-  };
 }
 
 type ApiKeyService = 'openai' | 'google_ai' | 'google_tts';

@@ -49,26 +49,6 @@ async function withRetry<T>(
   throw lastError;
 }
 
-type TokenUsage = {
-  inputTokens: number;
-  outputTokens: number;
-  totalTokens?: number;
-  model?: string;
-};
-
-function toTokenUsage(response: {
-  usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number };
-  model?: string;
-}): TokenUsage | null {
-  if (!response.usage) return null;
-  return {
-    inputTokens: response.usage.prompt_tokens ?? 0,
-    outputTokens: response.usage.completion_tokens ?? 0,
-    totalTokens: response.usage.total_tokens,
-    model: response.model,
-  };
-}
-
 // 記事データの型
 interface Article {
   title: string;
@@ -147,11 +127,7 @@ JSONのみを出力してください。説明や補足は不要です。`;
 // スクリプト生成ハンドラ
 ipcMain.handle(
   'ai:generateScript',
-  async (
-    _,
-    article: Article,
-    options: ScriptOptions = {}
-  ): Promise<{ parts: GeneratedPart[]; usage: TokenUsage | null }> => {
+  async (_, article: Article, options: ScriptOptions = {}): Promise<GeneratedPart[]> => {
     const apiKey = await readApiKey('openai');
 
     if (!apiKey) {
@@ -208,7 +184,7 @@ ipcMain.handle(
       })
     );
 
-    return { parts, usage: toTokenUsage(response) };
+    return parts;
   }
 );
 
@@ -232,7 +208,7 @@ const STYLE_PRESETS: Record<string, StylePresetConfig> = {
   news_broadcast: {
     id: 'news_broadcast',
     baseStyle:
-      'Japanese TV news infographic, clean, minimal, vector-like, broadcast quality',
+      'Japanese TV news infographic, 16:9, clean, minimal, vector-like, broadcast quality',
     colorPalette: 'cool blue/gray base with subtle cyan accents, low saturation',
     lighting: 'neutral matte lighting, low contrast',
     background: 'subtle gradient with thin grid lines and soft vignette',
@@ -249,7 +225,7 @@ const STYLE_PRESETS: Record<string, StylePresetConfig> = {
   documentary: {
     id: 'documentary',
     baseStyle:
-      'Documentary-style news infographic, clean, semi-realistic, broadcast quality',
+      'Documentary-style news infographic, 16:9, clean, semi-realistic, broadcast quality',
     colorPalette: 'cool gray base with muted teal accents, natural tone',
     lighting: 'soft neutral lighting, slightly cinematic',
     background: 'subtle texture with light grain, restrained gradients',
@@ -266,7 +242,7 @@ const STYLE_PRESETS: Record<string, StylePresetConfig> = {
   infographic: {
     id: 'infographic',
     baseStyle:
-      'High-clarity infographic, crisp vector look, balanced grid, broadcast quality',
+      'High-clarity infographic, 16:9, crisp vector look, balanced grid, broadcast quality',
     colorPalette: 'blue/gray base with clean cyan accents, flat tones',
     lighting: 'flat neutral lighting, minimal shadows',
     background: 'light grid background, clean white space',
@@ -282,7 +258,7 @@ const STYLE_PRESETS: Record<string, StylePresetConfig> = {
   photorealistic: {
     id: 'photorealistic',
     baseStyle:
-      'Photorealistic-style news graphic, clean, professional broadcast look',
+      'Photorealistic-style news graphic, 16:9, clean, professional broadcast look',
     colorPalette: 'cool blue/gray with subtle cyan accents, realistic tones',
     lighting: 'soft neutral lighting, realistic shading',
     background: 'soft gradient with minimal texture',
@@ -298,7 +274,7 @@ const STYLE_PRESETS: Record<string, StylePresetConfig> = {
   illustration: {
     id: 'illustration',
     baseStyle:
-      'Illustrative news infographic, clean, minimal, flat illustration, broadcast quality',
+      'Illustrative news infographic, 16:9, clean, minimal, flat illustration, broadcast quality',
     colorPalette: 'cool blue/gray with cyan accents, flat colors',
     lighting: 'flat neutral lighting, minimal shadows',
     background: 'subtle gradient with light grid pattern',
@@ -507,19 +483,16 @@ ipcMain.handle(
     article: Article,
     stylePreset: string
   ): Promise<
-    {
-      prompts: Array<{
-        id: string;
-        partId: string;
-        stylePreset: string;
-        prompt: string;
-        negativePrompt: string;
-        aspectRatio: '16:9' | '1:1' | '9:16';
-        version: number;
-        createdAt: string;
-      }>;
-      usage: TokenUsage | null;
-    }
+    Array<{
+      id: string;
+      partId: string;
+      stylePreset: string;
+      prompt: string;
+      negativePrompt: string;
+      aspectRatio: '16:9';
+      version: number;
+      createdAt: string;
+    }>
   > => {
     const apiKey = await readApiKey('openai');
 
@@ -609,7 +582,7 @@ JSONのみを出力してください。`,
     const parsed = JSON.parse(content);
     const now = new Date().toISOString();
 
-    const prompts = parsed.prompts.map((p: Record<string, unknown>, index: number) => {
+    return parsed.prompts.map((p: Record<string, unknown>, index: number) => {
       // AIが1始まりのインデックスを返した場合のフォールバック
       let partIndex = typeof p.partIndex === 'number' ? p.partIndex : index;
       if (partIndex >= parts.length && partIndex > 0) {
@@ -687,19 +660,22 @@ JSONのみを出力してください。`,
       const slotDescriptions = resolvedSlots
         .map((slot) => {
           const label = ELEMENT_TYPE_LABELS[slot.elementType];
+          if (slot.source) {
+            return `${slot.slot} panel: ${label} based on "${slot.source}"`;
+          }
           return `${slot.slot} panel: ${label}`;
         })
         .join('; ');
 
       const detailLines: string[] = [];
       if (topic) {
-        detailLines.push(`Represent the topic with symbolic imagery (no labels): ${topic}.`);
+        detailLines.push(`Represent the topic: ${topic}.`);
       }
       if (entities.length > 0) {
-        detailLines.push(`Include simplified icons for ${entities.join(', ')} (no labels).`);
+        detailLines.push(`Include simplified icons for ${entities.join(', ')}.`);
       }
       if (locations.length > 0) {
-        detailLines.push(`Highlight locations: ${locations.join(', ')} (no labels, no text).`);
+        detailLines.push(`Highlight locations: ${locations.join(', ')} (no labels).`);
       }
       if (quantFacts.length > 0) {
         detailLines.push(`Data cues: ${describeQuantFacts(quantFacts)}.`);
@@ -717,7 +693,6 @@ JSONのみを出力してください。`,
         `Information density: ${styleConfig.density}.`,
         ...detailLines,
         'No readable text.',
-        'No labels or captions; avoid letters, numbers, kana, or kanji.',
         'No show titles, station names, or program names.',
       ];
 
@@ -734,7 +709,6 @@ JSONのみを出力してください。`,
         createdAt: now,
       };
     });
-    return { prompts, usage: toTokenUsage(response) };
   }
 );
 
@@ -745,7 +719,7 @@ ipcMain.handle(
     _,
     target: { type: 'script' | 'imagePrompt'; id: string; currentText: string },
     comment: string
-  ): Promise<{ text: string; usage: TokenUsage | null }> => {
+  ): Promise<string> => {
     const apiKey = await readApiKey('openai');
 
     if (!apiKey) {
@@ -792,6 +766,6 @@ ${comment}
       throw new Error('AIからの応答が空でした');
     }
 
-    return { text: content, usage: toTokenUsage(response) };
+    return content;
   }
 );

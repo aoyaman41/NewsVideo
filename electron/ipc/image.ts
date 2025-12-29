@@ -94,34 +94,6 @@ function getDimensions(aspectRatio: '16:9' | '1:1' | '9:16'): { width: number; h
   }
 }
 
-function stripAspectRatioHints(prompt: string): string {
-  return prompt
-    .replace(/\b16:9\b|\b1:1\b|\b9:16\b/g, '')
-    .replace(/,\s*,/g, ', ')
-    .replace(/\s{2,}/g, ' ')
-    .trim();
-}
-
-function buildAspectRatioHint(
-  aspectRatio: '16:9' | '1:1' | '9:16',
-  dimensions: { width: number; height: number }
-): string {
-  const label =
-    aspectRatio === '1:1' ? 'square' : aspectRatio === '9:16' ? 'vertical' : 'horizontal';
-  return `Aspect ratio: ${aspectRatio} (${label}). Target resolution: ${dimensions.width}x${dimensions.height}. Keep this aspect ratio strictly.`;
-}
-
-function buildNegativePromptHint(negativePrompt?: string): string {
-  if (!negativePrompt) return '';
-  const cleaned = negativePrompt
-    .split(',')
-    .map((item) => item.trim())
-    .filter((item) => item.length > 0)
-    .map((item) => item.replace(/^no\s+/i, ''))
-    .join(', ');
-  return cleaned ? `Strictly avoid: ${cleaned}.` : '';
-}
-
 // プロジェクトパスを取得（IDからフォルダを検索）
 async function getProjectPath(projectId: string): Promise<string> {
   const projectsDir = getProjectsPath();
@@ -200,17 +172,13 @@ ipcMain.handle(
     // 日本語ニュース向けのシステム指示を追加
     const japaneseNewsContext = `日本の報道番組向けのインフォグラフィック画像を生成してください。
 日本人視聴者向けのデザインで、信頼性があり、プロフェッショナルな印象を与える画像にしてください。
-人物、顔、キャスター、記者は含めないでください。
-文字・数字・記号などの可読なテキスト、ラベル、キャプションは入れないでください。`;
+人物、顔、キャスター、記者は含めないでください。`;
+
+    // スタイルプリセットを反映したプロンプトを構築
+    const enhancedPrompt = `${japaneseNewsContext}\n\n${prompt.prompt}`;
 
     const imageId = crypto.randomUUID();
     const dimensions = getDimensions(prompt.aspectRatio);
-    const ratioHint = buildAspectRatioHint(prompt.aspectRatio, dimensions);
-    const promptText = stripAspectRatioHints(prompt.prompt);
-    const negativeHint = buildNegativePromptHint(prompt.negativePrompt);
-
-    // スタイルプリセットを反映したプロンプトを構築
-    const enhancedPrompt = `${japaneseNewsContext}\n${ratioHint}\n\n${promptText}${negativeHint ? `\n\n${negativeHint}` : ''}`;
 
     console.log('[image:generate] Starting image generation with prompt:', enhancedPrompt);
 
@@ -300,17 +268,12 @@ ipcMain.handle(
     // 日本語ニュース向けのシステム指示を追加（全件共通）
     const japaneseNewsContext = `日本の報道番組向けのインフォグラフィック画像を生成してください。
 日本人視聴者向けのデザインで、信頼性があり、プロフェッショナルな印象を与える画像にしてください。
-人物、顔、キャスター、記者は含めないでください。
-文字・数字・記号などの可読なテキスト、ラベル、キャプションは入れないでください。`;
+人物、顔、キャスター、記者は含めないでください。`;
 
     const settled = await Promise.all(
       prompts.map(async (prompt, index) => {
         try {
-          const dimensions = getDimensions(prompt.aspectRatio);
-          const ratioHint = buildAspectRatioHint(prompt.aspectRatio, dimensions);
-          const promptText = stripAspectRatioHints(prompt.prompt);
-          const negativeHint = buildNegativePromptHint(prompt.negativePrompt);
-          const enhancedPrompt = `${japaneseNewsContext}\n${ratioHint}\n\n${promptText}${negativeHint ? `\n\n${negativeHint}` : ''}`;
+          const enhancedPrompt = `${japaneseNewsContext}\n\n${prompt.prompt}`;
 
           console.log(
             `[image:generateBatch] Generating image ${index + 1}/${prompts.length}:`,
@@ -318,6 +281,7 @@ ipcMain.handle(
           );
 
           const imageId = crypto.randomUUID();
+          const dimensions = getDimensions(prompt.aspectRatio);
 
           const response = await withRetry(async () => {
             return model.generateContent({
