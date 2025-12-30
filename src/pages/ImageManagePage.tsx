@@ -4,6 +4,7 @@ import { Header, WorkflowNav } from '../components/layout';
 import { ImageAssignment, ImageGallery, PromptEditor } from '../components/image';
 import type { Project, ImageAssetRef, ImagePrompt } from '../schemas';
 import { toLocalFileUrl } from '../utils/toLocalFileUrl';
+import { createGeminiImageUsageRecord, createOpenAIUsageRecord } from '../utils/usage';
 
 export function ImageManagePage() {
   const { projectId } = useParams<{ projectId: string }>();
@@ -92,16 +93,18 @@ export function ImageManagePage() {
       setIsGeneratingPrompts(true);
       setError(null);
 
-      const prompts = await window.electronAPI.ai.generateImagePrompts(
+      const result = await window.electronAPI.ai.generateImagePrompts(
         project.parts,
         project.article,
         'news_broadcast'
       );
+      const usageRecord = createOpenAIUsageRecord('image_prompt_generate', result.usage);
 
       // プロジェクトを更新
       const updatedProject = {
         ...project,
-        prompts: [...project.prompts, ...prompts],
+        prompts: [...project.prompts, ...result.prompts],
+        usage: usageRecord ? [...(project.usage ?? []), usageRecord] : project.usage ?? [],
         updatedAt: new Date().toISOString(),
       };
 
@@ -125,6 +128,7 @@ export function ImageManagePage() {
         setError(null);
 
         const imageAsset = await window.electronAPI.image.generate(prompt, projectId);
+        const usageRecord = createGeminiImageUsageRecord(1, 'image_generate');
 
         // プロジェクトを更新
         const now = new Date().toISOString();
@@ -139,6 +143,7 @@ export function ImageManagePage() {
           ...project,
           parts: updatedParts,
           images: [...project.images, imageAsset],
+          usage: usageRecord ? [...(project.usage ?? []), usageRecord] : project.usage ?? [],
           updatedAt: now,
         };
 
@@ -172,6 +177,7 @@ export function ImageManagePage() {
       setError(null);
 
       const imageAssets = await window.electronAPI.image.generateBatch(targetPrompts, projectId);
+      const usageRecord = createGeminiImageUsageRecord(imageAssets.length, 'image_generate_batch');
 
       // プロジェクトを更新
       const now = new Date().toISOString();
@@ -195,6 +201,7 @@ export function ImageManagePage() {
         ...project,
         parts: project.parts.map((p) => nextPartsById.get(p.id) ?? p),
         images: [...project.images, ...imageAssets],
+        usage: usageRecord ? [...(project.usage ?? []), usageRecord] : project.usage ?? [],
         updatedAt: now,
       };
 

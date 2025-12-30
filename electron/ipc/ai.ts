@@ -665,8 +665,8 @@ ipcMain.handle(
     parts: GeneratedPart[],
     article: Article,
     stylePreset: string
-  ): Promise<
-    Array<{
+  ): Promise<{
+    prompts: Array<{
       id: string;
       partId: string;
       stylePreset: string;
@@ -675,8 +675,9 @@ ipcMain.handle(
       aspectRatio: '16:9';
       version: number;
       createdAt: string;
-    }>
-  > => {
+    }>;
+    usage: OpenAIUsageSummary | null;
+  }> => {
     const apiKey = await readApiKey('openai');
 
     if (!apiKey) {
@@ -808,7 +809,7 @@ JSONのみを出力してください。`,
 
     const promptsArray = Array.isArray(resolvedParsed.prompts) ? resolvedParsed.prompts : [];
 
-    return parts.map((part, index: number) => {
+    const prompts = parts.map((part, index: number) => {
       const candidate = promptsArray[index];
       const p =
         candidate && typeof candidate === 'object'
@@ -929,6 +930,11 @@ JSONのみを出力してください。`,
         createdAt: now,
       };
     });
+
+    return {
+      prompts,
+      usage: mapOpenAIUsage(response.usage, response.model),
+    };
   }
 );
 

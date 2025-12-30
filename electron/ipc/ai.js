@@ -640,7 +640,7 @@ JSONのみを出力してください。`,
     }
     const now = new Date().toISOString();
     const promptsArray = Array.isArray(resolvedParsed.prompts) ? resolvedParsed.prompts : [];
-    return parts.map((part, index) => {
+    const prompts = parts.map((part, index) => {
         const candidate = promptsArray[index];
         const p = candidate && typeof candidate === 'object'
             ? candidate
@@ -743,6 +743,10 @@ JSONのみを出力してください。`,
             createdAt: now,
         };
     });
+    return {
+        prompts,
+        usage: mapOpenAIUsage(response.usage, response.model),
+    };
 });
 // コメント反映ハンドラ
 ipcMain.handle('ai:applyComment', async (_, target, comment) => {

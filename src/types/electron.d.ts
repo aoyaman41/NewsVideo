@@ -41,7 +41,11 @@ interface ElectronAPI {
       article: Article,
       options: ScriptOptions
     ) => Promise<{ parts: Part[]; usage?: TokenUsage | null }>;
-    generateImagePrompts: (parts: Part[], article: Article, stylePreset: string) => Promise<ImagePrompt[]>;
+    generateImagePrompts: (
+      parts: Part[],
+      article: Article,
+      stylePreset: string
+    ) => Promise<{ prompts: ImagePrompt[]; usage?: TokenUsage | null }>;
     applyComment: (
       target: CommentTarget,
       comment: string
