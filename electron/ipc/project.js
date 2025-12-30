@@ -139,6 +139,20 @@ ipcMain.handle('project:load', async (_, projectId) => {
 ipcMain.handle('project:save', async (_, project) => {
     const now = new Date().toISOString();
     const projectPath = project.path;
+    if (!projectPath) {
+        throw new Error('Project path is missing');
+    }
+    const safeArticle = project.article ?? {
+        title: '',
+        source: '',
+        bodyText: '',
+        importedImages: [],
+    };
+    const safeParts = project.parts ?? [];
+    const safeImages = project.images ?? [];
+    const safePrompts = project.prompts ?? [];
+    const safeAudio = project.audio ?? [];
+    const safeUsage = project.usage ?? [];
     // メタデータ更新
     const metaPath = path.join(projectPath, 'project.json');
     const metaContent = await fs.readFile(metaPath, 'utf-8');
@@ -149,12 +163,12 @@ ipcMain.handle('project:save', async (_, project) => {
     // 全データを保存
     await Promise.all([
         fs.writeFile(metaPath, JSON.stringify(meta, null, 2)),
-        fs.writeFile(path.join(projectPath, 'article.json'), JSON.stringify(project.article, null, 2)),
-        fs.writeFile(path.join(projectPath, 'parts.json'), JSON.stringify(project.parts, null, 2)),
-        fs.writeFile(path.join(projectPath, 'images.json'), JSON.stringify(project.images, null, 2)),
-        fs.writeFile(path.join(projectPath, 'prompts.json'), JSON.stringify(project.prompts, null, 2)),
-        fs.writeFile(path.join(projectPath, 'audio.json'), JSON.stringify(project.audio, null, 2)),
-        fs.writeFile(path.join(projectPath, 'usage.json'), JSON.stringify(project.usage ?? [], null, 2)),
+        fs.writeFile(path.join(projectPath, 'article.json'), JSON.stringify(safeArticle, null, 2)),
+        fs.writeFile(path.join(projectPath, 'parts.json'), JSON.stringify(safeParts, null, 2)),
+        fs.writeFile(path.join(projectPath, 'images.json'), JSON.stringify(safeImages, null, 2)),
+        fs.writeFile(path.join(projectPath, 'prompts.json'), JSON.stringify(safePrompts, null, 2)),
+        fs.writeFile(path.join(projectPath, 'audio.json'), JSON.stringify(safeAudio, null, 2)),
+        fs.writeFile(path.join(projectPath, 'usage.json'), JSON.stringify(safeUsage, null, 2)),
     ]);
     return { success: true, savedAt: now };
 });

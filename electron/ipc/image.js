@@ -1,0 +1,440 @@
+import { ipcMain, app, safeStorage } from 'electron';
+import * as fs from 'fs/promises';
+import * as path from 'path';
+import { GoogleGenerativeAI } from '@google/generative-ai';
+// シークレットファイルのパス
+const getSecretsPath = () => path.join(app.getPath('userData'), 'secrets.enc');
+// プロジェクトディレクトリのパス
+const getProjectsPath = () => path.join(app.getPath('userData'), 'projects');
+// APIキーを読み込み
+async function readApiKey(service) {
+    if (!safeStorage.isEncryptionAvailable()) {
+        return null;
+    }
+    try {
+        const secretsPath = getSecretsPath();
+        const encryptedData = await fs.readFile(secretsPath);
+        const decrypted = safeStorage.decryptString(encryptedData);
+        const secrets = JSON.parse(decrypted);
+        return secrets[service] || null;
+    }
+    catch {
+        return null;
+    }
+}
+// 指数バックオフ + ジッター付きリトライ
+async function withRetry(fn, maxRetries = 3, baseDelay = 1000) {
+    let lastError = null;
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+        try {
+            return await fn();
+        }
+        catch (error) {
+            lastError = error instanceof Error ? error : new Error(String(error));
+            // 最後の試行では待機しない
+            if (attempt < maxRetries - 1) {
+                // 指数バックオフ + ジッター
+                const delay = baseDelay * Math.pow(2, attempt) + Math.random() * 1000;
+                await new Promise((resolve) => setTimeout(resolve, delay));
+            }
+        }
+    }
+    throw lastError;
+}
+const STYLE_PRESETS = {
+    news_broadcast: {
+        id: 'news_broadcast',
+        baseStyle: 'Editorial infographic for a local news website, 16:9, clean layout, generous whitespace, illustration-like main visual with flexible info blocks, no photorealism',
+        colorPalette: 'white/light gray base, dark navy/charcoal structure, one subtle cyan/teal accent, low saturation',
+        lighting: 'soft natural light, matte, low contrast',
+        background: 'white to very light gray, minimal, no heavy grid, no vignette',
+        density: 'low',
+        layoutVariants: {
+            dataAndLocation: 'Flexible info blocks with generous margins; include chart-like and map-like elements if useful',
+            dataOnly: 'Flexible info blocks with generous margins; include a chart-like element if useful',
+            locationOnly: 'Flexible info blocks with generous margins; include a map-like element if useful',
+            general: 'Flexible info blocks with generous margins; keep a clear editorial grid',
+        },
+        negative: '人物, 顔, 手, 群衆, 肖像, インタビュー, アナウンサー, 記者, 番組セット, テロップ, 速報帯, ティッカー, ニュース名, 番組名, 局名, 番組タイトル, カテゴリー名, ロゴ, 透かし, QRコード, 商標, 写真, 実写, 写真風, 写実, フォトリアル, フォトリアリスティック, カメラ風, 過度なネオン, 強コントラスト, ギラついた光沢, サイバーパンク, アニメ調',
+    },
+    documentary: {
+        id: 'documentary',
+        baseStyle: 'Editorial infographic for a local news website, 16:9, clean layout, generous whitespace, illustration-like main visual with flexible info blocks, no photorealism',
+        colorPalette: 'white/light gray base, dark navy/charcoal structure, one subtle cyan/teal accent, low saturation',
+        lighting: 'soft natural light, matte, low contrast',
+        background: 'white to very light gray, minimal, no heavy grid, no vignette',
+        density: 'low',
+        layoutVariants: {
+            dataAndLocation: 'Flexible info blocks with generous margins; include chart-like and map-like elements if useful',
+            dataOnly: 'Flexible info blocks with generous margins; include a chart-like element if useful',
+            locationOnly: 'Flexible info blocks with generous margins; include a map-like element if useful',
+            general: 'Flexible info blocks with generous margins; keep a clear editorial grid',
+        },
+        negative: '人物, 顔, 手, 群衆, 肖像, インタビュー, アナウンサー, 記者, 番組セット, テロップ, 速報帯, ティッカー, ニュース名, 番組名, 局名, 番組タイトル, カテゴリー名, ロゴ, 透かし, QRコード, 商標, 写真, 実写, 写真風, 写実, フォトリアル, フォトリアリスティック, カメラ風, 過度なネオン, 強コントラスト, ギラついた光沢, サイバーパンク, アニメ調',
+    },
+    infographic: {
+        id: 'infographic',
+        baseStyle: 'Editorial infographic for a local news website, 16:9, clean layout, generous whitespace, illustration-like main visual with flexible info blocks, no photorealism',
+        colorPalette: 'white/light gray base, dark navy/charcoal structure, one subtle cyan/teal accent, low saturation',
+        lighting: 'soft natural light, matte, low contrast',
+        background: 'white to very light gray, minimal, no heavy grid, no vignette',
+        density: 'low',
+        layoutVariants: {
+            dataAndLocation: 'Flexible info blocks with generous margins; include chart-like and map-like elements if useful',
+            dataOnly: 'Flexible info blocks with generous margins; include a chart-like element if useful',
+            locationOnly: 'Flexible info blocks with generous margins; include a map-like element if useful',
+            general: 'Flexible info blocks with generous margins; keep a clear editorial grid',
+        },
+        negative: '人物, 顔, 手, 群衆, 肖像, インタビュー, アナウンサー, 記者, 番組セット, テロップ, 速報帯, ティッカー, ニュース名, 番組名, 局名, 番組タイトル, カテゴリー名, ロゴ, 透かし, QRコード, 商標, 写真, 実写, 写真風, 写実, フォトリアル, フォトリアリスティック, カメラ風, 過度なネオン, 強コントラスト, ギラついた光沢, サイバーパンク, アニメ調',
+    },
+    photorealistic: {
+        id: 'photorealistic',
+        baseStyle: 'Editorial infographic for a local news website, 16:9, clean layout, generous whitespace, illustration-like main visual with flexible info blocks, no photorealism',
+        colorPalette: 'white/light gray base, dark navy/charcoal structure, one subtle cyan/teal accent, low saturation',
+        lighting: 'soft natural light, matte, low contrast',
+        background: 'white to very light gray, minimal, no heavy grid, no vignette',
+        density: 'low',
+        layoutVariants: {
+            dataAndLocation: 'Flexible info blocks with generous margins; include chart-like and map-like elements if useful',
+            dataOnly: 'Flexible info blocks with generous margins; include a chart-like element if useful',
+            locationOnly: 'Flexible info blocks with generous margins; include a map-like element if useful',
+            general: 'Flexible info blocks with generous margins; keep a clear editorial grid',
+        },
+        negative: '人物, 顔, 手, 群衆, 肖像, インタビュー, アナウンサー, 記者, 番組セット, テロップ, 速報帯, ティッカー, ニュース名, 番組名, 局名, 番組タイトル, カテゴリー名, ロゴ, 透かし, QRコード, 商標, 写真, 実写, 写真風, 写実, フォトリアル, フォトリアリスティック, カメラ風, 過度なネオン, 強コントラスト, ギラついた光沢, サイバーパンク, アニメ調',
+    },
+    illustration: {
+        id: 'illustration',
+        baseStyle: 'Editorial infographic for a local news website, 16:9, clean layout, generous whitespace, illustration-like main visual with flexible info blocks, no photorealism',
+        colorPalette: 'white/light gray base, dark navy/charcoal structure, one subtle cyan/teal accent, low saturation',
+        lighting: 'soft natural light, matte, low contrast',
+        background: 'white to very light gray, minimal, no heavy grid, no vignette',
+        density: 'low',
+        layoutVariants: {
+            dataAndLocation: 'Flexible info blocks with generous margins; include chart-like and map-like elements if useful',
+            dataOnly: 'Flexible info blocks with generous margins; include a chart-like element if useful',
+            locationOnly: 'Flexible info blocks with generous margins; include a map-like element if useful',
+            general: 'Flexible info blocks with generous margins; keep a clear editorial grid',
+        },
+        negative: '人物, 顔, 手, 群衆, 肖像, インタビュー, アナウンサー, 記者, 番組セット, テロップ, 速報帯, ティッカー, ニュース名, 番組名, 局名, 番組タイトル, カテゴリー名, ロゴ, 透かし, QRコード, 商標, 写真, 実写, 写真風, 写実, フォトリアル, フォトリアリスティック, カメラ風, 過度なネオン, 強コントラスト, ギラついた光沢, サイバーパンク, アニメ調',
+    },
+};
+const STYLE_PRESET_ALIASES = {
+    news_panel: 'news_broadcast',
+};
+function getStylePreset(stylePreset) {
+    const resolved = STYLE_PRESET_ALIASES[stylePreset] || stylePreset;
+    return STYLE_PRESETS[resolved] || STYLE_PRESETS.news_broadcast;
+}
+const IMAGE_SYSTEM_PROMPT_CORE = `You are generating slide images for a local business & culture news website.
+Interpret the USER prompt as slide composition instructions.
+- Main visual: an illustration-like hero depiction (no people).
+- Info block: if it mentions map/chart/diagram, render it as a simplified graphic.
+- Text: include readable text only if specified in the USER prompt; keep it short and legible.
+Avoid photorealistic or photographic rendering. Do not use photos or camera-like realism.
+Do not add page titles, headers, labels, or editorial captions unless the USER explicitly requests them.
+Do not generate generic labels like "Editorial infographic" or site/category titles.
+Respect the requested layout and any specified info-block count.
+Only use information implied by the USER prompt; do not add extra elements.
+No people, no faces, no logos, no watermarks.
+`;
+function normalizeNegativePrompt(value) {
+    const raw = value.trim();
+    if (!raw)
+        return '';
+    const withoutPrefix = raw.replace(/^strictly avoid:\s*/i, '');
+    const tokens = withoutPrefix
+        .split(/[,、\n]/)
+        .map((token) => token.trim())
+        .filter((token) => token.length > 0)
+        .map((token) => token.replace(/^no\s+/i, ''));
+    const seen = new Set();
+    const deduped = tokens.filter((token) => {
+        const key = token.toLowerCase();
+        if (seen.has(key))
+            return false;
+        seen.add(key);
+        return true;
+    });
+    return deduped.join(', ');
+}
+function getAspectRatioLabel(aspectRatio) {
+    switch (aspectRatio) {
+        case '1:1':
+            return 'square';
+        case '9:16':
+            return 'vertical';
+        default:
+            return 'horizontal';
+    }
+}
+function buildImagePromptText(prompt) {
+    const styleConfig = getStylePreset('news_broadcast');
+    const dimensions = getDimensions(prompt.aspectRatio);
+    const styleLines = [
+        styleConfig.baseStyle,
+        `- Color: ${styleConfig.colorPalette}`,
+        `- Lighting: ${styleConfig.lighting}`,
+        `- Background: ${styleConfig.background}`,
+        `- Information density: ${styleConfig.density}`,
+    ].join('\n');
+    const constraintsLine = `Aspect ratio: ${prompt.aspectRatio} (${getAspectRatioLabel(prompt.aspectRatio)}). Target resolution: ${dimensions.width}x${dimensions.height}. Keep this aspect ratio strictly.`;
+    const negativeRaw = normalizeNegativePrompt(prompt.negativePrompt || styleConfig.negative);
+    const strictlyAvoidLine = negativeRaw ? `Strictly avoid: ${negativeRaw}` : '';
+    return [
+        `SYSTEM:\n${IMAGE_SYSTEM_PROMPT_CORE}`,
+        `Style:\n${styleLines}`,
+        `Constraints:\n${constraintsLine}`,
+        strictlyAvoidLine,
+        `USER:\n${prompt.prompt}`,
+    ]
+        .filter((part) => part && part.length > 0)
+        .join('\n\n');
+}
+// アスペクト比から寸法を計算
+function getDimensions(aspectRatio) {
+    switch (aspectRatio) {
+        case '16:9':
+            return { width: 1920, height: 1080 };
+        case '1:1':
+            return { width: 1024, height: 1024 };
+        case '9:16':
+            return { width: 1080, height: 1920 };
+        default:
+            return { width: 1920, height: 1080 };
+    }
+}
+// プロジェクトパスを取得（IDからフォルダを検索）
+async function getProjectPath(projectId) {
+    const projectsDir = getProjectsPath();
+    const entries = await fs.readdir(projectsDir, { withFileTypes: true });
+    for (const entry of entries) {
+        if (entry.isDirectory() && entry.name.endsWith('.newsproj')) {
+            const projectPath = path.join(projectsDir, entry.name);
+            const metaPath = path.join(projectPath, 'project.json');
+            try {
+                const metaContent = await fs.readFile(metaPath, 'utf-8');
+                const meta = JSON.parse(metaContent);
+                if (meta.id === projectId) {
+                    return projectPath;
+                }
+            }
+            catch {
+                // 読み込み失敗時はスキップ
+            }
+        }
+    }
+    throw new Error(`Project not found: ${projectId}`);
+}
+// 画像をファイルに保存
+async function saveImageToFile(base64Data, projectPath, imageId, mimeType) {
+    // 拡張子を決定
+    const ext = mimeType === 'image/png' ? 'png' : 'jpg';
+    // プロジェクトの画像ディレクトリを作成
+    const imagesDir = path.join(projectPath, 'images');
+    await fs.mkdir(imagesDir, { recursive: true });
+    // ファイルパスを生成
+    const fileName = `${imageId}.${ext}`;
+    const filePath = path.join(imagesDir, fileName);
+    // Base64をデコードして保存
+    const buffer = Buffer.from(base64Data, 'base64');
+    await fs.writeFile(filePath, buffer);
+    return filePath;
+}
+// 単一画像生成ハンドラ
+ipcMain.handle('image:generate', async (_, prompt, projectId) => {
+    const apiKey = await readApiKey('google_ai');
+    if (!apiKey) {
+        throw new Error('Google AI APIキーが設定されていません。設定画面からAPIキーを入力してください。');
+    }
+    // プロジェクトパスを取得
+    const projectPath = await getProjectPath(projectId);
+    console.log('[image:generate] Project path:', projectPath);
+    const genAI = new GoogleGenerativeAI(apiKey);
+    // Nano Banana Pro (gemini-3-pro-image-preview) モデルを使用
+    const model = genAI.getGenerativeModel({
+        model: 'gemini-3-pro-image-preview',
+    });
+    const enhancedPrompt = buildImagePromptText(prompt);
+    const imageId = crypto.randomUUID();
+    const dimensions = getDimensions(prompt.aspectRatio);
+    console.log('[image:generate] Starting image generation with prompt:', enhancedPrompt);
+    const response = await withRetry(async () => {
+        return model.generateContent({
+            contents: [{
+                    role: 'user',
+                    parts: [{ text: enhancedPrompt }],
+                }],
+        });
+    });
+    console.log('[image:generate] Response received');
+    // レスポンスから画像データを抽出
+    const result = response.response;
+    console.log('[image:generate] Candidates:', JSON.stringify(result.candidates?.length));
+    const parts = result.candidates?.[0]?.content?.parts;
+    console.log('[image:generate] Parts:', JSON.stringify(parts?.map(p => ({ hasInlineData: !!p.inlineData, text: p.text?.substring(0, 50) }))));
+    if (!parts || parts.length === 0) {
+        throw new Error('画像生成に失敗しました: レスポンスが空です');
+    }
+    // 画像パートを探す
+    const imagePart = parts.find(part => part.inlineData?.mimeType?.startsWith('image/'));
+    if (!imagePart?.inlineData) {
+        throw new Error('画像生成に失敗しました: 画像データが見つかりません');
+    }
+    const base64Data = imagePart.inlineData.data;
+    const mimeType = imagePart.inlineData.mimeType || 'image/png';
+    // 画像をファイルに保存
+    const filePath = await saveImageToFile(base64Data, projectPath, imageId, mimeType);
+    // ファイルサイズを取得
+    const stats = await fs.stat(filePath);
+    const imageAsset = {
+        id: imageId,
+        filePath,
+        sourceType: 'generated',
+        metadata: {
+            width: dimensions.width,
+            height: dimensions.height,
+            mimeType,
+            fileSize: stats.size,
+            createdAt: new Date().toISOString(),
+            promptId: prompt.id,
+            tags: [],
+        },
+    };
+    return imageAsset;
+});
+// バッチ画像生成ハンドラ
+ipcMain.handle('image:generateBatch', async (_, prompts, projectId) => {
+    const apiKey = await readApiKey('google_ai');
+    if (!apiKey) {
+        throw new Error('Google AI APIキーが設定されていません。設定画面からAPIキーを入力してください。');
+    }
+    // プロジェクトパスを取得
+    const projectPath = await getProjectPath(projectId);
+    console.log('[image:generateBatch] Project path:', projectPath);
+    const genAI = new GoogleGenerativeAI(apiKey);
+    // Nano Banana Pro (gemini-3-pro-image-preview) モデルを使用
+    const model = genAI.getGenerativeModel({
+        model: 'gemini-3-pro-image-preview',
+    });
+    console.log('[image:generateBatch] Starting batch generation for', prompts.length, 'prompts');
+    const settled = await Promise.all(prompts.map(async (prompt, index) => {
+        try {
+            const enhancedPrompt = buildImagePromptText(prompt);
+            console.log(`[image:generateBatch] Generating image ${index + 1}/${prompts.length}:`, enhancedPrompt.substring(0, 100));
+            const imageId = crypto.randomUUID();
+            const dimensions = getDimensions(prompt.aspectRatio);
+            const response = await withRetry(async () => {
+                return model.generateContent({
+                    contents: [
+                        {
+                            role: 'user',
+                            parts: [{ text: enhancedPrompt }],
+                        },
+                    ],
+                });
+            });
+            console.log(`[image:generateBatch] Response received for image ${index + 1}`);
+            const result = response.response;
+            const parts = result.candidates?.[0]?.content?.parts;
+            console.log(`[image:generateBatch] Parts for image ${index + 1}:`, JSON.stringify(parts?.map((p) => ({ hasInlineData: !!p.inlineData }))));
+            if (!parts || parts.length === 0) {
+                throw new Error('レスポンスが空です');
+            }
+            const imagePart = parts.find((part) => part.inlineData?.mimeType?.startsWith('image/'));
+            if (!imagePart?.inlineData) {
+                throw new Error('画像データが見つかりません');
+            }
+            const base64Data = imagePart.inlineData.data;
+            const mimeType = imagePart.inlineData.mimeType || 'image/png';
+            const filePath = await saveImageToFile(base64Data, projectPath, imageId, mimeType);
+            const stats = await fs.stat(filePath);
+            const imageAsset = {
+                id: imageId,
+                filePath,
+                sourceType: 'generated',
+                metadata: {
+                    width: dimensions.width,
+                    height: dimensions.height,
+                    mimeType,
+                    fileSize: stats.size,
+                    createdAt: new Date().toISOString(),
+                    promptId: prompt.id,
+                    tags: [],
+                },
+            };
+            return { ok: true, index, imageAsset };
+        }
+        catch (error) {
+            return {
+                ok: false,
+                index,
+                error: error instanceof Error ? error.message : String(error),
+            };
+        }
+    }));
+    const results = [];
+    const errors = [];
+    for (const item of settled) {
+        if (item.ok) {
+            results.push(item.imageAsset);
+        }
+        else {
+            errors.push({ index: item.index, error: item.error });
+        }
+    }
+    if (errors.length > 0 && results.length === 0) {
+        throw new Error(`全ての画像生成に失敗しました: ${errors.map(e => e.error).join(', ')}`);
+    }
+    return results;
+});
+// 画像削除ハンドラ
+ipcMain.handle('image:delete', async (_, filePath) => {
+    try {
+        await fs.unlink(filePath);
+        return { success: true };
+    }
+    catch (error) {
+        console.error('Failed to delete image:', error);
+        return { success: false };
+    }
+});
+// 画像コピーハンドラ（インポート用）
+ipcMain.handle('image:import', async (_, sourcePath, projectId) => {
+    // プロジェクトパスを取得
+    const projectPath = await getProjectPath(projectId);
+    const imageId = crypto.randomUUID();
+    const ext = path.extname(sourcePath).toLowerCase();
+    // プロジェクトの画像ディレクトリを作成
+    const projectDir = path.join(projectPath, 'images');
+    await fs.mkdir(projectDir, { recursive: true });
+    // ファイルをコピー
+    const fileName = `${imageId}${ext}`;
+    const destPath = path.join(projectDir, fileName);
+    await fs.copyFile(sourcePath, destPath);
+    // ファイル情報を取得
+    const stats = await fs.stat(destPath);
+    // MIMEタイプを判定
+    const mimeTypeMap = {
+        '.png': 'image/png',
+        '.jpg': 'image/jpeg',
+        '.jpeg': 'image/jpeg',
+        '.gif': 'image/gif',
+        '.webp': 'image/webp',
+    };
+    const mimeType = mimeTypeMap[ext] || 'image/jpeg';
+    // 画像サイズはデフォルト値（実際のサイズは取得が複雑なため）
+    const imageAsset = {
+        id: imageId,
+        filePath: destPath,
+        sourceType: 'imported',
+        metadata: {
+            width: 1920,
+            height: 1080,
+            mimeType,
+            fileSize: stats.size,
+            createdAt: new Date().toISOString(),
+            tags: [],
+        },
+    };
+    return imageAsset;
+});

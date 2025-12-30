@@ -212,28 +212,6 @@ async function withRetry<T>(
   throw lastError;
 }
 
-let cachedGcloudAccessToken: { token: string; fetchedAtMs: number } | null = null;
-
-async function getGcloudAccessToken(): Promise<string | null> {
-  try {
-    const nowMs = Date.now();
-    if (cachedGcloudAccessToken && nowMs - cachedGcloudAccessToken.fetchedAtMs < 5 * 60 * 1000) {
-      return cachedGcloudAccessToken.token;
-    }
-
-    const { stdout } = await execFileAsync('gcloud', [
-      'auth',
-      'application-default',
-      'print-access-token',
-    ]);
-    const token = stdout.trim();
-    if (token) cachedGcloudAccessToken = { token, fetchedAtMs: nowMs };
-    return token ? token : null;
-  } catch {
-    return null;
-  }
-}
-
 async function synthesizeGoogleTts(
   text: string,
   options: TTSOptions,

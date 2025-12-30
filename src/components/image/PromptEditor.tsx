@@ -8,14 +8,7 @@ interface PromptEditorProps {
   isGenerating?: boolean;
 }
 
-// スタイルプリセット
-const STYLE_PRESETS = [
-  { id: 'news_broadcast', label: 'ニュース報道', description: 'プロフェッショナルなニュース映像風' },
-  { id: 'documentary', label: 'ドキュメンタリー', description: 'ドキュメンタリー映像風' },
-  { id: 'infographic', label: 'インフォグラフィック', description: 'データビジュアライゼーション' },
-  { id: 'photorealistic', label: 'フォトリアリスティック', description: '写真のようなリアルな映像' },
-  { id: 'illustration', label: 'イラストレーション', description: 'イラスト風の表現' },
-];
+const FIXED_STYLE_PRESET = 'news_broadcast';
 
 export function PromptEditor({
   prompt,
@@ -25,31 +18,28 @@ export function PromptEditor({
 }: PromptEditorProps) {
   const [editedPrompt, setEditedPrompt] = useState(prompt.prompt);
   const [editedNegativePrompt, setEditedNegativePrompt] = useState(prompt.negativePrompt || '');
-  const [selectedStylePreset, setSelectedStylePreset] = useState(prompt.stylePreset);
   const [isAdvancedMode, setIsAdvancedMode] = useState(false);
 
   // パート選択切替時に、前のプロンプト編集状態が残らないよう同期する
   useEffect(() => {
     setEditedPrompt(prompt.prompt);
     setEditedNegativePrompt(prompt.negativePrompt || '');
-    setSelectedStylePreset(prompt.stylePreset);
   }, [prompt.id, prompt.prompt, prompt.negativePrompt, prompt.stylePreset]);
 
   const hasChanges = useMemo(() => {
     const baseNegative = prompt.negativePrompt || '';
     return (
       editedPrompt !== prompt.prompt ||
-      editedNegativePrompt !== baseNegative ||
-      selectedStylePreset !== prompt.stylePreset
+      editedNegativePrompt !== baseNegative
     );
-  }, [editedNegativePrompt, editedPrompt, prompt.negativePrompt, prompt.prompt, prompt.stylePreset, selectedStylePreset]);
+  }, [editedNegativePrompt, editedPrompt, prompt.negativePrompt, prompt.prompt]);
 
   const handleSave = () => {
     onSave({
       ...prompt,
       prompt: editedPrompt,
       negativePrompt: editedNegativePrompt,
-      stylePreset: selectedStylePreset,
+      stylePreset: FIXED_STYLE_PRESET,
       version: prompt.version + 1,
     });
   };
@@ -59,36 +49,13 @@ export function PromptEditor({
       ...prompt,
       prompt: editedPrompt,
       negativePrompt: editedNegativePrompt,
-      stylePreset: selectedStylePreset,
+      stylePreset: FIXED_STYLE_PRESET,
     };
     onGenerate(updatedPrompt);
   };
 
   return (
     <div className="space-y-4">
-      {/* スタイルプリセット選択 */}
-      <div>
-        <label className="block text-sm font-medium text-gray-700 mb-2">
-          スタイルプリセット
-        </label>
-        <div className="grid grid-cols-2 gap-2">
-          {STYLE_PRESETS.map((preset) => (
-            <button
-              key={preset.id}
-              onClick={() => setSelectedStylePreset(preset.id)}
-              className={`p-3 text-left rounded-lg border transition-colors ${
-                selectedStylePreset === preset.id
-                  ? 'border-purple-500 bg-purple-50'
-                  : 'border-gray-200 hover:border-gray-300'
-              }`}
-            >
-              <div className="font-medium text-sm">{preset.label}</div>
-              <div className="text-xs text-gray-500 mt-0.5">{preset.description}</div>
-            </button>
-          ))}
-        </div>
-      </div>
-
       {/* プロンプト表示/編集 */}
       <div>
         <div className="flex items-center justify-between mb-2">
@@ -107,7 +74,7 @@ export function PromptEditor({
           value={editedPrompt}
           onChange={(e) => setEditedPrompt(e.target.value)}
           className="w-full h-32 px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500 resize-none"
-          placeholder="画像生成プロンプト（英語）"
+          placeholder="画像生成プロンプト（日本語）"
         />
       </div>
 
@@ -121,7 +88,7 @@ export function PromptEditor({
             value={editedNegativePrompt}
             onChange={(e) => setEditedNegativePrompt(e.target.value)}
             className="w-full h-20 px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500 resize-none"
-            placeholder="除外したい要素（英語）"
+            placeholder="除外したい要素（日本語）"
           />
         </div>
       )}

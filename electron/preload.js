@@ -25,14 +25,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
     },
     // 画像生成
     image: {
-        generate: (prompt) => ipcRenderer.invoke('image:generate', prompt),
-        generateBatch: (prompts) => ipcRenderer.invoke('image:generateBatch', prompts),
+        generate: (prompt, projectId) => ipcRenderer.invoke('image:generate', prompt, projectId),
+        generateBatch: (prompts, projectId) => ipcRenderer.invoke('image:generateBatch', prompts, projectId),
     },
     // TTS操作
     tts: {
-        generate: (text, options) => ipcRenderer.invoke('tts:generate', text, options),
-        generateBatch: (parts, options) => ipcRenderer.invoke('tts:generateBatch', parts, options),
-        getVoices: () => ipcRenderer.invoke('tts:getVoices'),
+        generate: (text, options, projectId) => ipcRenderer.invoke('tts:generate', text, options, projectId),
+        generateBatch: (parts, options, projectId) => ipcRenderer.invoke('tts:generateBatch', parts, options, projectId),
+        getVoices: (engine) => ipcRenderer.invoke('tts:getVoices', engine),
     },
     // 動画操作
     video: {

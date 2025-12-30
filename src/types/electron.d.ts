@@ -9,6 +9,13 @@ type AllowedEventChannel =
   | 'update:progress'
   | 'update:downloaded';
 
+type TokenUsage = {
+  inputTokens?: number;
+  outputTokens?: number;
+  totalTokens?: number;
+  model?: string;
+};
+
 interface ElectronAPI {
   project: {
     list: () => Promise<ProjectMeta[]>;
@@ -30,9 +37,15 @@ interface ElectronAPI {
   };
 
   ai: {
-    generateScript: (article: Article, options: ScriptOptions) => Promise<Part[]>;
+    generateScript: (
+      article: Article,
+      options: ScriptOptions
+    ) => Promise<{ parts: Part[]; usage?: TokenUsage | null }>;
     generateImagePrompts: (parts: Part[], article: Article, stylePreset: string) => Promise<ImagePrompt[]>;
-    applyComment: (target: CommentTarget, comment: string) => Promise<string>;
+    applyComment: (
+      target: CommentTarget,
+      comment: string
+    ) => Promise<{ text: string; usage?: TokenUsage | null }>;
   };
 
   image: {

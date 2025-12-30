@@ -64,6 +64,194 @@ interface ImagePrompt {
   createdAt: string;
 }
 
+type StylePresetConfig = {
+  id: string;
+  baseStyle: string;
+  colorPalette: string;
+  lighting: string;
+  background: string;
+  density: 'low' | 'medium' | 'high';
+  layoutVariants: {
+    dataAndLocation: string;
+    dataOnly: string;
+    locationOnly: string;
+    general: string;
+  };
+  negative: string;
+};
+
+const STYLE_PRESETS: Record<string, StylePresetConfig> = {
+  news_broadcast: {
+    id: 'news_broadcast',
+    baseStyle:
+      'Editorial infographic for a local news website, 16:9, clean layout, generous whitespace, illustration-like main visual with flexible info blocks, no photorealism',
+    colorPalette:
+      'white/light gray base, dark navy/charcoal structure, one subtle cyan/teal accent, low saturation',
+    lighting: 'soft natural light, matte, low contrast',
+    background: 'white to very light gray, minimal, no heavy grid, no vignette',
+    density: 'low',
+    layoutVariants: {
+      dataAndLocation: 'Flexible info blocks with generous margins; include chart-like and map-like elements if useful',
+      dataOnly: 'Flexible info blocks with generous margins; include a chart-like element if useful',
+      locationOnly: 'Flexible info blocks with generous margins; include a map-like element if useful',
+      general: 'Flexible info blocks with generous margins; keep a clear editorial grid',
+    },
+    negative:
+      '人物, 顔, 手, 群衆, 肖像, インタビュー, アナウンサー, 記者, 番組セット, テロップ, 速報帯, ティッカー, ニュース名, 番組名, 局名, 番組タイトル, カテゴリー名, ロゴ, 透かし, QRコード, 商標, 写真, 実写, 写真風, 写実, フォトリアル, フォトリアリスティック, カメラ風, 過度なネオン, 強コントラスト, ギラついた光沢, サイバーパンク, アニメ調',
+  },
+  documentary: {
+    id: 'documentary',
+    baseStyle:
+      'Editorial infographic for a local news website, 16:9, clean layout, generous whitespace, illustration-like main visual with flexible info blocks, no photorealism',
+    colorPalette:
+      'white/light gray base, dark navy/charcoal structure, one subtle cyan/teal accent, low saturation',
+    lighting: 'soft natural light, matte, low contrast',
+    background: 'white to very light gray, minimal, no heavy grid, no vignette',
+    density: 'low',
+    layoutVariants: {
+      dataAndLocation: 'Flexible info blocks with generous margins; include chart-like and map-like elements if useful',
+      dataOnly: 'Flexible info blocks with generous margins; include a chart-like element if useful',
+      locationOnly: 'Flexible info blocks with generous margins; include a map-like element if useful',
+      general: 'Flexible info blocks with generous margins; keep a clear editorial grid',
+    },
+    negative:
+      '人物, 顔, 手, 群衆, 肖像, インタビュー, アナウンサー, 記者, 番組セット, テロップ, 速報帯, ティッカー, ニュース名, 番組名, 局名, 番組タイトル, カテゴリー名, ロゴ, 透かし, QRコード, 商標, 写真, 実写, 写真風, 写実, フォトリアル, フォトリアリスティック, カメラ風, 過度なネオン, 強コントラスト, ギラついた光沢, サイバーパンク, アニメ調',
+  },
+  infographic: {
+    id: 'infographic',
+    baseStyle:
+      'Editorial infographic for a local news website, 16:9, clean layout, generous whitespace, illustration-like main visual with flexible info blocks, no photorealism',
+    colorPalette:
+      'white/light gray base, dark navy/charcoal structure, one subtle cyan/teal accent, low saturation',
+    lighting: 'soft natural light, matte, low contrast',
+    background: 'white to very light gray, minimal, no heavy grid, no vignette',
+    density: 'low',
+    layoutVariants: {
+      dataAndLocation: 'Flexible info blocks with generous margins; include chart-like and map-like elements if useful',
+      dataOnly: 'Flexible info blocks with generous margins; include a chart-like element if useful',
+      locationOnly: 'Flexible info blocks with generous margins; include a map-like element if useful',
+      general: 'Flexible info blocks with generous margins; keep a clear editorial grid',
+    },
+    negative:
+      '人物, 顔, 手, 群衆, 肖像, インタビュー, アナウンサー, 記者, 番組セット, テロップ, 速報帯, ティッカー, ニュース名, 番組名, 局名, 番組タイトル, カテゴリー名, ロゴ, 透かし, QRコード, 商標, 写真, 実写, 写真風, 写実, フォトリアル, フォトリアリスティック, カメラ風, 過度なネオン, 強コントラスト, ギラついた光沢, サイバーパンク, アニメ調',
+  },
+  photorealistic: {
+    id: 'photorealistic',
+    baseStyle:
+      'Editorial infographic for a local news website, 16:9, clean layout, generous whitespace, illustration-like main visual with flexible info blocks, no photorealism',
+    colorPalette:
+      'white/light gray base, dark navy/charcoal structure, one subtle cyan/teal accent, low saturation',
+    lighting: 'soft natural light, matte, low contrast',
+    background: 'white to very light gray, minimal, no heavy grid, no vignette',
+    density: 'low',
+    layoutVariants: {
+      dataAndLocation: 'Flexible info blocks with generous margins; include chart-like and map-like elements if useful',
+      dataOnly: 'Flexible info blocks with generous margins; include a chart-like element if useful',
+      locationOnly: 'Flexible info blocks with generous margins; include a map-like element if useful',
+      general: 'Flexible info blocks with generous margins; keep a clear editorial grid',
+    },
+    negative:
+      '人物, 顔, 手, 群衆, 肖像, インタビュー, アナウンサー, 記者, 番組セット, テロップ, 速報帯, ティッカー, ニュース名, 番組名, 局名, 番組タイトル, カテゴリー名, ロゴ, 透かし, QRコード, 商標, 写真, 実写, 写真風, 写実, フォトリアル, フォトリアリスティック, カメラ風, 過度なネオン, 強コントラスト, ギラついた光沢, サイバーパンク, アニメ調',
+  },
+  illustration: {
+    id: 'illustration',
+    baseStyle:
+      'Editorial infographic for a local news website, 16:9, clean layout, generous whitespace, illustration-like main visual with flexible info blocks, no photorealism',
+    colorPalette:
+      'white/light gray base, dark navy/charcoal structure, one subtle cyan/teal accent, low saturation',
+    lighting: 'soft natural light, matte, low contrast',
+    background: 'white to very light gray, minimal, no heavy grid, no vignette',
+    density: 'low',
+    layoutVariants: {
+      dataAndLocation: 'Flexible info blocks with generous margins; include chart-like and map-like elements if useful',
+      dataOnly: 'Flexible info blocks with generous margins; include a chart-like element if useful',
+      locationOnly: 'Flexible info blocks with generous margins; include a map-like element if useful',
+      general: 'Flexible info blocks with generous margins; keep a clear editorial grid',
+    },
+    negative:
+      '人物, 顔, 手, 群衆, 肖像, インタビュー, アナウンサー, 記者, 番組セット, テロップ, 速報帯, ティッカー, ニュース名, 番組名, 局名, 番組タイトル, カテゴリー名, ロゴ, 透かし, QRコード, 商標, 写真, 実写, 写真風, 写実, フォトリアル, フォトリアリスティック, カメラ風, 過度なネオン, 強コントラスト, ギラついた光沢, サイバーパンク, アニメ調',
+  },
+};
+
+const STYLE_PRESET_ALIASES: Record<string, string> = {
+  news_panel: 'news_broadcast',
+};
+
+function getStylePreset(stylePreset: string): StylePresetConfig {
+  const resolved = STYLE_PRESET_ALIASES[stylePreset] || stylePreset;
+  return STYLE_PRESETS[resolved] || STYLE_PRESETS.news_broadcast;
+}
+
+const IMAGE_SYSTEM_PROMPT_CORE = `You are generating slide images for a local business & culture news website.
+Interpret the USER prompt as slide composition instructions.
+- Main visual: an illustration-like hero depiction (no people).
+- Info block: if it mentions map/chart/diagram, render it as a simplified graphic.
+- Text: include readable text only if specified in the USER prompt; keep it short and legible.
+Avoid photorealistic or photographic rendering. Do not use photos or camera-like realism.
+Do not add page titles, headers, labels, or editorial captions unless the USER explicitly requests them.
+Do not generate generic labels like "Editorial infographic" or site/category titles.
+Respect the requested layout and any specified info-block count.
+Only use information implied by the USER prompt; do not add extra elements.
+No people, no faces, no logos, no watermarks.
+`;
+
+function normalizeNegativePrompt(value: string): string {
+  const raw = value.trim();
+  if (!raw) return '';
+  const withoutPrefix = raw.replace(/^strictly avoid:\s*/i, '');
+  const tokens = withoutPrefix
+    .split(/[,、\n]/)
+    .map((token) => token.trim())
+    .filter((token) => token.length > 0)
+    .map((token) => token.replace(/^no\s+/i, ''));
+  const seen = new Set<string>();
+  const deduped = tokens.filter((token) => {
+    const key = token.toLowerCase();
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+  return deduped.join(', ');
+}
+
+function getAspectRatioLabel(aspectRatio: ImagePrompt['aspectRatio']): string {
+  switch (aspectRatio) {
+    case '1:1':
+      return 'square';
+    case '9:16':
+      return 'vertical';
+    default:
+      return 'horizontal';
+  }
+}
+
+function buildImagePromptText(prompt: ImagePrompt): string {
+  const styleConfig = getStylePreset('news_broadcast');
+  const dimensions = getDimensions(prompt.aspectRatio);
+  const styleLines = [
+    styleConfig.baseStyle,
+    `- Color: ${styleConfig.colorPalette}`,
+    `- Lighting: ${styleConfig.lighting}`,
+    `- Background: ${styleConfig.background}`,
+    `- Information density: ${styleConfig.density}`,
+  ].join('\n');
+  const constraintsLine = `Aspect ratio: ${prompt.aspectRatio} (${getAspectRatioLabel(
+    prompt.aspectRatio
+  )}). Target resolution: ${dimensions.width}x${dimensions.height}. Keep this aspect ratio strictly.`;
+  const negativeRaw = normalizeNegativePrompt(prompt.negativePrompt || styleConfig.negative);
+  const strictlyAvoidLine = negativeRaw ? `Strictly avoid: ${negativeRaw}` : '';
+
+  return [
+    `SYSTEM:\n${IMAGE_SYSTEM_PROMPT_CORE}`,
+    `Style:\n${styleLines}`,
+    `Constraints:\n${constraintsLine}`,
+    strictlyAvoidLine,
+    `USER:\n${prompt.prompt}`,
+  ]
+    .filter((part) => part && part.length > 0)
+    .join('\n\n');
+}
+
 // 画像アセットの型
 interface ImageAsset {
   id: string;
@@ -169,13 +357,7 @@ ipcMain.handle(
       model: 'gemini-3-pro-image-preview',
     });
 
-    // 日本語ニュース向けのシステム指示を追加
-    const japaneseNewsContext = `日本の報道番組向けのインフォグラフィック画像を生成してください。
-日本人視聴者向けのデザインで、信頼性があり、プロフェッショナルな印象を与える画像にしてください。
-人物、顔、キャスター、記者は含めないでください。`;
-
-    // スタイルプリセットを反映したプロンプトを構築
-    const enhancedPrompt = `${japaneseNewsContext}\n\n${prompt.prompt}`;
+    const enhancedPrompt = buildImagePromptText(prompt);
 
     const imageId = crypto.randomUUID();
     const dimensions = getDimensions(prompt.aspectRatio);
@@ -265,15 +447,10 @@ ipcMain.handle(
 
     console.log('[image:generateBatch] Starting batch generation for', prompts.length, 'prompts');
 
-    // 日本語ニュース向けのシステム指示を追加（全件共通）
-    const japaneseNewsContext = `日本の報道番組向けのインフォグラフィック画像を生成してください。
-日本人視聴者向けのデザインで、信頼性があり、プロフェッショナルな印象を与える画像にしてください。
-人物、顔、キャスター、記者は含めないでください。`;
-
     const settled = await Promise.all(
       prompts.map(async (prompt, index) => {
         try {
-          const enhancedPrompt = `${japaneseNewsContext}\n\n${prompt.prompt}`;
+          const enhancedPrompt = buildImagePromptText(prompt);
 
           console.log(
             `[image:generateBatch] Generating image ${index + 1}/${prompts.length}:`,

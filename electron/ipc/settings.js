@@ -4,7 +4,6 @@ import * as path from 'path';
 // 設定ファイルのパス
 const getSettingsPath = () => path.join(app.getPath('userData'), 'settings.json');
 const getSecretsPath = () => path.join(app.getPath('userData'), 'secrets.enc');
-// デフォルト設定
 const defaultSettings = {
     // TTS設定
     ttsEngine: 'gemini_tts',
@@ -19,6 +18,8 @@ const defaultSettings = {
     videoFps: 30,
     videoBitrate: '8M',
     audioBitrate: '192k',
+    // パート切替後、読み上げ開始までの「間」（秒）
+    videoPartLeadInSec: 0.3,
     openingVideoPath: '',
     endingVideoPath: '',
     // その他
@@ -33,10 +34,13 @@ async function readSettings() {
         const settingsPath = getSettingsPath();
         const content = await fs.readFile(settingsPath, 'utf-8');
         const merged = { ...defaultSettings, ...JSON.parse(content) };
+        // 旧ボイス名の移行
         if (merged.ttsVoice === 'ja-JP-Chirp3-HD-Aoife') {
             merged.ttsVoice = defaultSettings.ttsVoice;
         }
+        // 本アプリでは Gemini TTS をデフォルト運用にする
         merged.ttsEngine = 'gemini_tts';
+        // 旧Google/macos系のボイス名が残っている場合はGemini側のデフォルトへ寄せる
         if (!merged.ttsVoice || merged.ttsVoice.includes('-')) {
             merged.ttsVoice = defaultSettings.ttsVoice;
         }
@@ -133,7 +137,7 @@ ipcMain.handle('settings:testConnection', async (_, service, inputApiKey) => {
             return { success: true, message: '接続成功', latencyMs };
         }
         else {
-            const errorData = await response.json().catch(() => ({}));
+            const errorData = (await response.json().catch(() => ({})));
             return {
                 success: false,
                 message: `接続失敗: ${response.status} ${errorData.error?.message || response.statusText}`,
