@@ -128,6 +128,7 @@ ${article.bodyText}
 2. 各パートは約${targetDuration}秒（日本語で約${Math.round(targetDuration * 4)}文字）のナレーションになるようにしてください
 3. 視聴者が理解しやすいよう、論理的な流れで構成してください
 4. 重要な情報を漏らさないようにしてください
+5. 最後のパートの末尾に「以上、ニュースをお届けしました」を入れてください
 
 ## 出力形式
 以下のJSON形式で出力してください：
@@ -188,6 +189,7 @@ ipcMain.handle(
 
     const parsed = JSON.parse(content);
     const now = new Date().toISOString();
+    const closingLine = '以上、ニュースをお届けしました';
 
     // パートデータを整形
     const parts: GeneratedPart[] = parsed.parts.map(
@@ -209,6 +211,14 @@ ipcMain.handle(
         scriptModifiedByUser: false,
       })
     );
+    if (parts.length > 0) {
+      const lastIndex = parts.length - 1;
+      const last = parts[lastIndex];
+      if (!last.scriptText.includes(closingLine)) {
+        const separator = last.scriptText.endsWith('\n') ? '' : '\n';
+        parts[lastIndex] = { ...last, scriptText: `${last.scriptText}${separator}${closingLine}` };
+      }
+    }
 
     return {
       parts,
