@@ -1,9 +1,8 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { Header, WorkflowNav } from '../components/layout';
-import { ImageAssignment, ImageGallery, PromptEditor } from '../components/image';
+import { ImageAssignment, PromptEditor } from '../components/image';
 import type { Project, ImageAssetRef, ImagePrompt } from '../schemas';
-import { toLocalFileUrl } from '../utils/toLocalFileUrl';
 import { createGeminiImageUsageRecord, createOpenAIUsageRecord } from '../utils/usage';
 
 export function ImageManagePage() {
@@ -16,7 +15,6 @@ export function ImageManagePage() {
   const [error, setError] = useState<string | null>(null);
   const [isGeneratingPrompts, setIsGeneratingPrompts] = useState(false);
   const [isGeneratingImage, setIsGeneratingImage] = useState(false);
-  const [selectedTab, setSelectedTab] = useState<'parts' | 'imported' | 'thumbnail'>('parts');
 
   const latestPromptByPartId = useMemo(() => {
     const map = new Map<string, ImagePrompt>();
@@ -225,7 +223,7 @@ export function ImageManagePage() {
         project.article.importedImages.find((img) => img.id === imageId);
       if (!image) return;
 
-      if (!confirm('この画像を削除しますか？\n※割り当て/サムネイルからも自動的に解除されます')) return;
+      if (!confirm('この画像を削除しますか？\n※割り当てからも自動的に解除されます')) return;
 
       try {
         const result = await window.electronAPI.image.delete(image.filePath);
@@ -283,22 +281,6 @@ export function ImageManagePage() {
     [project]
   );
 
-  // サムネイル選択
-  const handleSelectThumbnail = useCallback(
-    async (imageId: string) => {
-      if (!project) return;
-
-      const updatedProject = {
-        ...project,
-        thumbnail: { imageId },
-        updatedAt: new Date().toISOString(),
-      };
-
-      await window.electronAPI.project.save(updatedProject);
-      setProject(updatedProject);
-    },
-    [project]
-  );
 
   // 選択中のパート
   const selectedPart = project?.parts.find((p) => p.id === selectedPartId);
@@ -329,12 +311,9 @@ export function ImageManagePage() {
     )
   ) || [];
 
-  // インポート画像
-  const importedImages = project?.article.importedImages || [];
-
   const candidateImagesForPart = useMemo(() => {
-    return [...selectedPartImages, ...importedImages];
-  }, [importedImages, selectedPartImages]);
+    return selectedPartImages;
+  }, [selectedPartImages]);
 
   // パートへの割り当て（panelImages）更新
   const handleUpdatePanelImages = useCallback(
@@ -494,42 +473,7 @@ export function ImageManagePage() {
 
         {/* メインコンテンツ */}
         <div className="flex-1 overflow-auto p-6">
-          {/* タブ */}
-          <div className="flex gap-4 border-b border-gray-200 mb-6">
-            <button
-              onClick={() => setSelectedTab('parts')}
-              className={`px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors ${
-                selectedTab === 'parts'
-                  ? 'border-blue-600 text-blue-600'
-                  : 'border-transparent text-gray-500 hover:text-gray-700'
-              }`}
-            >
-              パート画像
-            </button>
-            <button
-              onClick={() => setSelectedTab('imported')}
-              className={`px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors ${
-                selectedTab === 'imported'
-                  ? 'border-blue-600 text-blue-600'
-                  : 'border-transparent text-gray-500 hover:text-gray-700'
-              }`}
-            >
-              インポート画像 ({importedImages.length})
-            </button>
-            <button
-              onClick={() => setSelectedTab('thumbnail')}
-              className={`px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors ${
-                selectedTab === 'thumbnail'
-                  ? 'border-blue-600 text-blue-600'
-                  : 'border-transparent text-gray-500 hover:text-gray-700'
-              }`}
-            >
-              サムネイル
-            </button>
-          </div>
-
-          {/* パート画像タブ */}
-          {selectedTab === 'parts' && selectedPart && (
+          {selectedPart && (
             <div className="space-y-6">
               <div className="bg-white rounded-lg border border-gray-200 p-6">
                 <h3 className="text-lg font-semibold text-gray-900 mb-2">
@@ -569,71 +513,6 @@ export function ImageManagePage() {
                   onChange={(next) => handleUpdatePanelImages(selectedPart.id, next)}
                   onDeleteImage={handleDeleteImage}
                 />
-              </div>
-            </div>
-          )}
-
-          {/* インポート画像タブ */}
-          {selectedTab === 'imported' && (
-            <ImageGallery
-              images={importedImages}
-              title="インポートした画像"
-              onDeleteImage={handleDeleteImage}
-              emptyMessage="インポートした画像はありません"
-            />
-          )}
-
-          {/* サムネイルタブ */}
-          {selectedTab === 'thumbnail' && (
-            <div className="space-y-6">
-              <div className="bg-white rounded-lg border border-gray-200 p-6">
-                <h3 className="text-lg font-semibold text-gray-900 mb-4">
-                  サムネイル選択
-                </h3>
-                <p className="text-sm text-gray-500 mb-4">
-                  動画のサムネイルとして使用する画像を選択してください
-                </p>
-
-                {(() => {
-                  const allImages = [...project.images, ...importedImages];
-                  const currentThumbnail = project.thumbnail?.imageId
-                    ? allImages.find((img) => img.id === project.thumbnail?.imageId)
-                    : undefined;
-
-                  return (
-                    <>
-                      {/* 現在のサムネイル */}
-                      {project.thumbnail && (
-                        <div className="mb-6">
-                          <h4 className="text-sm font-medium text-gray-700 mb-2">現在のサムネイル</h4>
-                          <div className="w-64">
-                            {currentThumbnail && (
-                              <img
-                                src={toLocalFileUrl(currentThumbnail.filePath)}
-                                alt="サムネイル"
-                                className="w-full rounded-lg border border-blue-500"
-                              />
-                            )}
-                            {!currentThumbnail && (
-                              <div className="text-sm text-gray-500 bg-gray-50 border border-gray-200 rounded-lg p-4">
-                                サムネイル画像が見つかりません
-                              </div>
-                            )}
-                          </div>
-                        </div>
-                      )}
-
-                      {/* 全画像から選択 */}
-                      <ImageGallery
-                        images={allImages}
-                        selectedImageIds={project.thumbnail ? [project.thumbnail.imageId] : []}
-                        onSelectImage={handleSelectThumbnail}
-                        title="画像を選択"
-                        emptyMessage="画像がありません。先に画像を生成/インポートしてください。"
-                      />
-                    </>
-                  );
-                })()}
               </div>
             </div>
           )}
