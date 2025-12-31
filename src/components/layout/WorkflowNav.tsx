@@ -33,8 +33,9 @@ function computeProgress(project?: Project | null) {
     safeTrim(project?.article?.title).length > 0 &&
     safeTrim(project?.article?.bodyText).length > 0;
 
+  const partIdSet = new Set(parts.map((p) => p.id));
   const partsWithPrompt = project?.prompts
-    ? new Set(project.prompts.map((p) => p.partId)).size
+    ? new Set(project.prompts.filter((p) => partIdSet.has(p.partId)).map((p) => p.partId)).size
     : 0;
   const partsWithAssignedImages = parts.filter((p) => (p.panelImages?.length ?? 0) > 0).length;
   const partsWithAudio = parts.filter((p) => Boolean(p.audio)).length;

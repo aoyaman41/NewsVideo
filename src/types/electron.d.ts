@@ -46,6 +46,11 @@ interface ElectronAPI {
       article: Article,
       stylePreset: string
     ) => Promise<{ prompts: ImagePrompt[]; usage?: TokenUsage | null }>;
+    generateImagePromptForTarget: (
+      parts: Part[],
+      article: Article,
+      targetId: string
+    ) => Promise<{ prompt: ImagePrompt; usage?: TokenUsage | null }>;
     applyComment: (
       target: CommentTarget,
       comment: string
@@ -103,6 +108,7 @@ interface Project extends ProjectMeta {
   images: ImageAsset[];
   prompts: ImagePrompt[];
   audio: AudioAsset[];
+  usage: UsageRecord[];
   thumbnail?: ImageAssetRef;
 }
 
@@ -142,6 +148,18 @@ interface ImageAsset {
     promptId?: string;
     tags: string[];
   };
+}
+
+interface UsageRecord {
+  id: string;
+  provider: 'openai' | 'gemini';
+  category: 'text' | 'image' | 'tts';
+  model: string;
+  operation: string;
+  inputTokens?: number;
+  outputTokens?: number;
+  imageCount?: number;
+  createdAt: string;
 }
 
 interface ImageAssetRef {

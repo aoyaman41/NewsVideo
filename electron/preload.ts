@@ -38,6 +38,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('ai:generateScript', article, options),
     generateImagePrompts: (parts: unknown[], article: unknown, stylePreset: string) =>
       ipcRenderer.invoke('ai:generateImagePrompts', parts, article, stylePreset),
+    generateImagePromptForTarget: (parts: unknown[], article: unknown, targetId: string) =>
+      ipcRenderer.invoke('ai:generateImagePromptForTarget', parts, article, targetId),
     applyComment: (target: unknown, comment: string) =>
       ipcRenderer.invoke('ai:applyComment', target, comment),
   },

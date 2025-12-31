@@ -5,7 +5,9 @@ interface PromptEditorProps {
   prompt: ImagePrompt;
   onSave: (updatedPrompt: ImagePrompt) => void;
   onGenerate: (prompt: ImagePrompt) => void;
+  onRegenerate?: () => void;
   isGenerating?: boolean;
+  isRegenerating?: boolean;
 }
 
 const FIXED_STYLE_PRESET = 'news_broadcast';
@@ -14,7 +16,9 @@ export function PromptEditor({
   prompt,
   onSave,
   onGenerate,
+  onRegenerate,
   isGenerating = false,
+  isRegenerating = false,
 }: PromptEditorProps) {
   const [editedPrompt, setEditedPrompt] = useState(prompt.prompt);
   const [editedNegativePrompt, setEditedNegativePrompt] = useState(prompt.negativePrompt || '');
@@ -124,6 +128,15 @@ export function PromptEditor({
 
       {/* アクションボタン */}
       <div className="flex justify-end gap-2 pt-4 border-t">
+        {onRegenerate && (
+          <button
+            onClick={onRegenerate}
+            disabled={isRegenerating}
+            className="px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed rounded-lg transition-colors"
+          >
+            {isRegenerating ? '再生成中...' : 'プロンプト再生成'}
+          </button>
+        )}
         <button
           onClick={handleSave}
           disabled={!hasChanges}

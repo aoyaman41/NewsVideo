@@ -14,6 +14,7 @@ export function ImageManagePage() {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [isGeneratingPrompts, setIsGeneratingPrompts] = useState(false);
+  const [isGeneratingSinglePrompt, setIsGeneratingSinglePrompt] = useState(false);
   const [isGeneratingImage, setIsGeneratingImage] = useState(false);
 
   const latestPromptByPartId = useMemo(() => {
@@ -36,9 +37,10 @@ export function ImageManagePage() {
 
   const activePrompts = useMemo(() => {
     if (!project) return [];
-    return project.parts
+    const partPrompts = project.parts
       .map((part) => latestPromptByPartId.get(part.id))
       .filter((prompt): prompt is ImagePrompt => !!prompt);
+    return partPrompts;
   }, [project, latestPromptByPartId]);
 
   const promptIdsWithAnyImage = useMemo(() => {
@@ -49,6 +51,7 @@ export function ImageManagePage() {
     }
     return set;
   }, [project]);
+
 
   const missingImagePromptCount = useMemo(() => {
     let missing = 0;
@@ -115,6 +118,40 @@ export function ImageManagePage() {
       setIsGeneratingPrompts(false);
     }
   }, [project]);
+
+  const handleGeneratePromptForTarget = useCallback(
+    async (targetId: string) => {
+      if (!project) return;
+
+      try {
+        setIsGeneratingSinglePrompt(true);
+        setError(null);
+
+        const result = await window.electronAPI.ai.generateImagePromptForTarget(
+          project.parts,
+          project.article,
+          targetId
+        );
+        const usageRecord = createOpenAIUsageRecord('image_prompt_regenerate', result.usage);
+
+        const updatedProject: Project = {
+          ...project,
+          prompts: [...project.prompts, result.prompt],
+          usage: usageRecord ? [...(project.usage ?? []), usageRecord] : project.usage ?? [],
+          updatedAt: new Date().toISOString(),
+        };
+
+        await window.electronAPI.project.save(updatedProject);
+        setProject(updatedProject);
+      } catch (err) {
+        console.error('Failed to generate prompt:', err);
+        setError(err instanceof Error ? err.message : 'プロンプト生成に失敗しました');
+      } finally {
+        setIsGeneratingSinglePrompt(false);
+      }
+    },
+    [project]
+  );
 
   // 画像生成
   const handleGenerateImage = useCallback(
@@ -488,14 +525,16 @@ export function ImageManagePage() {
                     prompt={selectedPartPrompt}
                     onSave={handleUpdatePrompt}
                     onGenerate={handleGenerateImage}
+                    onRegenerate={() => handleGeneratePromptForTarget(selectedPart.id)}
                     isGenerating={isGeneratingImage}
+                    isRegenerating={isGeneratingSinglePrompt}
                   />
                 ) : (
                   <div className="text-center py-8 text-gray-500">
                     <p>このパートのプロンプトはまだ生成されていません</p>
                     <button
-                      onClick={handleGeneratePrompts}
-                      disabled={isGeneratingPrompts}
+                      onClick={() => handleGeneratePromptForTarget(selectedPart.id)}
+                      disabled={isGeneratingSinglePrompt}
                       className="mt-4 px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 disabled:opacity-50"
                     >
                       プロンプトを生成

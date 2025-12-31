@@ -526,6 +526,99 @@ function normalizeVisualSlots(value, limit) {
         .filter((item) => item !== null);
     return items.slice(0, limit);
 }
+function buildImagePromptText(candidate, context) {
+    const p = candidate ?? {};
+    const sourceText = context.articleText;
+    const rawTopic = normalizeString(p.topic ?? p.subject);
+    const topic = rawTopic && sourceText.includes(rawTopic) && !containsForbiddenTerm(rawTopic) ? rawTopic : '';
+    const entities = normalizeStringArray(p.entities, 5).filter((item) => sourceText.includes(item) && !containsForbiddenTerm(item));
+    const locations = normalizeStringArray(p.locations, 3).filter((item) => sourceText.includes(item));
+    const quantFactsRaw = normalizeQuantFacts(p.quantFacts, 3);
+    const quantFacts = quantFactsRaw.filter((fact) => {
+        return ((fact.metric && sourceText.includes(fact.metric)) ||
+            (fact.value && sourceText.includes(fact.value)) ||
+            (fact.timeframe && sourceText.includes(fact.timeframe)));
+    });
+    const visualSlotsRaw = normalizeVisualSlots(p.visualSlots, 3);
+    const visualSlots = visualSlotsRaw
+        .map((slot) => {
+        const nextSource = slot.source && sourceText.includes(slot.source) ? slot.source : undefined;
+        return { ...slot, source: nextSource };
+    })
+        .filter((slot) => {
+        if (DATA_ELEMENT_TYPES.has(slot.elementType)) {
+            return quantFacts.length > 0;
+        }
+        if (LOCATION_ELEMENT_TYPES.has(slot.elementType)) {
+            return locations.length > 0;
+        }
+        return true;
+    });
+    const hasData = quantFacts.length > 0 || visualSlots.some((slot) => DATA_ELEMENT_TYPES.has(slot.elementType));
+    const hasLocation = locations.length > 0 || visualSlots.some((slot) => LOCATION_ELEMENT_TYPES.has(slot.elementType));
+    const resolvedSlots = visualSlots;
+    const layout = pickLayoutVariant(context.styleConfig, hasData, hasLocation);
+    const heroSubject = normalizeExtractedText(p.heroSubject, sourceText);
+    const heroSetting = normalizeExtractedText(p.heroSetting, sourceText);
+    const compositionNote = normalizeCompositionNote(p.compositionNote);
+    const layoutInstruction = compositionNote
+        ? '構図メモを優先し、情報の見せ方は自由に設計する'
+        : layout;
+    const mainVisualParts = [];
+    if (heroSubject)
+        mainVisualParts.push(heroSubject);
+    if (heroSetting)
+        mainVisualParts.push(heroSetting);
+    const mainVisualLine = mainVisualParts.length > 0
+        ? `メインビジュアル（イラスト風・人物なし）: ${mainVisualParts.join(' / ')}。`
+        : topic
+            ? `メインビジュアル（イラスト風・人物なし）: ${topic}。`
+            : 'メインビジュアル（イラスト風・人物なし）: 文字なしで抽象的に表現。';
+    const slotDescriptions = resolvedSlots.map((slot) => {
+        const label = ELEMENT_TYPE_LABELS_JA[slot.elementType];
+        const slotLabel = SLOT_LABELS_JA[slot.slot];
+        const sourceLabel = slot.source ? `（「${slot.source}」に基づく）` : '';
+        const qualifier = CHART_LIKE_TYPES.has(slot.elementType)
+            ? '（簡略・アイコン風・ラベルなし）'
+            : '（簡略）';
+        return `${slotLabel}に${label}${sourceLabel}${qualifier}を配置してもよい`;
+    });
+    const slotLine = slotDescriptions.length > 0 ? `表示候補: ${slotDescriptions.join(' / ')}` : '';
+    const optionalHints = [];
+    if (slotDescriptions.length === 0) {
+        if (hasData)
+            optionalHints.push('データは図表風で示してよい');
+        if (hasLocation)
+            optionalHints.push('場所は地図風で示してよい');
+    }
+    const optionalLine = optionalHints.length > 0 ? `必要に応じて${optionalHints.join('、')}。` : '';
+    const detailLines = [];
+    if (entities.length > 0) {
+        detailLines.push(`必要なら${entities.join('、')}をアイコンやシルエットで示す。`);
+    }
+    if (locations.length > 0) {
+        detailLines.push(`必要なら場所は${locations.join('、')}を参照（ラベルなし）。`);
+    }
+    if (quantFacts.length > 0) {
+        detailLines.push(`必要ならデータ要素: ${describeQuantFactsJa(quantFacts)}（アイコン風・ラベルなし）。`);
+    }
+    const purposeLine = 'スライド目的: 地域密着のビジネス＆カルチャーニュース向け。余白多めの編集レイアウト。';
+    const infoLine = '情報の見せ方は内容に合わせて自由に設計（カード/比較/タイムライン/フロー/地図/図表/箇条書きなど）。';
+    const textLine = 'テキストは必要に応じて短く配置してよい（見出し・要点程度）。';
+    const promptParts = [
+        `レイアウト: ${layoutInstruction}`,
+        purposeLine,
+        mainVisualLine,
+        '表現はイラスト風（写真・実写は避ける）。',
+        compositionNote ? `構図メモ: ${compositionNote}` : '',
+        infoLine,
+        ...detailLines,
+        slotLine,
+        optionalLine,
+        textLine,
+    ].filter((part) => part && part.length > 0);
+    return promptParts.join(' ');
+}
 // 画像プロンプト生成ハンドラ
 ipcMain.handle('ai:generateImagePrompts', async (_, parts, article, stylePreset) => {
     const apiKey = await readApiKey('openai');
@@ -650,98 +743,10 @@ JSONのみを出力してください。`,
     }
     const now = new Date().toISOString();
     const promptsArray = Array.isArray(resolvedParsed.prompts) ? resolvedParsed.prompts : [];
+    const promptContext = { articleText, styleConfig };
     const prompts = parts.map((part, index) => {
         const candidate = promptsArray[index];
-        const p = candidate && typeof candidate === 'object'
-            ? candidate
-            : {};
-        const sourceText = articleText;
-        const rawTopic = normalizeString(p.topic ?? p.subject);
-        const topic = rawTopic && sourceText.includes(rawTopic) && !containsForbiddenTerm(rawTopic) ? rawTopic : '';
-        const entities = normalizeStringArray(p.entities, 5).filter((item) => sourceText.includes(item) && !containsForbiddenTerm(item));
-        const locations = normalizeStringArray(p.locations, 3).filter((item) => sourceText.includes(item));
-        const quantFactsRaw = normalizeQuantFacts(p.quantFacts, 3);
-        const quantFacts = quantFactsRaw.filter((fact) => {
-            return ((fact.metric && sourceText.includes(fact.metric)) ||
-                (fact.value && sourceText.includes(fact.value)) ||
-                (fact.timeframe && sourceText.includes(fact.timeframe)));
-        });
-        const visualSlotsRaw = normalizeVisualSlots(p.visualSlots, 3);
-        const visualSlots = visualSlotsRaw
-            .map((slot) => {
-            const nextSource = slot.source && sourceText.includes(slot.source) ? slot.source : undefined;
-            return { ...slot, source: nextSource };
-        })
-            .filter((slot) => {
-            if (DATA_ELEMENT_TYPES.has(slot.elementType)) {
-                return quantFacts.length > 0;
-            }
-            if (LOCATION_ELEMENT_TYPES.has(slot.elementType)) {
-                return locations.length > 0;
-            }
-            return true;
-        });
-        const hasData = quantFacts.length > 0 || visualSlots.some((slot) => DATA_ELEMENT_TYPES.has(slot.elementType));
-        const hasLocation = locations.length > 0 || visualSlots.some((slot) => LOCATION_ELEMENT_TYPES.has(slot.elementType));
-        const resolvedSlots = visualSlots;
-        const layout = pickLayoutVariant(styleConfig, hasData, hasLocation);
-        const heroSubject = normalizeExtractedText(p.heroSubject, sourceText);
-        const heroSetting = normalizeExtractedText(p.heroSetting, sourceText);
-        const compositionNote = normalizeCompositionNote(p.compositionNote);
-        const layoutInstruction = compositionNote
-            ? '構図メモを優先し、情報の見せ方は自由に設計する'
-            : layout;
-        const mainVisualParts = [];
-        if (heroSubject)
-            mainVisualParts.push(heroSubject);
-        if (heroSetting)
-            mainVisualParts.push(heroSetting);
-        const mainVisualLine = mainVisualParts.length > 0
-            ? `メインビジュアル（イラスト風・人物なし）: ${mainVisualParts.join(' / ')}。`
-            : topic
-                ? `メインビジュアル（イラスト風・人物なし）: ${topic}。`
-                : 'メインビジュアル（イラスト風・人物なし）: 文字なしで抽象的に表現。';
-        const slotDescriptions = resolvedSlots.map((slot) => {
-            const label = ELEMENT_TYPE_LABELS_JA[slot.elementType];
-            const slotLabel = SLOT_LABELS_JA[slot.slot];
-            const sourceLabel = slot.source ? `（「${slot.source}」に基づく）` : '';
-            const qualifier = CHART_LIKE_TYPES.has(slot.elementType)
-                ? '（簡略・アイコン風・ラベルなし）'
-                : '（簡略）';
-            return `${slotLabel}に${label}${sourceLabel}${qualifier}を配置してもよい`;
-        });
-        const slotLine = slotDescriptions.length > 0 ? `表示候補: ${slotDescriptions.join(' / ')}` : '';
-        const optionalHints = [];
-        if (slotDescriptions.length === 0) {
-            if (hasData)
-                optionalHints.push('データは図表風で示してよい');
-            if (hasLocation)
-                optionalHints.push('場所は地図風で示してよい');
-        }
-        const optionalLine = optionalHints.length > 0 ? `必要に応じて${optionalHints.join('、')}。` : '';
-        const detailLines = [];
-        if (entities.length > 0) {
-            detailLines.push(`必要なら${entities.join('、')}をアイコンやシルエットで示す。`);
-        }
-        if (locations.length > 0) {
-            detailLines.push(`必要なら場所は${locations.join('、')}を参照（ラベルなし）。`);
-        }
-        if (quantFacts.length > 0) {
-            detailLines.push(`必要ならデータ要素: ${describeQuantFactsJa(quantFacts)}（アイコン風・ラベルなし）。`);
-        }
-        const promptParts = [
-            `レイアウト: ${layoutInstruction}`,
-            'スライド目的: 地域密着のビジネス＆カルチャーニュース向け。余白多めの編集レイアウト。',
-            mainVisualLine,
-            '表現はイラスト風（写真・実写は避ける）。',
-            compositionNote ? `構図メモ: ${compositionNote}` : '',
-            '情報の見せ方は内容に合わせて自由に設計（カード/比較/タイムライン/フロー/地図/図表/箇条書きなど）。',
-            ...detailLines,
-            slotLine,
-            optionalLine,
-            'テキストは必要に応じて短く配置してよい（見出し・要点程度）。',
-        ].filter((part) => part && part.length > 0);
-        const finalPrompt = promptParts.join(' ');
+        const finalPrompt = buildImagePromptText(candidate, promptContext);
         return {
             id: crypto.randomUUID(),
             partId: part?.id || '',
@@ -755,6 +760,145 @@ JSONのみを出力してください。`,
     });
     return {
         prompts,
+        usage: mapOpenAIUsage(response.usage, response.model),
+    };
+});
+// 単一ターゲットの画像プロンプト生成ハンドラ
+ipcMain.handle('ai:generateImagePromptForTarget', async (_, parts, article, targetId) => {
+    const apiKey = await readApiKey('openai');
+    if (!apiKey) {
+        throw new Error('OpenAI APIキーが設定されていません。設定画面からAPIキーを入力してください。');
+    }
+    const openai = new OpenAI({ apiKey });
+    const styleConfig = getStylePreset('news_broadcast');
+    const cleanedBodyText = sanitizeArticleText(article.bodyText ?? '');
+    const bodyTextForPrompt = cleanedBodyText || article.bodyText || '';
+    const articleText = `${article.title}\n${article.source ?? ''}\n${bodyTextForPrompt}`.trim();
+    const articleContext = `タイトル: ${article.title}\n${article.source ? `出典: ${article.source}` : ''}\n本文:\n${bodyTextForPrompt}`;
+    const targetPart = parts.find((part) => part.id === targetId);
+    if (!targetPart) {
+        throw new Error('対象パートが見つかりませんでした。');
+    }
+    const partsDescription = `パート1: ${targetPart.title}`;
+    const systemPrompt = `あなたは「記事本文から、画像生成に必要な情報だけを抽出して仕様化する」担当です。
+入力は「記事全文」と「パート見出し」です。出力は指定スキーマの JSON オブジェクトのみです（説明文・Markdown・前置き禁止）。
+
+目的:
+- 指定パートごとに、本文に書かれた事実にもとづき topic / entities / locations / quantFacts / visualSlots を作成し、
+  さらに主ビジュアルの要素（heroSubject/heroSetting）と構図メモ（compositionNote）を短く作成する。
+
+厳守ルール（本文由来フィールド）:
+1) 推測・補完・一般知識の追加は禁止。本文に書かれていない内容は出力しない。
+2) 次のフィールドに入れる文字列は、必ず「記事本文に含まれる表現」をそのまま抜き出す（言い換え禁止）。
+   - topic
+   - entities の各要素
+   - locations の各要素
+   - quantFacts の各要素：metric / value / unit / timeframe
+   - visualSlots の各要素：source
+   - heroSubject
+   - heroSetting
+   ※抜き出しできない場合は \"\" または [] にする。
+3) 次のフィールドは制御用の固定値なので、本文に存在しなくても出力してよい（候補以外は出さない）。
+   - quantFacts.direction（increase|decrease|stable|comparison|unknown）
+   - visualSlots.elementType（指定候補のみ）
+   - visualSlots.slot（指定候補のみ）
+   - JSONのキー名
+4) 番組・放送に関する名称（番組名、局名、番組タイトル等）に該当する語は出力しない（本文にあっても除外）。
+5) 人物・顔・キャスター・記者・インタビューを想起させる要素は出力しない（entities にも入れない）。
+6) 入力に混入し得るノイズ（ファイルパス、URL、コード断片、ログ、設定文、署名、UI文言など）は本文事実ではないため無視し、
+   topic/entities/locations/source/heroSubject/heroSetting に絶対に含めない。
+
+compositionNote（構図メモ）の制約:
+- compositionNote は 1〜2文の短文。
+- レイアウトや情報の見せ方を自由に提案する（例: 左右分割/上下分割/比較/タイムライン/フロー/箇条書き/カード/図など）。
+- 新しい事実・固有名詞・数字は追加しない。内容を指す場合は本文からの語句を引用して示す。
+
+抽出の目安:
+- entities は最大5件、locations は最大3件、quantFacts は最大3件。
+- visualSlots は0〜3件。source は本文からの短い抜き出し（長文禁止）。
+
+配列順:
+- prompts 配列は指定パート1件のみ。
+
+最終チェック:
+- topic/entities/locations/metric/value/unit/timeframe/source/heroSubject/heroSetting が本文中に存在しない場合は削除または空にする。
+- JSON以外を絶対に出力しない。`;
+    const userPrompt = `以下の「記事全文」「パート見出し」を基に、画像生成に必要な抽出情報を JSON で出力してください。
+本文由来フィールドは必ず本文からの抜き出しにしてください。本文に無い情報は空にしてください。
+入力にノイズ（ファイルパス、URL、コード断片、ログ等）が混ざる場合は無視してください。
+
+## 記事全文
+${articleContext}
+
+## パート見出し
+${partsDescription}
+
+## 要件
+- topic/entities/locations/quantFacts(metric,value,unit,timeframe)/visualSlots.source/heroSubject/heroSetting は本文からの抜き出しのみ
+- direction/elementType/slot は固定候補から選ぶ
+- compositionNote は1〜2文で、レイアウト/情報の見せ方を自由に提案（新しい事実は追加しない）
+- prompts 配列は指定パート1件のみ
+
+## 出力形式（JSONのみ）
+{
+  \"prompts\": [
+    {
+      \"topic\": \"\",
+      \"entities\": [],
+      \"locations\": [],
+      \"quantFacts\": [
+        { \"metric\": \"\", \"direction\": \"unknown\", \"value\": \"\", \"unit\": \"\", \"timeframe\": \"\" }
+      ],
+      \"visualSlots\": [
+        { \"slot\": \"left\", \"elementType\": \"diagram\", \"source\": \"\" }
+      ],
+      \"heroSubject\": \"\",
+      \"heroSetting\": \"\",
+      \"compositionNote\": \"\"
+    }
+  ]
+}
+
+JSONのみを出力してください。`;
+    const response = await withRetry(async () => {
+        return openai.chat.completions.create({
+            model: 'gpt-5.2',
+            messages: [
+                { role: 'system', content: systemPrompt },
+                { role: 'user', content: userPrompt },
+            ],
+            response_format: zodResponseFormat(ImagePromptExtractionSchema, 'image_prompt_extraction'),
+            temperature: 0.3,
+        });
+    });
+    const message = response.choices[0]?.message;
+    if (!message) {
+        throw new Error('AIからの応答が空でした');
+    }
+    if (message.refusal) {
+        throw new Error(`AIが拒否しました: ${message.refusal}`);
+    }
+    const parsed = message.parsed ?? null;
+    const fallbackParsed = !parsed && message.content ? JSON.parse(message.content) : null;
+    const resolvedParsed = parsed ?? fallbackParsed;
+    if (!resolvedParsed) {
+        throw new Error('AIからの応答が空でした');
+    }
+    const candidate = resolvedParsed.prompts?.[0];
+    const promptText = buildImagePromptText(candidate, { articleText, styleConfig });
+    const now = new Date().toISOString();
+    const prompt = {
+        id: crypto.randomUUID(),
+        partId: targetId,
+        stylePreset: styleConfig.id,
+        prompt: promptText,
+        negativePrompt: styleConfig.negative,
+        aspectRatio: '16:9',
+        version: 1,
+        createdAt: now,
+    };
+    return {
+        prompt,
         usage: mapOpenAIUsage(response.usage, response.model),
     };
 });
