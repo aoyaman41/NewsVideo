@@ -1,9 +1,13 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { Header, WorkflowNav } from '../components/layout';
 import { ArticleInput } from '../components/article';
-import type { ArticleInput as ArticleInputType, ImageAsset, Project } from '../schemas';
-import { createOpenAIUsageRecord } from '../utils/usage';
+import type { ArticleInput as ArticleInputType, AutoGenerationStatus, ImageAsset, Project } from '../schemas';
+import {
+  createGeminiImageUsageRecord,
+  createGeminiTtsUsageRecord,
+  createOpenAIUsageRecord,
+} from '../utils/usage';
 
 export function ArticleInputPage() {
   const { projectId } = useParams<{ projectId: string }>();
@@ -17,8 +21,18 @@ export function ArticleInputPage() {
   });
   const [images, setImages] = useState<ImageAsset[]>([]);
   const [isGenerating, setIsGenerating] = useState(false);
+  const [isAutoGenerating, setIsAutoGenerating] = useState(false);
+  const [autoStatus, setAutoStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [targetPartCount, setTargetPartCount] = useState<number>(5);
+  const autoCancelRef = useRef(false);
+  const isMountedRef = useRef(true);
+
+  useEffect(() => {
+    return () => {
+      isMountedRef.current = false;
+    };
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -41,6 +55,14 @@ export function ArticleInputPage() {
 
         const imported = (project.article?.importedImages ?? []) as ImageAsset[];
         setImages(imported);
+
+        if (project.autoGenerationStatus?.running) {
+          setIsAutoGenerating(true);
+          setAutoStatus(project.autoGenerationStatus.step ?? '自動生成中...');
+        } else {
+          setIsAutoGenerating(false);
+          setAutoStatus(null);
+        }
       } catch (err) {
         console.error('Failed to load project:', err);
         setError(err instanceof Error ? err.message : 'プロジェクトの読み込みに失敗しました');
@@ -52,6 +74,160 @@ export function ArticleInputPage() {
       cancelled = true;
     };
   }, [projectId]);
+
+  const notifyCompletion = (message: string) => {
+    if (!('Notification' in window)) {
+      alert(message);
+      return;
+    }
+
+    if (Notification.permission === 'granted') {
+      new Notification('自動生成完了', { body: message });
+      return;
+    }
+
+    if (Notification.permission !== 'denied') {
+      Notification.requestPermission().then((permission) => {
+        if (permission === 'granted') {
+          new Notification('自動生成完了', { body: message });
+        } else {
+          alert(message);
+        }
+      });
+      return;
+    }
+
+    alert(message);
+  };
+
+  const setProjectSafe = (next: Project | null) => {
+    if (!isMountedRef.current) return;
+    setProject(next);
+  };
+
+  const setErrorSafe = (next: string | null) => {
+    if (!isMountedRef.current) return;
+    setError(next);
+  };
+
+  const setAutoStatusSafe = (next: string | null) => {
+    if (!isMountedRef.current) return;
+    setAutoStatus(next);
+  };
+
+  const setIsAutoGeneratingSafe = (next: boolean) => {
+    if (!isMountedRef.current) return;
+    setIsAutoGenerating(next);
+  };
+
+  const updateAutoStatus = async (
+    project: Project,
+    patch: (Partial<AutoGenerationStatus> & { running: boolean }) & { lastVideoPath?: string | null }
+  ) => {
+    const now = new Date().toISOString();
+    let latestStatus = project.autoGenerationStatus;
+    if (projectId) {
+      try {
+        const latest = await window.electronAPI.project.load(projectId);
+        latestStatus = latest.autoGenerationStatus ?? latestStatus;
+      } catch {
+        // ignore
+      }
+    }
+    const startedAt = patch.startedAt ?? latestStatus?.startedAt ?? now;
+    const cancelRequested = patch.cancelRequested ?? latestStatus?.cancelRequested ?? false;
+    const isNewRun = patch.running && Boolean(patch.startedAt);
+    const finishedAt =
+      patch.running === false
+        ? patch.finishedAt ?? now
+        : isNewRun
+          ? undefined
+          : patch.finishedAt ?? latestStatus?.finishedAt;
+    const mergedSteps = {
+      ...(latestStatus?.steps ?? {}),
+      ...(patch.steps ?? {}),
+    };
+    const hasLastVideoPath = Object.prototype.hasOwnProperty.call(patch, 'lastVideoPath');
+    const lastVideoPathRaw = hasLastVideoPath ? patch.lastVideoPath : latestStatus?.lastVideoPath;
+    const lastVideoPath = lastVideoPathRaw || undefined;
+
+    project.autoGenerationStatus = {
+      running: patch.running,
+      step: patch.step ?? latestStatus?.step,
+      startedAt,
+      updatedAt: now,
+      finishedAt,
+      cancelRequested,
+      error: patch.error,
+      steps: Object.keys(mergedSteps).length > 0 ? mergedSteps : undefined,
+      lastVideoPath,
+    };
+    project.updatedAt = now;
+    await window.electronAPI.project.save(project);
+    setProjectSafe(project);
+    if (patch.step) {
+      setAutoStatusSafe(patch.step);
+    }
+  };
+
+  const ensureNotCancelled = async () => {
+    if (autoCancelRef.current) {
+      throw new Error('キャンセルしました');
+    }
+    if (!projectId) return;
+    try {
+      const latest = await window.electronAPI.project.load(projectId);
+      if (latest.autoGenerationStatus?.cancelRequested) {
+        throw new Error('キャンセルしました');
+      }
+    } catch (err) {
+      if (err instanceof Error && err.message.includes('キャンセル')) {
+        throw err;
+      }
+    }
+  };
+
+  const buildTtsOptions = (settings: { ttsEngine?: string; ttsVoice?: string; ttsSpeakingRate?: number; ttsPitch?: number }) => {
+    const voiceName = settings.ttsVoice || 'Charon';
+    const match = voiceName.match(/^([a-z]{2}-[A-Z]{2})/);
+    const languageCode = match?.[1] || 'ja-JP';
+
+    return {
+      ttsEngine: (settings.ttsEngine as 'google_tts' | 'gemini_tts' | 'macos_tts') || 'gemini_tts',
+      voiceName,
+      languageCode,
+      speakingRate: Number.isFinite(settings.ttsSpeakingRate) ? settings.ttsSpeakingRate! : 1.0,
+      pitch: Number.isFinite(settings.ttsPitch) ? settings.ttsPitch! : 0,
+      audioEncoding: 'MP3' as const,
+    };
+  };
+
+  const resolveVideoOptions = (
+    settings: {
+      videoResolution?: '1920x1080' | '1280x720' | '3840x2160';
+      videoFps?: number;
+      videoBitrate?: string;
+      audioBitrate?: string;
+      openingVideoPath?: string;
+      endingVideoPath?: string;
+    },
+    project: Project
+  ) => {
+    const safeName = project.name.replace(/[\\/:*?"<>|]/g, '_').slice(0, 80) || 'output';
+    const outputPath = `${project.path}/output/${safeName}.mp4`;
+
+    return {
+      outputPath,
+      renderOptions: {
+        resolution: settings.videoResolution ?? '1920x1080',
+        fps: settings.videoFps ?? 30,
+        videoBitrate: settings.videoBitrate ?? '8M',
+        audioBitrate: settings.audioBitrate ?? '192k',
+        includeOpening: Boolean(settings.openingVideoPath),
+        includeEnding: Boolean(settings.endingVideoPath),
+      },
+    };
+  };
 
   const handleSubmit = async (data: ArticleInputType) => {
     if (!projectId) return;
@@ -96,6 +272,319 @@ export function ArticleInputPage() {
     }
   };
 
+  const handleAutoSubmit = async (data: ArticleInputType, mode: 'resume' | 'restart') => {
+    if (!projectId) return;
+
+    setIsAutoGeneratingSafe(true);
+    setAutoStatusSafe('記事を保存中...');
+    setErrorSafe(null);
+    autoCancelRef.current = false;
+
+    try {
+      const project = await window.electronAPI.project.load(projectId);
+      if (project.autoGenerationStatus?.running) {
+        setProjectSafe(project);
+        setAutoStatusSafe(project.autoGenerationStatus.step ?? '自動生成中...');
+        setIsAutoGeneratingSafe(true);
+        setErrorSafe('既に自動生成中です');
+        return;
+      }
+      const startedAt = new Date().toISOString();
+      if (mode === 'restart') {
+        project.parts = [];
+        project.prompts = [];
+        project.images = [];
+        project.audio = [];
+        project.updatedAt = startedAt;
+        await window.electronAPI.project.save(project);
+        setProjectSafe(project);
+      }
+      project.article = {
+        title: data.title,
+        source: data.source,
+        bodyText: data.bodyText,
+        importedImages: images,
+      };
+      await updateAutoStatus(project, {
+        running: true,
+        step: '記事を保存中...',
+        startedAt,
+        cancelRequested: false,
+        error: undefined,
+        finishedAt: undefined,
+        steps: mode === 'restart'
+          ? { script: false, prompts: false, images: false, audio: false, video: false }
+          : undefined,
+        lastVideoPath: mode === 'restart' ? null : project.autoGenerationStatus?.lastVideoPath,
+      });
+      await ensureNotCancelled();
+
+      const computeStepState = (p: Project) => {
+        const parts = p.parts ?? [];
+        const total = parts.length;
+        const script = total > 0;
+        const partIdSet = new Set(parts.map((part) => part.id));
+        const promptsCount = p.prompts
+          ? new Set(p.prompts.filter((prompt) => partIdSet.has(prompt.partId)).map((p) => p.partId)).size
+          : 0;
+        const prompts = script && promptsCount === total;
+        const images = script && parts.every((part) => (part.panelImages?.length ?? 0) > 0);
+        const audio = script && parts.every((part) => Boolean(part.audio));
+        const video = Boolean(p.autoGenerationStatus?.lastVideoPath);
+        return { script, prompts, images, audio, video };
+      };
+
+      let steps = computeStepState(project);
+      await updateAutoStatus(project, { running: true, steps });
+
+      if (!steps.script) {
+        await updateAutoStatus(project, { running: true, step: 'スクリプトを生成中...' });
+        const scriptResult = await window.electronAPI.ai.generateScript(project.article, {
+          tone: 'news',
+          targetPartCount,
+        });
+        await ensureNotCancelled();
+        const scriptUsage = createOpenAIUsageRecord('script_generate', scriptResult.usage);
+        project.parts = scriptResult.parts;
+        if (scriptUsage) {
+          project.usage = [...(project.usage ?? []), scriptUsage];
+        }
+        project.updatedAt = new Date().toISOString();
+        await window.electronAPI.project.save(project);
+        setProjectSafe(project);
+        steps = computeStepState(project);
+        await updateAutoStatus(project, { running: true, step: 'スクリプト完了', steps: { script: true } });
+        await ensureNotCancelled();
+      }
+
+      if (!steps.prompts) {
+        const partIdSet = new Set(project.parts.map((part) => part.id));
+        const promptsByPart = new Set(
+          project.prompts.filter((prompt) => partIdSet.has(prompt.partId)).map((p) => p.partId)
+        );
+        const missingParts = project.parts.filter((part) => !promptsByPart.has(part.id));
+
+        if (missingParts.length > 0) {
+          await updateAutoStatus(project, { running: true, step: '画像プロンプトを生成中...' });
+          const promptResult = await window.electronAPI.ai.generateImagePrompts(
+            missingParts,
+            project.article,
+            'news_broadcast'
+          );
+          await ensureNotCancelled();
+          const promptUsage = createOpenAIUsageRecord('image_prompt_generate', promptResult.usage);
+          project.prompts = [...project.prompts, ...promptResult.prompts];
+          if (promptUsage) {
+            project.usage = [...(project.usage ?? []), promptUsage];
+          }
+          project.updatedAt = new Date().toISOString();
+          await window.electronAPI.project.save(project);
+          setProjectSafe(project);
+        }
+        steps = computeStepState(project);
+        await updateAutoStatus(project, { running: true, step: '画像プロンプト完了', steps: { prompts: true } });
+        await ensureNotCancelled();
+      }
+
+      if (!steps.images) {
+        await updateAutoStatus(project, { running: true, step: '画像を生成中...' });
+        const partById = new Map(project.parts.map((p) => [p.id, p]));
+        const latestPromptByPart = new Map<string, typeof project.prompts[number]>();
+        for (const prompt of project.prompts) {
+          if (!partById.has(prompt.partId)) continue;
+          const current = latestPromptByPart.get(prompt.partId);
+          if (!current || prompt.createdAt >= current.createdAt) {
+            latestPromptByPart.set(prompt.partId, prompt);
+          }
+        }
+
+        const imagesByPrompt = new Map<string, ImageAsset>();
+        for (const image of project.images) {
+          if (image.metadata.promptId && !imagesByPrompt.has(image.metadata.promptId)) {
+            imagesByPrompt.set(image.metadata.promptId, image);
+          }
+        }
+
+        const now = new Date().toISOString();
+        const nextPartsById = new Map(project.parts.map((p) => [p.id, p]));
+        const promptsToGenerate: typeof project.prompts = [];
+
+        for (const part of project.parts) {
+          if ((part.panelImages?.length ?? 0) > 0) continue;
+          const prompt = latestPromptByPart.get(part.id);
+          if (!prompt) continue;
+          const existingImage = imagesByPrompt.get(prompt.id);
+          if (existingImage) {
+            nextPartsById.set(part.id, {
+              ...part,
+              panelImages: [{ imageId: existingImage.id }],
+              updatedAt: now,
+            });
+          } else {
+            promptsToGenerate.push(prompt);
+          }
+        }
+
+        let imageAssets: ImageAsset[] = [];
+        if (promptsToGenerate.length > 0) {
+          imageAssets = await window.electronAPI.image.generateBatch(promptsToGenerate, projectId);
+          await ensureNotCancelled();
+        }
+
+        const imageUsage = createGeminiImageUsageRecord(
+          imageAssets.length,
+          'image_generate_batch'
+        );
+
+        const promptById = new Map(promptsToGenerate.map((p) => [p.id, p]));
+        for (const imageAsset of imageAssets) {
+          const promptId = imageAsset.metadata.promptId;
+          if (!promptId) continue;
+          const p = promptById.get(promptId);
+          if (!p) continue;
+          const part = nextPartsById.get(p.partId);
+          if (!part) continue;
+          if ((part.panelImages?.length ?? 0) > 0) continue;
+          nextPartsById.set(p.partId, { ...part, panelImages: [{ imageId: imageAsset.id }], updatedAt: now });
+        }
+
+        project.parts = project.parts.map((p) => nextPartsById.get(p.id) ?? p);
+        project.images = [...project.images, ...imageAssets];
+        if (imageUsage) {
+          project.usage = [...(project.usage ?? []), imageUsage];
+        }
+        project.updatedAt = now;
+        await window.electronAPI.project.save(project);
+        setProjectSafe(project);
+        steps = computeStepState(project);
+        await updateAutoStatus(project, { running: true, step: '画像生成完了', steps: { images: true } });
+        await ensureNotCancelled();
+      }
+
+      if (!steps.audio) {
+        await updateAutoStatus(project, { running: true, step: '音声を生成中...' });
+        const settings = await window.electronAPI.settings.get();
+        await ensureNotCancelled();
+        const ttsOptions = buildTtsOptions(settings);
+        const nextAudioAssets = [...project.audio];
+        const nextParts = project.parts.map((p) => ({ ...p }));
+        const audioUsageRecords = [];
+
+        for (const part of nextParts) {
+          await ensureNotCancelled();
+          if (part.audio) continue;
+          const result = await window.electronAPI.tts.generate(part.scriptText, ttsOptions, projectId);
+          await ensureNotCancelled();
+          const usageRecord = createGeminiTtsUsageRecord('tts_generate', result.usage);
+          if (usageRecord) audioUsageRecords.push(usageRecord);
+          part.audio = result.audio;
+          part.updatedAt = new Date().toISOString();
+          nextAudioAssets.push(result.audio);
+        }
+
+        if (audioUsageRecords.length > 0) {
+          project.usage = [...(project.usage ?? []), ...audioUsageRecords];
+        }
+        project.audio = nextAudioAssets;
+        project.parts = nextParts;
+        project.updatedAt = new Date().toISOString();
+        await window.electronAPI.project.save(project);
+        setProjectSafe(project);
+        steps = computeStepState(project);
+        await updateAutoStatus(project, { running: true, step: '音声生成完了', steps: { audio: true } });
+        await ensureNotCancelled();
+      }
+
+      steps = computeStepState(project);
+      if (!steps.video) {
+        await updateAutoStatus(project, { running: true, step: '動画を書き出し中...' });
+        const settings = await window.electronAPI.settings.get();
+        const videoOptions = resolveVideoOptions(settings, project);
+        await ensureNotCancelled();
+        const renderResult = await window.electronAPI.video.render(
+          project,
+          videoOptions.renderOptions,
+          videoOptions.outputPath
+        );
+        await updateAutoStatus(project, {
+          running: false,
+          step: '完了',
+          cancelRequested: false,
+          steps: { video: true },
+          lastVideoPath: renderResult.outputPath,
+        });
+        notifyCompletion(`動画の生成が完了しました: ${renderResult.outputPath}`);
+      } else {
+        await updateAutoStatus(project, { running: false, step: '完了', cancelRequested: false });
+        notifyCompletion('既に動画まで生成済みのため、再生成はスキップしました。');
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : '自動生成に失敗しました';
+      if (message.includes('キャンセル')) {
+        setErrorSafe('キャンセルしました');
+        if (projectId) {
+          try {
+            const latest = await window.electronAPI.project.load(projectId);
+            await updateAutoStatus(latest, { running: false, step: 'キャンセル', cancelRequested: false });
+          } catch {
+            // ignore
+          }
+        }
+      } else {
+        console.error('Auto generation failed:', err);
+        setErrorSafe(message);
+        if (projectId) {
+          try {
+            const latest = await window.electronAPI.project.load(projectId);
+            await updateAutoStatus(latest, { running: false, step: 'エラー', error: message, cancelRequested: false });
+          } catch {
+            // ignore
+          }
+        }
+      }
+    } finally {
+      setIsAutoGeneratingSafe(false);
+      setAutoStatusSafe(null);
+      autoCancelRef.current = false;
+    }
+  };
+
+  const handleAutoCancel = async () => {
+    if (!projectId) return;
+    autoCancelRef.current = true;
+    setAutoStatusSafe('キャンセル中...');
+    try {
+      const latest = await window.electronAPI.project.load(projectId);
+      if (latest.autoGenerationStatus?.running) {
+        const now = new Date().toISOString();
+        latest.autoGenerationStatus = {
+          ...latest.autoGenerationStatus,
+          running: true,
+          step: 'キャンセル中...',
+          updatedAt: now,
+          cancelRequested: true,
+        };
+        latest.updatedAt = now;
+        await window.electronAPI.project.save(latest);
+        setProjectSafe(latest);
+      }
+      await window.electronAPI.video.cancelRender();
+    } catch {
+      // ignore
+    }
+  };
+
+  const handleAutoResume = async (data: ArticleInputType) => {
+    await handleAutoSubmit(data, 'resume');
+  };
+
+  const handleAutoRestart = async (data: ArticleInputType) => {
+    await handleAutoSubmit(data, 'restart');
+  };
+
+  const autoRunning = Boolean(isAutoGenerating || project?.autoGenerationStatus?.running);
+  const currentAutoStatus = autoStatus ?? project?.autoGenerationStatus?.step;
+
   return (
     <div className="flex-1 flex flex-col overflow-hidden">
       <Header
@@ -111,6 +600,11 @@ export function ArticleInputPage() {
           {error && (
             <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg">
               {error}
+            </div>
+          )}
+          {autoRunning && currentAutoStatus && (
+            <div className="bg-blue-50 border border-blue-200 text-blue-700 px-4 py-3 rounded-lg">
+              自動生成中: {currentAutoStatus}
             </div>
           )}
 
@@ -143,7 +637,11 @@ export function ArticleInputPage() {
             <ArticleInput
               defaultValues={articleData}
               onSubmit={handleSubmit}
+              onAutoSubmit={handleAutoResume}
+              onAutoRestart={handleAutoRestart}
+              onAutoCancel={handleAutoCancel}
               isLoading={isGenerating}
+              isAutoLoading={autoRunning}
             />
           </div>
 

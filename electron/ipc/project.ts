@@ -174,6 +174,7 @@ ipcMain.handle('project:save', async (_, project: {
   audio: unknown;
   usage?: unknown;
   thumbnail?: unknown;
+  autoGenerationStatus?: unknown;
 }) => {
   const now = new Date().toISOString();
   const projectPath = project.path;
@@ -200,6 +201,7 @@ ipcMain.handle('project:save', async (_, project: {
   meta.name = project.name;
   meta.updatedAt = now;
   meta.thumbnail = project.thumbnail;
+  meta.autoGenerationStatus = project.autoGenerationStatus;
 
   // 全データを保存
   await Promise.all([

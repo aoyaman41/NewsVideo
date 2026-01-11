@@ -65,8 +65,16 @@ interface ElectronAPI {
   };
 
   tts: {
-    generate: (text: string, options: TTSOptions, projectId: string) => Promise<AudioAsset>;
-    generateBatch: (parts: Part[], options: TTSOptions, projectId: string) => Promise<AudioAsset[]>;
+    generate: (
+      text: string,
+      options: TTSOptions,
+      projectId: string
+    ) => Promise<{ audio: AudioAsset; usage?: TokenUsage | null }>;
+    generateBatch: (
+      parts: Part[],
+      options: TTSOptions,
+      projectId: string
+    ) => Promise<Array<{ audio: AudioAsset; usage?: TokenUsage | null }>>;
     getVoices: (engine?: 'google_tts' | 'gemini_tts' | 'macos_tts') => Promise<VoiceInfo[]>;
   };
 
@@ -110,6 +118,7 @@ interface Project extends ProjectMeta {
   audio: AudioAsset[];
   usage: UsageRecord[];
   thumbnail?: ImageAssetRef;
+  autoGenerationStatus?: AutoGenerationStatus;
 }
 
 interface Article {
@@ -160,6 +169,24 @@ interface UsageRecord {
   outputTokens?: number;
   imageCount?: number;
   createdAt: string;
+}
+
+interface AutoGenerationStatus {
+  running: boolean;
+  step?: string;
+  startedAt?: string;
+  updatedAt?: string;
+  finishedAt?: string;
+  cancelRequested?: boolean;
+  error?: string;
+  steps?: {
+    script?: boolean;
+    prompts?: boolean;
+    images?: boolean;
+    audio?: boolean;
+    video?: boolean;
+  };
+  lastVideoPath?: string;
 }
 
 interface ImageAssetRef {

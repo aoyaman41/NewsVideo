@@ -95,6 +95,29 @@ export const usageRecordSchema = z.object({
 
 export type UsageRecord = z.infer<typeof usageRecordSchema>;
 
+// 自動生成ステータス
+export const autoGenerationStatusSchema = z.object({
+  running: z.boolean(),
+  step: z.string().optional(),
+  startedAt: z.string().datetime().optional(),
+  updatedAt: z.string().datetime().optional(),
+  finishedAt: z.string().datetime().optional(),
+  cancelRequested: z.boolean().optional(),
+  error: z.string().optional(),
+  steps: z
+    .object({
+      script: z.boolean().optional(),
+      prompts: z.boolean().optional(),
+      images: z.boolean().optional(),
+      audio: z.boolean().optional(),
+      video: z.boolean().optional(),
+    })
+    .optional(),
+  lastVideoPath: z.string().optional(),
+});
+
+export type AutoGenerationStatus = z.infer<typeof autoGenerationStatusSchema>;
+
 // パート
 export const partSchema = z.object({
   id: z.string().uuid(),
@@ -145,6 +168,7 @@ export const projectSchema = projectMetaSchema.extend({
   audio: z.array(audioAssetSchema),
   usage: z.array(usageRecordSchema),
   thumbnail: imageAssetRefSchema.optional(),
+  autoGenerationStatus: autoGenerationStatusSchema.optional(),
 });
 
 export type Project = z.infer<typeof projectSchema>;

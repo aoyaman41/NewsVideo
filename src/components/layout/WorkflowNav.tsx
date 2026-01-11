@@ -124,9 +124,11 @@ export function WorkflowNav({
 }) {
   const navigate = useNavigate();
   const [costRates, setCostRates] = useState<CostRates>(DEFAULT_COST_RATES);
-  const progress = useMemo(() => computeProgress(project), [project]);
+  const [liveProject, setLiveProject] = useState<Project | null | undefined>(project);
+  const displayProject = liveProject ?? project;
+  const progress = useMemo(() => computeProgress(displayProject), [displayProject]);
   const currentIndex = useMemo(() => steps.findIndex((s) => s.key === current), [current]);
-  const usageRecords = project?.usage ?? [];
+  const usageRecords = displayProject?.usage ?? [];
   const totalCost = useMemo(
     () => sumUsageCostUsd(usageRecords, costRates),
     [usageRecords, costRates]
@@ -139,6 +141,12 @@ export function WorkflowNav({
     () => sumUsageCostUsd(usageRecords.filter((r) => r.provider === 'gemini'), costRates),
     [usageRecords, costRates]
   );
+  const autoStatus = displayProject?.autoGenerationStatus;
+  const autoRunning = Boolean(autoStatus?.running);
+
+  useEffect(() => {
+    setLiveProject(project);
+  }, [project]);
 
   useEffect(() => {
     let cancelled = false;
@@ -159,6 +167,30 @@ export function WorkflowNav({
     };
   }, []);
 
+  useEffect(() => {
+    if (!projectId) return;
+    let cancelled = false;
+    const intervalMs = autoRunning ? 2000 : 5000;
+
+    const tick = async () => {
+      try {
+        const latest = await window.electronAPI.project.load(projectId);
+        if (cancelled) return;
+        setLiveProject(latest);
+      } catch {
+        // ignore
+      }
+    };
+
+    void tick();
+    const interval = setInterval(tick, intervalMs);
+
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [projectId, autoRunning]);
+
   return (
     <nav aria-label="Workflow" className="titlebar-no-drag bg-white border-b border-gray-200">
       <div className="px-6 py-3">
@@ -169,12 +201,12 @@ export function WorkflowNav({
               {currentIndex >= 0 ? `${currentIndex + 1}/${steps.length}` : `1/${steps.length}`}
             </span>
           </div>
-          {project && (
+          {displayProject && (
             <div className="text-xs text-gray-500 truncate">
               {progress.totalParts > 0 ? `パート ${progress.totalParts}` : 'パート未生成'}
             </div>
           )}
-          {project && (
+          {displayProject && (
             <div
               className="text-xs text-gray-600"
               title={`OpenAI ${formatUsd(openaiCost)} / Gemini ${formatUsd(geminiCost)}`}
@@ -183,12 +215,17 @@ export function WorkflowNav({
             </div>
           )}
         </div>
+        {autoRunning && (
+          <div className="mt-2 text-xs text-blue-700">
+            自動生成中: {autoStatus?.step ?? '処理中'}
+          </div>
+        )}
 
         <ol className="mt-3 flex items-center gap-3 overflow-x-auto pb-1">
           {steps.map((step, idx) => {
             const isCurrent = step.key === current;
             const status = statusFor(step.key, progress);
-            const detail = project ? detailFor(step.key, progress) : '';
+            const detail = displayProject ? detailFor(step.key, progress) : '';
             const styles = stylesFor(status, isCurrent);
 
             const connectorClass =
