@@ -1,4 +1,4 @@
-import { dialog, ipcMain } from 'electron';
+import { dialog, ipcMain, shell } from 'electron';
 import * as fs from 'fs/promises';
 import * as path from 'path';
 
@@ -82,5 +82,24 @@ ipcMain.handle('file:listFiles', async (_, dirPath: string) => {
     return results;
   } catch {
     return [];
+  }
+});
+
+ipcMain.handle('file:revealInFinder', async (_, targetPath: string) => {
+  try {
+    let openPath = targetPath;
+    try {
+      const stat = await fs.stat(targetPath);
+      if (stat.isFile()) {
+        openPath = path.dirname(targetPath);
+      }
+    } catch {
+      // ignore and try opening as-is
+    }
+    await shell.openPath(openPath);
+    return { success: true };
+  } catch (error) {
+    console.error('Failed to open path:', error);
+    return { success: false };
   }
 });

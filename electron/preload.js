@@ -49,6 +49,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
         writeFile: (filePath, content) => ipcRenderer.invoke('file:writeFile', filePath, content),
         exists: (filePath) => ipcRenderer.invoke('file:exists', filePath),
         listFiles: (dirPath) => ipcRenderer.invoke('file:listFiles', dirPath),
+        revealInFinder: (targetPath) => ipcRenderer.invoke('file:revealInFinder', targetPath),
     },
     // イベント購読（セキュリティ: ホワイトリスト制限）
     events: {

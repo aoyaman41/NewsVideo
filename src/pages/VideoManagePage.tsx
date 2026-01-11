@@ -277,6 +277,11 @@ export function VideoManagePage() {
     setOutputPath(`${dir}/${safeName}.mp4`);
   }, [project]);
 
+  const handleRevealOutput = useCallback(async () => {
+    if (!outputPath.trim()) return;
+    await window.electronAPI.file.revealInFinder(outputPath.trim());
+  }, [outputPath]);
+
   const handleGeneratePreview = useCallback(async () => {
     if (!selectedPartId) return;
     try {
@@ -657,6 +662,14 @@ export function VideoManagePage() {
                     disabled={isRendering || isPreviewing}
                   >
                     参照
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleRevealOutput}
+                    className="px-3 py-2 text-sm border border-gray-300 rounded-lg hover:bg-gray-50"
+                    disabled={!outputPath.trim()}
+                  >
+                    Finderで開く
                   </button>
                 </div>
                 <p className="text-xs text-gray-500 mt-1">

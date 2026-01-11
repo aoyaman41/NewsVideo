@@ -95,6 +95,7 @@ interface ElectronAPI {
     writeFile: (filePath: string, content: Buffer) => Promise<{ success: boolean }>;
     exists: (filePath: string) => Promise<boolean>;
     listFiles: (dirPath: string) => Promise<FileEntry[]>;
+    revealInFinder: (targetPath: string) => Promise<{ success: boolean }>;
   };
 
   events: {
