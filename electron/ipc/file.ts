@@ -1,5 +1,6 @@
 import { dialog, ipcMain } from 'electron';
 import * as fs from 'fs/promises';
+import * as path from 'path';
 
 type FileDialogOptions = {
   title?: string;
@@ -45,3 +46,41 @@ ipcMain.handle('file:writeFile', async (_, filePath: string, content: unknown) =
   return { success: true };
 });
 
+ipcMain.handle('file:exists', async (_, filePath: string) => {
+  try {
+    await fs.access(filePath);
+    return true;
+  } catch {
+    return false;
+  }
+});
+
+ipcMain.handle('file:listFiles', async (_, dirPath: string) => {
+  try {
+    const entries = await fs.readdir(dirPath, { withFileTypes: true });
+    const results = await Promise.all(
+      entries.map(async (entry) => {
+        const fullPath = path.join(dirPath, entry.name);
+        try {
+          const stat = await fs.stat(fullPath);
+          return {
+            path: fullPath,
+            name: entry.name,
+            isFile: entry.isFile(),
+            mtimeMs: stat.mtimeMs,
+          };
+        } catch {
+          return {
+            path: fullPath,
+            name: entry.name,
+            isFile: entry.isFile(),
+            mtimeMs: 0,
+          };
+        }
+      })
+    );
+    return results;
+  } catch {
+    return [];
+  }
+});

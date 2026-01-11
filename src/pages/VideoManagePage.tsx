@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { Header, WorkflowNav } from '../components/layout';
-import type { Project } from '../schemas';
+import type { AutoGenerationStatus, Project } from '../schemas';
 import { toLocalFileUrl } from '../utils/toLocalFileUrl';
 
 type RenderOptions = {
@@ -61,6 +61,33 @@ export function VideoManagePage() {
   const [showProgress, setShowProgress] = useState(false);
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const lastVideoPathRef = useRef<string | null>(null);
+
+  const resolveExistingVideoPath = useCallback(async (project: Project) => {
+    const lastPath = project.autoGenerationStatus?.lastVideoPath;
+    if (lastPath) {
+      try {
+        const exists = await window.electronAPI.file.exists(lastPath);
+        if (exists) return lastPath;
+      } catch {
+        return lastPath;
+      }
+    }
+
+    try {
+      const outputDir = `${project.path}/output`;
+      const entries = await window.electronAPI.file.listFiles(outputDir);
+      const candidates = entries
+        .filter((entry) => entry.isFile && entry.name.toLowerCase().endsWith('.mp4'))
+        .sort((a, b) => b.mtimeMs - a.mtimeMs);
+      const latest = candidates[0]?.path ?? null;
+      if (latest) return latest;
+      if (lastPath) return lastPath;
+      return null;
+    } catch {
+      return lastPath ?? null;
+    }
+  }, []);
 
   const missingAudioCount = useMemo(() => {
     if (!project) return 0;
@@ -77,6 +104,10 @@ export function VideoManagePage() {
   }, [project, selectedPartId]);
 
   const videoSrc = useMemo(() => (videoPath ? toLocalFileUrl(videoPath) : null), [videoPath]);
+
+  useEffect(() => {
+    lastVideoPathRef.current = videoPath;
+  }, [videoPath]);
 
   // src が同一のまま更新されるケースに備えて明示的に load する
   useEffect(() => {
@@ -176,6 +207,33 @@ export function VideoManagePage() {
 
         const safeName = loadedProject.name.replace(/[\\/:*?"<>|]/g, '_').slice(0, 80) || 'output';
         setOutputPath(`${loadedProject.path}/output/${safeName}.mp4`);
+
+        const existingVideoPath = await resolveExistingVideoPath(loadedProject);
+        if (existingVideoPath) {
+          setVideoPath(existingVideoPath);
+          if (existingVideoPath !== loadedProject.autoGenerationStatus?.lastVideoPath) {
+            const now = new Date().toISOString();
+            const current = loadedProject.autoGenerationStatus;
+            const nextStatus: AutoGenerationStatus = {
+              running: current?.running ?? false,
+              step: current?.running ? current?.step : current?.step ?? '完了',
+              startedAt: current?.startedAt,
+              updatedAt: now,
+              finishedAt: current?.running ? current?.finishedAt : now,
+              cancelRequested: current?.cancelRequested,
+              error: current?.error,
+              steps: { ...(current?.steps ?? {}), video: true },
+              lastVideoPath: existingVideoPath,
+            };
+            const updatedProject: Project = {
+              ...loadedProject,
+              autoGenerationStatus: nextStatus,
+              updatedAt: now,
+            };
+            await window.electronAPI.project.save(updatedProject);
+            setProject(updatedProject);
+          }
+        }
       } catch (err) {
         console.error('Failed to load project/settings:', err);
         setError(err instanceof Error ? err.message : '読み込みに失敗しました');
@@ -186,6 +244,30 @@ export function VideoManagePage() {
 
     load();
   }, [projectId]);
+
+  useEffect(() => {
+    if (!projectId) return;
+    let cancelled = false;
+    const interval = setInterval(async () => {
+      if (isRendering || isPreviewing) return;
+      try {
+        const latest = await window.electronAPI.project.load(projectId);
+        if (cancelled) return;
+        setProject(latest);
+        const candidate = await resolveExistingVideoPath(latest);
+        if (candidate && candidate !== lastVideoPathRef.current) {
+          setVideoPath(candidate);
+        }
+      } catch {
+        // ignore
+      }
+    }, 3000);
+
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [projectId, resolveExistingVideoPath, isRendering, isPreviewing]);
 
   const handleSelectOutputDir = useCallback(async () => {
     if (!project) return;
@@ -229,6 +311,30 @@ export function VideoManagePage() {
 
       const res = await window.electronAPI.video.render(project, renderOptions, outputPath.trim());
       setVideoPath(res.outputPath);
+      try {
+        const now = new Date().toISOString();
+        const current = project.autoGenerationStatus;
+        const nextStatus: AutoGenerationStatus = {
+          running: current?.running ?? false,
+          step: current?.running ? current?.step : '完了',
+          startedAt: current?.startedAt,
+          updatedAt: now,
+          finishedAt: current?.running ? current?.finishedAt : now,
+          cancelRequested: current?.cancelRequested,
+          error: current?.error,
+          steps: { ...(current?.steps ?? {}), video: true },
+          lastVideoPath: res.outputPath,
+        };
+        const updatedProject: Project = {
+          ...project,
+          autoGenerationStatus: nextStatus,
+          updatedAt: now,
+        };
+        await window.electronAPI.project.save(updatedProject);
+        setProject(updatedProject);
+      } catch {
+        // ignore
+      }
       setTimeout(() => {
         if (videoRef.current) videoRef.current.currentTime = 0;
       }, 0);

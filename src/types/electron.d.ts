@@ -93,6 +93,8 @@ interface ElectronAPI {
     selectDirectory: () => Promise<string | null>;
     readFile: (filePath: string) => Promise<Buffer>;
     writeFile: (filePath: string, content: Buffer) => Promise<{ success: boolean }>;
+    exists: (filePath: string) => Promise<boolean>;
+    listFiles: (dirPath: string) => Promise<FileEntry[]>;
   };
 
   events: {
@@ -294,6 +296,13 @@ interface FileDialogOptions {
   title?: string;
   filters?: Array<{ name: string; extensions: string[] }>;
   properties?: Array<'openFile' | 'openDirectory' | 'multiSelections'>;
+}
+
+interface FileEntry {
+  path: string;
+  name: string;
+  isFile: boolean;
+  mtimeMs: number;
 }
 
 // グローバル型定義

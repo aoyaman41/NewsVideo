@@ -76,6 +76,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     readFile: (filePath: string) => ipcRenderer.invoke('file:readFile', filePath),
     writeFile: (filePath: string, content: unknown) =>
       ipcRenderer.invoke('file:writeFile', filePath, content),
+    exists: (filePath: string) => ipcRenderer.invoke('file:exists', filePath),
+    listFiles: (dirPath: string) => ipcRenderer.invoke('file:listFiles', dirPath),
   },
 
   // イベント購読（セキュリティ: ホワイトリスト制限）

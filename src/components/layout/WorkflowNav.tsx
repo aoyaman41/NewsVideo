@@ -65,7 +65,7 @@ function statusFor(step: WorkflowStage, progress: ReturnType<typeof computeProgr
     case 'audio':
       return progress.allAudio ? 'done' : 'todo';
     case 'video':
-      return 'todo';
+      return progress.allAssignedImages && progress.allAudio ? 'done' : 'todo';
     default:
       return 'todo';
   }
