@@ -251,6 +251,7 @@ interface Settings {
   endingVideoPath: string;
   autoSaveInterval: number;
   defaultProjectDir: string;
+  cost?: CostRates;
 }
 
 type ApiKeyService = 'openai' | 'google_ai' | 'google_tts';
@@ -282,6 +283,23 @@ interface VoiceInfo {
   languageCodes: string[];
   gender: 'MALE' | 'FEMALE' | 'NEUTRAL';
   sampleRateHertz: number;
+}
+
+interface CostRates {
+  currency: 'USD';
+  openai: {
+    model: string;
+    inputPer1MTokensUsd: number;
+    outputPer1MTokensUsd: number;
+  };
+  gemini: {
+    ttsModel: string;
+    ttsInputPer1MTokensUsd: number;
+    ttsOutputPer1MTokensUsd: number;
+    imageModel: string;
+    imageInputPerImageUsd: number;
+    imageOutputPerImageUsd: number;
+  };
 }
 
 interface RenderOptions {

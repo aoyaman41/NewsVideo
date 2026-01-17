@@ -122,7 +122,10 @@ export function ArticleInputPage() {
 
   const updateAutoStatus = async (
     project: Project,
-    patch: (Partial<AutoGenerationStatus> & { running: boolean }) & { lastVideoPath?: string | null }
+    patch: (Partial<AutoGenerationStatus> & { running: boolean }) & {
+      clearLastVideoPath?: boolean;
+      lastVideoPath?: string;
+    }
   ) => {
     const now = new Date().toISOString();
     let latestStatus = project.autoGenerationStatus;
@@ -147,8 +150,13 @@ export function ArticleInputPage() {
       ...(latestStatus?.steps ?? {}),
       ...(patch.steps ?? {}),
     };
+    const shouldClear = patch.clearLastVideoPath === true;
     const hasLastVideoPath = Object.prototype.hasOwnProperty.call(patch, 'lastVideoPath');
-    const lastVideoPathRaw = hasLastVideoPath ? patch.lastVideoPath : latestStatus?.lastVideoPath;
+    const lastVideoPathRaw = shouldClear
+      ? undefined
+      : hasLastVideoPath
+        ? patch.lastVideoPath
+        : latestStatus?.lastVideoPath;
     const lastVideoPath = lastVideoPathRaw || undefined;
 
     project.autoGenerationStatus = {
@@ -315,7 +323,7 @@ export function ArticleInputPage() {
         steps: mode === 'restart'
           ? { script: false, prompts: false, images: false, audio: false, video: false }
           : undefined,
-        lastVideoPath: mode === 'restart' ? null : project.autoGenerationStatus?.lastVideoPath,
+        clearLastVideoPath: mode === 'restart',
       });
       await ensureNotCancelled();
 
