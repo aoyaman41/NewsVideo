@@ -54,6 +54,7 @@ function extractProjectId(pathname: string): string | null {
 
 export function Sidebar() {
   const location = useLocation();
+  const projectId = useMemo(() => extractProjectId(location.pathname), [location.pathname]);
   const [projectName, setProjectName] = useState<string>('');
   const [projectSummary, setProjectSummary] = useState<ReturnType<
     typeof summarizeProjectProgress
@@ -67,7 +68,6 @@ export function Sidebar() {
   }, [location.state]);
 
   useEffect(() => {
-    const projectId = extractProjectId(location.pathname);
     if (!projectId) {
       setProjectSummary(null);
       setProjectName('');
@@ -90,11 +90,15 @@ export function Sidebar() {
     };
 
     void load();
+    const interval = setInterval(() => {
+      void load();
+    }, 3000);
 
     return () => {
       cancelled = true;
+      clearInterval(interval);
     };
-  }, [location.pathname]);
+  }, [projectId]);
 
   const shouldShowReturnToWork = location.pathname === '/settings' && Boolean(returnTo);
 

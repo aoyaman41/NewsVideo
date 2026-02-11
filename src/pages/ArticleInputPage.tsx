@@ -97,6 +97,39 @@ export function ArticleInputPage() {
     };
   }, [projectId]);
 
+  useEffect(() => {
+    if (!projectId) return;
+
+    let cancelled = false;
+    const tick = async () => {
+      try {
+        const latest = await window.electronAPI.project.load(projectId);
+        if (cancelled) return;
+        setProject(latest);
+
+        if (latest.autoGenerationStatus?.running) {
+          setIsAutoGenerating(true);
+          setAutoStatus(latest.autoGenerationStatus.step ?? '自動生成中...');
+        } else {
+          setIsAutoGenerating(false);
+          setAutoStatus(null);
+        }
+      } catch {
+        // noop
+      }
+    };
+
+    void tick();
+    const interval = setInterval(() => {
+      void tick();
+    }, 3000);
+
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [projectId]);
+
   const notifyCompletion = (message: string) => {
     if (!('Notification' in window)) {
       alert(message);

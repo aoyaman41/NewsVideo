@@ -6,7 +6,8 @@ import { stageLabel, summarizeProjectProgress } from '../../utils/projectHealth'
 import type { WorkflowStage } from '../../types/ui';
 import { Badge } from '../ui';
 
-type StepStatus = 'done' | 'todo' | 'current';
+type NonCurrentStepStatus = 'done' | 'warning' | 'todo';
+type StepStatus = NonCurrentStepStatus | 'current';
 
 type Step = {
   key: WorkflowStage;
@@ -22,17 +23,44 @@ const steps: Step[] = [
   { key: 'video', label: '動画', to: (id) => `/projects/${id}/video` },
 ];
 
-function stepStatus(
-  stage: WorkflowStage,
-  current: WorkflowStage,
-  completedSteps: number
-): StepStatus {
-  if (stage === current) return 'current';
-  const stepIndex = steps.findIndex((s) => s.key === stage);
-  const currentIndex = steps.findIndex((s) => s.key === current);
-  if (stepIndex < 0 || currentIndex < 0) return 'todo';
-  if (stepIndex < currentIndex && completedSteps > stepIndex) return 'done';
-  return 'todo';
+function hasText(value: string | undefined | null): boolean {
+  return Boolean(value && value.trim().length > 0);
+}
+
+function computeStepStatuses(
+  project: Project | null | undefined,
+  summary: ReturnType<typeof summarizeProjectProgress> | null
+): Record<WorkflowStage, NonCurrentStepStatus> {
+  if (!project || !summary) {
+    return {
+      article: 'todo',
+      script: 'todo',
+      image: 'todo',
+      audio: 'todo',
+      video: 'todo',
+    };
+  }
+
+  const hasArticle = hasText(project.article?.title) && hasText(project.article?.bodyText);
+  const hasScript = summary.partCount > 0;
+  const hasImage = hasScript && summary.missingPrompts === 0 && summary.missingImages === 0;
+  const hasAudio = hasScript && summary.missingAudio === 0;
+  const hasVideo = summary.hasVideoOutput;
+
+  const imageInProgress =
+    hasScript &&
+    !hasImage &&
+    (summary.missingPrompts < summary.partCount || summary.missingImages < summary.partCount);
+  const audioInProgress = hasScript && !hasAudio && summary.missingAudio < summary.partCount;
+  const videoInProgress = !hasVideo && (hasImage || hasAudio || imageInProgress || audioInProgress);
+
+  return {
+    article: hasArticle ? 'done' : 'todo',
+    script: hasScript ? 'done' : 'todo',
+    image: hasImage ? 'done' : imageInProgress ? 'warning' : 'todo',
+    audio: hasAudio ? 'done' : audioInProgress ? 'warning' : 'todo',
+    video: hasVideo ? 'done' : videoInProgress ? 'warning' : 'todo',
+  };
 }
 
 function stylesFor(status: StepStatus): string {
@@ -41,6 +69,9 @@ function stylesFor(status: StepStatus): string {
   }
   if (status === 'done') {
     return 'border-emerald-200 bg-emerald-50 text-emerald-700';
+  }
+  if (status === 'warning') {
+    return 'border-amber-200 bg-amber-50 text-amber-800';
   }
   return 'border-[var(--nv-color-border)] bg-white text-slate-600 hover:bg-slate-50';
 }
@@ -63,6 +94,10 @@ export function WorkflowNav({
   const summary = useMemo(
     () => (displayProject ? summarizeProjectProgress(displayProject) : null),
     [displayProject]
+  );
+  const stepStatuses = useMemo(
+    () => computeStepStatuses(displayProject, summary),
+    [displayProject, summary]
   );
 
   const usageRecords = displayProject?.usage ?? [];
@@ -145,7 +180,7 @@ export function WorkflowNav({
 
       <ol className="mt-3 flex items-center gap-2 overflow-x-auto pb-1">
         {steps.map((step) => {
-          const status = stepStatus(step.key, current, summary?.completedSteps ?? 0);
+          const status: StepStatus = step.key === current ? 'current' : stepStatuses[step.key];
           return (
             <li key={step.key}>
               <button
