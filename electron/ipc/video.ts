@@ -1,4 +1,4 @@
-import { BrowserWindow, app, ipcMain } from 'electron';
+import { BrowserWindow, app, dialog, ipcMain } from 'electron';
 import { spawn } from 'child_process';
 import * as fs from 'fs/promises';
 import * as os from 'os';
@@ -579,6 +579,82 @@ async function concatSegments(
   await fs.rm(tmpDir, { recursive: true, force: true });
 }
 
+function formatUnknownError(error: unknown): string {
+  if (error instanceof Error && error.message) return error.message;
+  return String(error);
+}
+
+async function requestVideoPathReauthorization(
+  sourcePath: string,
+  baseName: 'opening' | 'ending'
+): Promise<string | null> {
+  const owner = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
+  const displayName = baseName === 'opening' ? 'オープニング' : 'エンディング';
+  const result = await dialog.showOpenDialog(owner, {
+    title: `${displayName}動画を再選択`,
+    message: `${displayName}動画へのアクセス権限が必要です。同じファイルを再選択してください。`,
+    defaultPath: sourcePath,
+    properties: ['openFile'],
+    filters: [{ name: 'Video', extensions: ['mp4', 'mov', 'm4v', 'webm'] }],
+  });
+  if (result.canceled) return null;
+  return result.filePaths[0] ?? null;
+}
+
+async function stageVideoInputForFfmpeg(
+  sourcePath: string,
+  tempDir: string,
+  baseName: 'opening' | 'ending'
+): Promise<string> {
+  const ext = path.extname(sourcePath) || '.mp4';
+  const stagedPath = path.join(tempDir, `${baseName}.source${ext}`);
+  try {
+    await fs.copyFile(sourcePath, stagedPath);
+    return stagedPath;
+  } catch (error) {
+    const detail = formatUnknownError(error);
+    const nodeError = error as NodeJS.ErrnoException;
+    const permissionError =
+      nodeError?.code === 'EPERM' ||
+      nodeError?.code === 'EACCES' ||
+      /operation not permitted/i.test(detail) ||
+      /permission denied/i.test(detail);
+
+    if (permissionError) {
+      const reselected = await requestVideoPathReauthorization(sourcePath, baseName);
+      if (reselected) {
+        try {
+          await fs.copyFile(reselected, stagedPath);
+          return stagedPath;
+        } catch (retryError) {
+          const retryDetail = formatUnknownError(retryError);
+          throw new Error(
+            `${baseName === 'opening' ? 'オープニング' : 'エンディング'}動画にアクセスできません: ${reselected}\n` +
+              `アクセス可能な場所へ移動して再指定してください。 (${retryDetail})`
+          );
+        }
+      }
+    }
+
+    throw new Error(
+      `${baseName === 'opening' ? 'オープニング' : 'エンディング'}動画にアクセスできません: ${sourcePath}\n` +
+        `ファイル権限を確認するか、アクセス可能な場所へ移動して再指定してください。 (${detail})`
+    );
+  }
+}
+
+async function copyRenderedOutput(stagedOutputPath: string, outputPath: string): Promise<void> {
+  try {
+    await fs.copyFile(stagedOutputPath, outputPath);
+  } catch (error) {
+    const detail = formatUnknownError(error);
+    throw new Error(
+      `出力先に動画を書き込めません: ${outputPath}\n` +
+        `出力先フォルダの権限を確認してください。 (${detail})`
+    );
+  }
+}
+
 async function findProjectByPartId(partId: string): Promise<{ projectPath: string; project: ProjectLike; part: PartLike }> {
   const projectsDir = path.join(app.getPath('userData'), 'projects');
   const entries = await fs.readdir(projectsDir, { withFileTypes: true });
@@ -700,6 +776,7 @@ ipcMain.handle(
     const job: VideoJob = { canceled: false, processes: new Set() };
     currentJob = job;
 
+    let renderTmpDir: string | null = null;
     try {
       if (!outputPath) throw new Error('出力先が未指定です');
 
@@ -711,6 +788,7 @@ ipcMain.handle(
 
       // 出力先ディレクトリ
       await fs.mkdir(path.dirname(outputPath), { recursive: true });
+      renderTmpDir = await fs.mkdtemp(path.join(project.path, 'output', 'render-tmp-'));
 
       const settings = await readSettings();
       const leadInSec = settings.videoPartLeadInSec ?? 0.3;
@@ -772,9 +850,10 @@ ipcMain.handle(
         const opening = settings.openingVideoPath;
         if (!opening) throw new Error('オープニング動画が未設定です（設定画面で指定してください）');
         if (!(await fileExists(opening))) throw new Error(`オープニング動画が見つかりません: ${opening}`);
-        const normalized = path.join(project.path, 'output', 'opening.normalized.mp4');
+        const openingInputForFfmpeg = await stageVideoInputForFfmpeg(opening, renderTmpDir, 'opening');
+        const normalized = path.join(renderTmpDir, 'opening.normalized.mp4');
         sendProgress({ stage: 'preparing', percent: 82, message: 'オープニング動画を調整中...' });
-        await normalizeVideoToSpec(ffmpegPath, opening, normalized, options, job);
+        await normalizeVideoToSpec(ffmpegPath, openingInputForFfmpeg, normalized, options, job);
         segments.push(normalized);
       }
 
@@ -784,19 +863,32 @@ ipcMain.handle(
         const ending = settings.endingVideoPath;
         if (!ending) throw new Error('エンディング動画が未設定です（設定画面で指定してください）');
         if (!(await fileExists(ending))) throw new Error(`エンディング動画が見つかりません: ${ending}`);
-        const normalized = path.join(project.path, 'output', 'ending.normalized.mp4');
+        const endingInputForFfmpeg = await stageVideoInputForFfmpeg(ending, renderTmpDir, 'ending');
+        const normalized = path.join(renderTmpDir, 'ending.normalized.mp4');
         sendProgress({ stage: 'preparing', percent: 86, message: 'エンディング動画を調整中...' });
-        await normalizeVideoToSpec(ffmpegPath, ending, normalized, options, job);
+        await normalizeVideoToSpec(ffmpegPath, endingInputForFfmpeg, normalized, options, job);
         segments.push(normalized);
       }
 
       // concat
       sendProgress({ stage: 'concatenating', percent: 90, message: '全体動画を連結中...' });
-      await concatSegments(ffmpegPath, segments, outputPath, options, job);
+      const stagedOutputPath = path.join(renderTmpDir, 'final.rendered.mp4');
+      await concatSegments(ffmpegPath, segments, stagedOutputPath, options, job);
+      assertNotCanceled(job);
+
+      sendProgress({ stage: 'finalizing', percent: 97, message: '出力ファイルを書き込み中...' });
+      await copyRenderedOutput(stagedOutputPath, outputPath);
 
       sendProgress({ stage: 'finalizing', percent: 100, message: 'レンダリング完了' });
       return { outputPath };
     } finally {
+      if (renderTmpDir) {
+        try {
+          await fs.rm(renderTmpDir, { recursive: true, force: true });
+        } catch {
+          // ignore
+        }
+      }
       currentJob = null;
     }
   }
