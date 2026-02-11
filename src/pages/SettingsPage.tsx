@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { Header } from '../components/layout';
+import { Badge, Button, Card, StatusChip } from '../components/ui';
 
 type ApiKeyService = 'openai' | 'google_ai' | 'google_tts';
 
@@ -82,6 +83,7 @@ export function SettingsPage() {
   const [settings, setSettings] = useState<Settings>(defaultSettings);
   const [isSavingSettings, setIsSavingSettings] = useState(false);
   const [settingsSaved, setSettingsSaved] = useState(false);
+  const [activeTab, setActiveTab] = useState<'api' | 'video' | 'audio' | 'other'>('api');
 
   useEffect(() => {
     loadApiKeys();
@@ -149,8 +151,7 @@ export function SettingsPage() {
     try {
       // 未保存の入力値がある場合はそれを使用してテスト
       const currentKey = apiKeys[service];
-      const keyToTest =
-        currentKey && currentKey !== '••••••••••••••••' ? currentKey : undefined;
+      const keyToTest = currentKey && currentKey !== '••••••••••••••••' ? currentKey : undefined;
       const result = await window.electronAPI.settings.testConnection(service, keyToTest);
       setConnectionStatus((prev) => ({ ...prev, [service]: result }));
     } catch (error) {
@@ -199,12 +200,13 @@ export function SettingsPage() {
   };
 
   return (
-    <div className="flex-1 flex flex-col overflow-hidden">
+    <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
       <Header
         title="設定"
         subtitle="APIキーとアプリケーション設定"
         actions={
-          <button
+          <Button
+            variant="secondary"
             onClick={() => {
               if (returnTo) {
                 navigate(returnTo);
@@ -212,116 +214,115 @@ export function SettingsPage() {
               }
               navigate('/projects');
             }}
-            className="px-4 py-2 text-sm text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-lg transition-colors"
           >
             戻る
-          </button>
+          </Button>
         }
       />
 
-      {/* メインコンテンツ */}
-      <div className="flex-1 overflow-auto p-6">
-        <div className="max-w-2xl mx-auto bg-white rounded-lg shadow-sm border border-gray-200">
-          <div className="px-6 py-4 border-b border-gray-200">
-            <h2 className="text-lg font-semibold text-gray-900">API設定</h2>
-            <p className="text-sm text-gray-500 mt-1">
-              各サービスのAPIキーを設定してください
-            </p>
-          </div>
-
-          <div className="divide-y divide-gray-200">
-            {(Object.keys(serviceLabels) as ApiKeyService[]).map((service) => (
-              <div key={service} className="px-6 py-6">
-                <div className="mb-4">
-                  <h3 className="text-base font-medium text-gray-900">
-                    {serviceLabels[service].name}
-                  </h3>
-                  <p className="text-sm text-gray-500 mt-1">
-                    {serviceLabels[service].description}
-                  </p>
-                  <a
-                    href={serviceLabels[service].url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-sm text-blue-600 hover:underline mt-1 inline-block"
-                  >
-                    APIキーを取得 →
-                  </a>
-                </div>
-
-                <div className="flex gap-2">
-                  <input
-                    type="password"
-                    value={apiKeys[service]}
-                    onChange={(e) =>
-                      setApiKeys((prev) => ({ ...prev, [service]: e.target.value }))
-                    }
-                    placeholder="APIキーを入力"
-                    className="flex-1 px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent font-mono text-sm"
-                  />
-                  <button
-                    onClick={() => handleSaveApiKey(service)}
-                    disabled={
-                      !apiKeys[service] ||
-                      apiKeys[service] === '••••••••••••••••' ||
-                      isSaving[service]
-                    }
-                    className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors text-sm"
-                  >
-                    {isSaving[service] ? '保存中...' : '保存'}
-                  </button>
-                  <button
-                    onClick={() => handleTestConnection(service)}
-                    disabled={isTesting[service]}
-                    className="px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors text-sm"
-                  >
-                    {isTesting[service] ? 'テスト中...' : 'テスト'}
-                  </button>
-                </div>
-
-                {/* 接続テスト結果 */}
-                {connectionStatus[service] && (
-                  <div
-                    className={`mt-3 px-4 py-2 rounded-lg text-sm ${
-                      connectionStatus[service]!.success
-                        ? 'bg-green-50 text-green-800'
-                        : 'bg-red-50 text-red-800'
-                    }`}
-                  >
-                    <span className="font-medium">
-                      {connectionStatus[service]!.success ? '✓ 成功' : '✗ 失敗'}
-                    </span>
-                    <span className="ml-2">{connectionStatus[service]!.message}</span>
-                    {connectionStatus[service]!.latencyMs && (
-                      <span className="ml-2 text-gray-500">
-                        ({connectionStatus[service]!.latencyMs}ms)
-                      </span>
-                    )}
-                  </div>
-                )}
-              </div>
+      <div className="flex-1 overflow-auto p-5">
+        <div className="mx-auto flex w-full max-w-6xl flex-col gap-4">
+          <div className="flex flex-wrap items-center gap-2 rounded-[12px] border border-[var(--nv-color-border)] bg-white p-2">
+            {[
+              { key: 'api', label: 'API' },
+              { key: 'video', label: '動画' },
+              { key: 'audio', label: '音声' },
+              { key: 'other', label: 'その他' },
+            ].map((tab) => (
+              <button
+                key={tab.key}
+                type="button"
+                onClick={() => setActiveTab(tab.key as typeof activeTab)}
+                className={`rounded-[8px] px-3 py-2 text-sm font-semibold transition-colors ${
+                  activeTab === tab.key
+                    ? 'bg-[var(--nv-color-accent)] text-white'
+                    : 'text-slate-600 hover:bg-slate-100'
+                }`}
+              >
+                {tab.label}
+              </button>
             ))}
           </div>
-        </div>
 
-        {/* デフォルト設定 */}
-        <div className="max-w-2xl mx-auto mt-6 bg-white rounded-lg shadow-sm border border-gray-200">
-          <div className="px-6 py-4 border-b border-gray-200">
-            <h2 className="text-lg font-semibold text-gray-900">デフォルト設定</h2>
-            <p className="text-sm text-gray-500 mt-1">
-              新規プロジェクト作成時に適用される設定
-            </p>
-          </div>
+          {activeTab === 'api' && (
+            <Card title="API設定" subtitle="各サービスの接続状態を確認しながら保存">
+              <div className="space-y-4">
+                {(Object.keys(serviceLabels) as ApiKeyService[]).map((service) => (
+                  <div
+                    key={service}
+                    className="rounded-[8px] border border-[var(--nv-color-border)] p-4"
+                  >
+                    <div className="mb-3">
+                      <h3 className="text-sm font-semibold text-slate-900">
+                        {serviceLabels[service].name}
+                      </h3>
+                      <p className="mt-1 text-xs text-slate-500">
+                        {serviceLabels[service].description}
+                      </p>
+                      <a
+                        href={serviceLabels[service].url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="mt-1 inline-block text-xs text-[var(--nv-color-accent)] hover:underline"
+                      >
+                        APIキー取得ページ
+                      </a>
+                    </div>
 
-          <div className="px-6 py-6 space-y-6">
-            {/* 動画設定 */}
-            <div>
-              <h3 className="text-base font-medium text-gray-900 mb-4">動画設定</h3>
-              <div className="grid grid-cols-2 gap-4">
+                    <div className="flex flex-wrap gap-2">
+                      <input
+                        type="password"
+                        value={apiKeys[service]}
+                        onChange={(e) =>
+                          setApiKeys((prev) => ({ ...prev, [service]: e.target.value }))
+                        }
+                        placeholder="APIキーを入力"
+                        className="nv-input min-w-[260px] flex-1 font-mono text-sm"
+                      />
+                      <Button
+                        onClick={() => handleSaveApiKey(service)}
+                        disabled={
+                          !apiKeys[service] ||
+                          apiKeys[service] === '••••••••••••••••' ||
+                          isSaving[service]
+                        }
+                      >
+                        {isSaving[service] ? '保存中...' : '保存'}
+                      </Button>
+                      <Button
+                        variant="secondary"
+                        onClick={() => handleTestConnection(service)}
+                        disabled={isTesting[service]}
+                      >
+                        {isTesting[service] ? 'テスト中...' : '接続テスト'}
+                      </Button>
+                    </div>
+
+                    {connectionStatus[service] && (
+                      <div className="mt-3 rounded-[8px] border border-[var(--nv-color-border)] bg-slate-50 p-3 text-xs">
+                        <div className="flex items-center gap-2">
+                          <StatusChip
+                            tone={connectionStatus[service]!.success ? 'success' : 'danger'}
+                            label={connectionStatus[service]!.success ? '接続成功' : '接続失敗'}
+                          />
+                          {connectionStatus[service]!.latencyMs && (
+                            <Badge tone="neutral">{connectionStatus[service]!.latencyMs}ms</Badge>
+                          )}
+                        </div>
+                        <p className="mt-2 text-slate-600">{connectionStatus[service]!.message}</p>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </Card>
+          )}
+
+          {activeTab === 'video' && (
+            <Card title="デフォルト動画設定" subtitle="新規プロジェクトの初期値">
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    解像度
-                  </label>
+                  <label className="mb-1 block text-xs font-semibold text-slate-600">解像度</label>
                   <select
                     value={settings.videoResolution}
                     onChange={(e) =>
@@ -330,7 +331,7 @@ export function SettingsPage() {
                         videoResolution: e.target.value as Settings['videoResolution'],
                       }))
                     }
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    className="nv-input"
                   >
                     <option value="1920x1080">1920x1080 (Full HD)</option>
                     <option value="1280x720">1280x720 (HD)</option>
@@ -338,18 +339,15 @@ export function SettingsPage() {
                   </select>
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                  <label className="mb-1 block text-xs font-semibold text-slate-600">
                     フレームレート
                   </label>
                   <select
                     value={settings.videoFps}
                     onChange={(e) =>
-                      setSettings((prev) => ({
-                        ...prev,
-                        videoFps: Number(e.target.value),
-                      }))
+                      setSettings((prev) => ({ ...prev, videoFps: Number(e.target.value) }))
                     }
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    className="nv-input"
                   >
                     <option value={24}>24 fps</option>
                     <option value={30}>30 fps</option>
@@ -357,67 +355,56 @@ export function SettingsPage() {
                   </select>
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                  <label className="mb-1 block text-xs font-semibold text-slate-600">
                     動画ビットレート
                   </label>
                   <input
                     type="text"
                     value={settings.videoBitrate}
                     onChange={(e) =>
-                      setSettings((prev) => ({
-                        ...prev,
-                        videoBitrate: e.target.value,
-                      }))
+                      setSettings((prev) => ({ ...prev, videoBitrate: e.target.value }))
                     }
+                    className="nv-input"
                     placeholder="8M"
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                  <label className="mb-1 block text-xs font-semibold text-slate-600">
                     音声ビットレート
                   </label>
                   <input
                     type="text"
                     value={settings.audioBitrate}
                     onChange={(e) =>
-                      setSettings((prev) => ({
-                        ...prev,
-                        audioBitrate: e.target.value,
-                      }))
+                      setSettings((prev) => ({ ...prev, audioBitrate: e.target.value }))
                     }
+                    className="nv-input"
                     placeholder="192k"
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
                   />
                 </div>
-                <div className="col-span-2">
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    読み上げ開始までの間（秒）
+                <div>
+                  <label className="mb-1 block text-xs font-semibold text-slate-600">
+                    読み上げ開始遅延（秒）
                   </label>
-                  <div className="flex items-center gap-3">
-                    <input
-                      type="number"
-                      min="0"
-                      max="2"
-                      step="0.05"
-                      value={settings.videoPartLeadInSec}
-                      onChange={(e) =>
-                        setSettings((prev) => ({
-                          ...prev,
-                          videoPartLeadInSec: Number.isFinite(Number(e.target.value))
-                            ? Number(e.target.value)
-                            : 0,
-                        }))
-                      }
-                      className="w-32 px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    />
-                    <p className="text-xs text-gray-500">
-                      パート切替後に画面が落ち着いてから読み上げを開始します
-                    </p>
-                  </div>
+                  <input
+                    type="number"
+                    min="0"
+                    max="2"
+                    step="0.05"
+                    value={settings.videoPartLeadInSec}
+                    onChange={(e) =>
+                      setSettings((prev) => ({
+                        ...prev,
+                        videoPartLeadInSec: Number.isFinite(Number(e.target.value))
+                          ? Number(e.target.value)
+                          : 0,
+                      }))
+                    }
+                    className="nv-input"
+                  />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                  <label className="mb-1 block text-xs font-semibold text-slate-600">
                     アスペクト比
                   </label>
                   <select
@@ -428,16 +415,16 @@ export function SettingsPage() {
                         defaultAspectRatio: e.target.value as Settings['defaultAspectRatio'],
                       }))
                     }
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    className="nv-input"
                   >
                     <option value="16:9">16:9 (横長)</option>
                     <option value="9:16">9:16 (縦長)</option>
                     <option value="1:1">1:1 (正方形)</option>
                   </select>
                 </div>
-                <div className="col-span-2">
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    オープニング動画（任意）
+                <div className="md:col-span-2">
+                  <label className="mb-1 block text-xs font-semibold text-slate-600">
+                    オープニング動画
                   </label>
                   <div className="flex gap-2">
                     <input
@@ -445,28 +432,26 @@ export function SettingsPage() {
                       value={settings.openingVideoPath}
                       readOnly
                       placeholder="未設定"
-                      className="flex-1 px-3 py-2 border border-gray-300 rounded-lg bg-gray-50 text-sm"
+                      className="nv-input flex-1 bg-slate-50"
                     />
-                    <button
-                      type="button"
+                    <Button
+                      variant="secondary"
                       onClick={() => handleSelectVideoFile('openingVideoPath')}
-                      className="px-3 py-2 text-sm border border-gray-300 rounded-lg hover:bg-gray-50"
                     >
                       参照
-                    </button>
-                    <button
-                      type="button"
+                    </Button>
+                    <Button
+                      variant="secondary"
                       onClick={() => setSettings((prev) => ({ ...prev, openingVideoPath: '' }))}
                       disabled={!settings.openingVideoPath}
-                      className="px-3 py-2 text-sm border border-gray-300 rounded-lg hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
                     >
                       クリア
-                    </button>
+                    </Button>
                   </div>
                 </div>
-                <div className="col-span-2">
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    エンディング動画（任意）
+                <div className="md:col-span-2">
+                  <label className="mb-1 block text-xs font-semibold text-slate-600">
+                    エンディング動画
                   </label>
                   <div className="flex gap-2">
                     <input
@@ -474,34 +459,32 @@ export function SettingsPage() {
                       value={settings.endingVideoPath}
                       readOnly
                       placeholder="未設定"
-                      className="flex-1 px-3 py-2 border border-gray-300 rounded-lg bg-gray-50 text-sm"
+                      className="nv-input flex-1 bg-slate-50"
                     />
-                    <button
-                      type="button"
+                    <Button
+                      variant="secondary"
                       onClick={() => handleSelectVideoFile('endingVideoPath')}
-                      className="px-3 py-2 text-sm border border-gray-300 rounded-lg hover:bg-gray-50"
                     >
                       参照
-                    </button>
-                    <button
-                      type="button"
+                    </Button>
+                    <Button
+                      variant="secondary"
                       onClick={() => setSettings((prev) => ({ ...prev, endingVideoPath: '' }))}
                       disabled={!settings.endingVideoPath}
-                      className="px-3 py-2 text-sm border border-gray-300 rounded-lg hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
                     >
                       クリア
-                    </button>
+                    </Button>
                   </div>
                 </div>
               </div>
-            </div>
+            </Card>
+          )}
 
-            {/* 音声設定 */}
-            <div>
-              <h3 className="text-base font-medium text-gray-900 mb-4">音声設定</h3>
-              <div className="grid grid-cols-2 gap-4">
+          {activeTab === 'audio' && (
+            <Card title="デフォルト音声設定" subtitle="Gemini TTS の初期設定">
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                  <label className="mb-1 block text-xs font-semibold text-slate-600">
                     TTSエンジン
                   </label>
                   <select
@@ -512,17 +495,15 @@ export function SettingsPage() {
                         ttsEngine: e.target.value as Settings['ttsEngine'],
                       }))
                     }
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    className="nv-input"
                     disabled
                   >
                     <option value="gemini_tts">gemini-2.5-pro-preview-tts</option>
                   </select>
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    話速
-                  </label>
-                  <div className="flex items-center gap-2">
+                  <label className="mb-1 block text-xs font-semibold text-slate-600">話速</label>
+                  <div className="flex items-center gap-2 rounded-[8px] border border-[var(--nv-color-border)] px-3 py-2">
                     <input
                       type="range"
                       min="0.5"
@@ -538,52 +519,44 @@ export function SettingsPage() {
                       className="flex-1"
                       disabled
                     />
-                    <span className="text-sm text-gray-600 w-12 text-right">
+                    <span className="w-12 text-right text-xs text-slate-600">
                       {settings.ttsSpeakingRate.toFixed(1)}x
                     </span>
                   </div>
-                  <p className="text-xs text-gray-500 mt-1">
-                    Gemini TTS は現状「話速」の指定をサポートしていません
-                  </p>
                 </div>
               </div>
-            </div>
+            </Card>
+          )}
 
-            {/* その他設定 */}
-            <div>
-              <h3 className="text-base font-medium text-gray-900 mb-4">その他</h3>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  自動保存間隔（秒）
-                </label>
-                <input
-                  type="number"
-                  min="10"
-                  max="300"
-                  value={settings.autoSaveInterval}
-                  onChange={(e) =>
-                    setSettings((prev) => ({
-                      ...prev,
-                      autoSaveInterval: Number(e.target.value),
-                    }))
-                  }
-                  className="w-32 px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-                />
+          {activeTab === 'other' && (
+            <Card title="その他" subtitle="運用系の設定">
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                <div>
+                  <label className="mb-1 block text-xs font-semibold text-slate-600">
+                    自動保存間隔（秒）
+                  </label>
+                  <input
+                    type="number"
+                    min="10"
+                    max="300"
+                    value={settings.autoSaveInterval}
+                    onChange={(e) =>
+                      setSettings((prev) => ({ ...prev, autoSaveInterval: Number(e.target.value) }))
+                    }
+                    className="nv-input"
+                  />
+                </div>
               </div>
-            </div>
+            </Card>
+          )}
 
-            {/* 保存ボタン */}
-            <div className="flex items-center gap-4 pt-4 border-t border-gray-200">
-              <button
-                onClick={handleSaveSettings}
-                disabled={isSavingSettings}
-                className="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-              >
+          <div className="nv-surface flex items-center justify-between gap-3 px-4 py-3">
+            <div className="text-xs text-slate-500">設定変更後は保存してください。</div>
+            <div className="flex items-center gap-2">
+              {settingsSaved && <StatusChip tone="success" label="保存しました" />}
+              <Button onClick={handleSaveSettings} disabled={isSavingSettings}>
                 {isSavingSettings ? '保存中...' : '設定を保存'}
-              </button>
-              {settingsSaved && (
-                <span className="text-sm text-green-600">保存しました</span>
-              )}
+              </Button>
             </div>
           </div>
         </div>

@@ -14,7 +14,10 @@ type AllowedEventChannel =
 contextBridge.exposeInMainWorld('electronAPI', {
   // プロジェクト操作
   project: {
-    list: () => ipcRenderer.invoke('project:list'),
+    list: async () => {
+      const list = await ipcRenderer.invoke('project:list');
+      return Array.isArray(list) ? list : [];
+    },
     load: (projectId: string) => ipcRenderer.invoke('project:load', projectId),
     save: (project: unknown) => ipcRenderer.invoke('project:save', project),
     delete: (projectId: string) => ipcRenderer.invoke('project:delete', projectId),
@@ -78,8 +81,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('file:writeFile', filePath, content),
     exists: (filePath: string) => ipcRenderer.invoke('file:exists', filePath),
     listFiles: (dirPath: string) => ipcRenderer.invoke('file:listFiles', dirPath),
-    revealInFinder: (targetPath: string) =>
-      ipcRenderer.invoke('file:revealInFinder', targetPath),
+    revealInFinder: (targetPath: string) => ipcRenderer.invoke('file:revealInFinder', targetPath),
   },
 
   // イベント購読（セキュリティ: ホワイトリスト制限）

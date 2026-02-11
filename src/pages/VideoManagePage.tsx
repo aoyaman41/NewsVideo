@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { Header, WorkflowNav } from '../components/layout';
+import { Badge, Button, Card, ProgressBar, StatusChip } from '../components/ui';
 import type { AutoGenerationStatus, Project } from '../schemas';
 import { toLocalFileUrl } from '../utils/toLocalFileUrl';
+import { summarizeProjectProgress } from '../utils/projectHealth';
 
 type RenderOptions = {
   resolution: '1920x1080' | '1280x720' | '3840x2160';
@@ -98,6 +100,7 @@ export function VideoManagePage() {
     if (!project) return 0;
     return project.parts.filter((p) => (p.panelImages?.length ?? 0) === 0).length;
   }, [project]);
+  const summary = useMemo(() => (project ? summarizeProjectProgress(project) : null), [project]);
 
   const selectedPart = useMemo(() => {
     return project?.parts.find((p) => p.id === selectedPartId) ?? null;
@@ -216,7 +219,7 @@ export function VideoManagePage() {
             const current = loadedProject.autoGenerationStatus;
             const nextStatus: AutoGenerationStatus = {
               running: current?.running ?? false,
-              step: current?.running ? current?.step : current?.step ?? '完了',
+              step: current?.running ? current?.step : (current?.step ?? '完了'),
               startedAt: current?.startedAt,
               updatedAt: now,
               finishedAt: current?.running ? current?.finishedAt : now,
@@ -365,133 +368,141 @@ export function VideoManagePage() {
 
   if (isLoading) {
     return (
-      <div className="flex-1 flex items-center justify-center">
-        <p className="text-gray-500">読み込み中...</p>
+      <div className="flex flex-1 items-center justify-center">
+        <p className="text-slate-500">読み込み中...</p>
       </div>
     );
   }
 
   if (!project || !settings) {
     return (
-      <div className="flex-1 flex items-center justify-center">
+      <div className="flex flex-1 items-center justify-center">
         <div className="text-center">
-          <p className="text-red-600 mb-4">{error || 'プロジェクトが見つかりません'}</p>
-          <button
-            onClick={() => navigate('/projects')}
-            className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
-          >
-            プロジェクト一覧に戻る
-          </button>
+          <p className="mb-4 text-red-600">{error || 'プロジェクトが見つかりません'}</p>
+          <Button onClick={() => navigate('/projects')}>プロジェクト一覧に戻る</Button>
         </div>
       </div>
     );
   }
 
   return (
-    <div className="flex-1 flex flex-col overflow-hidden">
+    <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
       <Header
         title="動画"
         subtitle={project.name}
+        statusLabel={
+          summary ? `未音声 ${summary.missingAudio} / 未画像 ${summary.missingImages}` : undefined
+        }
+        statusTone={missingAudioCount + missingImagesCount > 0 ? 'warning' : 'success'}
       />
 
       {projectId && <WorkflowNav projectId={projectId} current="video" project={project} />}
 
       {error && (
-        <div className="mx-6 mt-4 bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg">
+        <div className="mx-4 mt-4 rounded-[8px] border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
           {error}
         </div>
       )}
 
-      <div className="flex-1 flex overflow-hidden">
-        {/* 左: パート一覧 */}
-        <div className="w-72 border-r border-gray-200 overflow-auto bg-gray-50">
-          <div className="p-4">
-            <h3 className="font-semibold text-gray-900 mb-2">パート一覧</h3>
-            <div className="text-xs text-gray-500 space-y-1 mb-4">
-              <div>音声未生成: {missingAudioCount} / {project.parts.length}</div>
-              <div>画像未割り当て: {missingImagesCount} / {project.parts.length}</div>
-            </div>
-
-            <ul className="space-y-2">
-              {project.parts.map((part, idx) => {
-                const hasAudio = Boolean(part.audio);
-                const hasImages = (part.panelImages?.length ?? 0) > 0;
-                return (
-                  <li key={part.id}>
-                    <button
-                      onClick={() => setSelectedPartId(part.id)}
-                      className={`w-full text-left p-3 rounded-lg transition-colors ${
-                        selectedPartId === part.id
-                          ? 'bg-white shadow border border-blue-200'
-                          : 'hover:bg-white'
-                      }`}
-                    >
-                      <div className="flex items-center gap-2">
-                        <span className="text-xs font-medium text-gray-400">{idx + 1}</span>
-                        <span className="text-sm font-medium text-gray-900 truncate">
-                          {part.title}
-                        </span>
-                      </div>
-                      <div className="flex items-center gap-2 mt-1">
-                        <span className={`text-xs ${hasAudio ? 'text-green-600' : 'text-orange-600'}`}>
-                          {hasAudio ? '✓ 音声' : '⚠ 音声'}
-                        </span>
-                        <span className="text-xs text-gray-400">|</span>
-                        <span className={`text-xs ${hasImages ? 'text-green-600' : 'text-orange-600'}`}>
-                          {hasImages ? `✓ 画像${part.panelImages.length}` : '⚠ 画像0'}
-                        </span>
-                      </div>
-                    </button>
-                  </li>
-                );
-              })}
-            </ul>
-
-            <div className="mt-6 space-y-2">
-              <button
+      <div className="px-4 pt-3">
+        <Card
+          title="書き出し操作"
+          subtitle="プレビュー確認後に最終書き出し"
+          actions={
+            <div className="flex items-center gap-2">
+              <Button
+                variant="secondary"
                 onClick={handleGeneratePreview}
                 disabled={isPreviewing || isRendering || !selectedPartId}
-                className="w-full px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {isPreviewing ? 'プレビュー生成中...' : '選択パートをプレビュー'}
-              </button>
-              <button
+              </Button>
+              <Button
+                variant="success"
                 onClick={handleRender}
                 disabled={isRendering || isPreviewing || project.parts.length === 0}
-                className="w-full px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {isRendering ? '書き出し中...' : '動画を書き出し'}
-              </button>
+              </Button>
               {(isRendering || isPreviewing) && (
-                <button
-                  onClick={handleCancel}
-                  className="w-full px-4 py-2 text-sm text-gray-700 border border-gray-300 rounded-lg hover:bg-gray-100"
-                >
+                <Button variant="secondary" onClick={handleCancel}>
                   キャンセル
-                </button>
+                </Button>
               )}
             </div>
+          }
+        >
+          <div className="flex flex-wrap items-center gap-2 text-xs">
+            <Badge tone={missingAudioCount === 0 ? 'success' : 'warning'}>
+              音声未生成 {missingAudioCount}
+            </Badge>
+            <Badge tone={missingImagesCount === 0 ? 'success' : 'warning'}>
+              画像未割当 {missingImagesCount}
+            </Badge>
+            <StatusChip
+              tone={summary?.hasVideoOutput ? 'success' : 'info'}
+              label={summary?.hasVideoOutput ? '書き出し済みあり' : '未書き出し'}
+            />
           </div>
-        </div>
+        </Card>
+      </div>
 
-        {/* 右: プレビュー / 設定 */}
-        <div className="flex-1 overflow-auto p-6 space-y-6">
-          <div className="bg-white rounded-lg border border-gray-200 p-6">
-            <div className="flex items-center justify-between mb-3">
-              <h3 className="text-lg font-semibold text-gray-900">プレビュー</h3>
-              {selectedPart && (
-                <div className="text-sm text-gray-600 truncate max-w-[60%]">
-                  {selectedPart.index + 1}. {selectedPart.title}
-                </div>
-              )}
-            </div>
-            <div className="w-full aspect-video bg-black rounded-lg overflow-hidden">
+      <div className="grid min-h-0 flex-1 grid-cols-[280px_minmax(0,1fr)_380px] gap-4 overflow-hidden p-4">
+        <Card
+          title="パート一覧"
+          subtitle={`全 ${project.parts.length} パート`}
+          className="overflow-hidden"
+        >
+          <ul className="nv-scrollbar max-h-[calc(100vh-320px)] space-y-2 overflow-auto pr-1">
+            {project.parts.map((part, idx) => {
+              const hasAudio = Boolean(part.audio);
+              const hasImages = (part.panelImages?.length ?? 0) > 0;
+              return (
+                <li key={part.id}>
+                  <button
+                    onClick={() => setSelectedPartId(part.id)}
+                    className={`w-full rounded-[8px] border px-3 py-2 text-left transition-colors ${
+                      selectedPartId === part.id
+                        ? 'border-[var(--nv-color-accent)] bg-blue-50'
+                        : 'border-[var(--nv-color-border)] bg-white hover:bg-slate-50'
+                    }`}
+                  >
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs text-slate-400">{idx + 1}</span>
+                      <span className="truncate text-sm font-semibold text-slate-900">
+                        {part.title}
+                      </span>
+                    </div>
+                    <div className="mt-1 flex items-center gap-1 text-[11px]">
+                      <Badge tone={hasAudio ? 'success' : 'warning'}>
+                        {hasAudio ? '音声OK' : '音声NG'}
+                      </Badge>
+                      <Badge tone={hasImages ? 'success' : 'warning'}>
+                        {hasImages ? `画像${part.panelImages.length}` : '画像NG'}
+                      </Badge>
+                    </div>
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        </Card>
+
+        <Card
+          title="プレビュー"
+          subtitle={
+            selectedPart ? `${selectedPart.index + 1}. ${selectedPart.title}` : 'パート未選択'
+          }
+          className="overflow-auto"
+        >
+          <div className="space-y-3">
+            <div className="aspect-video w-full overflow-hidden rounded-[12px] bg-black">
               {videoSrc ? (
                 <video
                   ref={videoRef}
                   src={videoSrc}
                   controls
-                  className="w-full h-full"
+                  className="h-full w-full"
                   onError={() => {
                     const code = videoRef.current?.error?.code ?? 0;
                     const label =
@@ -508,34 +519,30 @@ export function VideoManagePage() {
                   }}
                 />
               ) : (
-                <div className="w-full h-full flex items-center justify-center text-gray-300 text-sm">
-                  プレビューを生成するとここに表示されます
+                <div className="flex h-full w-full items-center justify-center text-sm text-slate-300">
+                  プレビュー生成後に表示
                 </div>
               )}
             </div>
             {mediaError && (
-              <div className="mt-3 bg-red-50 border border-red-200 text-red-700 px-3 py-2 rounded-lg text-sm">
+              <div className="rounded-[8px] border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
                 {mediaError}
               </div>
             )}
             {mediaDebug && (
-              <div className="mt-2 bg-gray-50 border border-gray-200 text-gray-700 px-3 py-2 rounded-lg text-xs break-all">
+              <div className="rounded-[8px] border border-[var(--nv-color-border)] bg-slate-50 px-3 py-2 text-xs text-slate-700 break-all">
                 {mediaDebug}
               </div>
             )}
-            {videoPath && (
-              <div className="mt-3 text-xs text-gray-500 break-all">
-                {videoPath}
-              </div>
-            )}
+            {videoPath && <div className="text-xs text-slate-500 break-all">{videoPath}</div>}
           </div>
+        </Card>
 
-          <div className="bg-white rounded-lg border border-gray-200 p-6">
-            <h3 className="text-lg font-semibold text-gray-900 mb-4">出力設定</h3>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div className="space-y-4 overflow-auto">
+          <Card title="出力設定" subtitle="品質と出力先を指定">
+            <div className="grid grid-cols-1 gap-3">
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">解像度</label>
+                <label className="mb-1 block text-xs font-semibold text-slate-600">解像度</label>
                 <select
                   value={renderOptions.resolution}
                   onChange={(e) =>
@@ -544,7 +551,7 @@ export function VideoManagePage() {
                       resolution: e.target.value as RenderOptions['resolution'],
                     }))
                   }
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  className="nv-input"
                   disabled={isRendering || isPreviewing}
                 >
                   <option value="1920x1080">1920x1080 (Full HD)</option>
@@ -554,7 +561,7 @@ export function VideoManagePage() {
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">FPS</label>
+                <label className="mb-1 block text-xs font-semibold text-slate-600">FPS</label>
                 <select
                   value={renderOptions.fps}
                   onChange={(e) =>
@@ -563,7 +570,7 @@ export function VideoManagePage() {
                       fps: Number(e.target.value),
                     }))
                   }
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  className="nv-input"
                   disabled={isRendering || isPreviewing}
                 >
                   <option value={24}>24</option>
@@ -573,7 +580,9 @@ export function VideoManagePage() {
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">動画ビットレート</label>
+                <label className="mb-1 block text-xs font-semibold text-slate-600">
+                  動画ビットレート
+                </label>
                 <input
                   type="text"
                   value={renderOptions.videoBitrate}
@@ -583,13 +592,15 @@ export function VideoManagePage() {
                       videoBitrate: e.target.value,
                     }))
                   }
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  className="nv-input"
                   disabled={isRendering || isPreviewing}
                 />
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">音声ビットレート</label>
+                <label className="mb-1 block text-xs font-semibold text-slate-600">
+                  音声ビットレート
+                </label>
                 <input
                   type="text"
                   value={renderOptions.audioBitrate}
@@ -599,107 +610,110 @@ export function VideoManagePage() {
                       audioBitrate: e.target.value,
                     }))
                   }
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  className="nv-input"
                   disabled={isRendering || isPreviewing}
                 />
               </div>
 
-              <div className="col-span-1 md:col-span-2">
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  オープニング / エンディング
+              <div className="flex flex-wrap items-center gap-4 text-sm text-slate-700">
+                <label className="inline-flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    checked={renderOptions.includeOpening}
+                    onChange={(e) =>
+                      setRenderOptions((prev) => ({
+                        ...prev,
+                        includeOpening: e.target.checked,
+                      }))
+                    }
+                    disabled={!settings.openingVideoPath || isRendering || isPreviewing}
+                  />
+                  オープニングを含める
                 </label>
-                <div className="flex flex-wrap items-center gap-4 text-sm">
-                  <label className="flex items-center gap-2">
-                    <input
-                      type="checkbox"
-                      checked={renderOptions.includeOpening}
-                      onChange={(e) =>
-                        setRenderOptions((prev) => ({
-                          ...prev,
-                          includeOpening: e.target.checked,
-                        }))
-                      }
-                      disabled={!settings.openingVideoPath || isRendering || isPreviewing}
-                    />
-                    オープニングを含める
-                  </label>
-                  <label className="flex items-center gap-2">
-                    <input
-                      type="checkbox"
-                      checked={renderOptions.includeEnding}
-                      onChange={(e) =>
-                        setRenderOptions((prev) => ({
-                          ...prev,
-                          includeEnding: e.target.checked,
-                        }))
-                      }
-                      disabled={!settings.endingVideoPath || isRendering || isPreviewing}
-                    />
-                    エンディングを含める
-                  </label>
-                  {!settings.openingVideoPath && (
-                    <span className="text-xs text-gray-500">
-                      ※オープニング動画は設定画面で指定できます
-                    </span>
-                  )}
-                </div>
+                <label className="inline-flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    checked={renderOptions.includeEnding}
+                    onChange={(e) =>
+                      setRenderOptions((prev) => ({
+                        ...prev,
+                        includeEnding: e.target.checked,
+                      }))
+                    }
+                    disabled={!settings.endingVideoPath || isRendering || isPreviewing}
+                  />
+                  エンディングを含める
+                </label>
               </div>
 
-              <div className="col-span-1 md:col-span-2">
-                <label className="block text-sm font-medium text-gray-700 mb-1">出力先</label>
+              <div>
+                <label className="mb-1 block text-xs font-semibold text-slate-600">出力先</label>
                 <div className="flex gap-2">
                   <input
                     type="text"
                     value={outputPath}
                     onChange={(e) => setOutputPath(e.target.value)}
-                    className="flex-1 px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 font-mono text-xs"
+                    className="nv-input font-mono text-xs"
                     disabled={isRendering || isPreviewing}
                   />
-                  <button
-                    type="button"
+                  <Button
+                    variant="secondary"
                     onClick={handleSelectOutputDir}
-                    className="px-3 py-2 text-sm border border-gray-300 rounded-lg hover:bg-gray-50"
                     disabled={isRendering || isPreviewing}
                   >
                     参照
-                  </button>
-                  <button
-                    type="button"
+                  </Button>
+                  <Button
+                    variant="secondary"
                     onClick={handleRevealOutput}
-                    className="px-3 py-2 text-sm border border-gray-300 rounded-lg hover:bg-gray-50"
                     disabled={!outputPath.trim()}
                   >
-                    Finderで開く
-                  </button>
+                    Finder
+                  </Button>
                 </div>
-                <p className="text-xs text-gray-500 mt-1">
-                  生成に時間がかかる場合があります。ffmpeg が未インストールの場合はエラーになります。
-                </p>
               </div>
             </div>
-          </div>
+          </Card>
+
+          <Card title="公開前チェック" subtitle="書き出し前に確認">
+            <ul className="space-y-2 text-xs text-slate-600">
+              <li className="flex items-center justify-between">
+                <span>全パート音声生成</span>
+                <StatusChip
+                  tone={missingAudioCount === 0 ? 'success' : 'warning'}
+                  label={missingAudioCount === 0 ? 'OK' : '未完了'}
+                />
+              </li>
+              <li className="flex items-center justify-between">
+                <span>全パート画像割り当て</span>
+                <StatusChip
+                  tone={missingImagesCount === 0 ? 'success' : 'warning'}
+                  label={missingImagesCount === 0 ? 'OK' : '未完了'}
+                />
+              </li>
+              <li className="flex items-center justify-between">
+                <span>出力先指定</span>
+                <StatusChip
+                  tone={outputPath.trim() ? 'success' : 'warning'}
+                  label={outputPath.trim() ? 'OK' : '未指定'}
+                />
+              </li>
+            </ul>
+          </Card>
         </div>
       </div>
 
-      {/* 進捗モーダル */}
       {showProgress && progress && (isRendering || isPreviewing) && (
-        <div className="fixed inset-0 bg-black/40 flex items-center justify-center p-4">
-          <div className="bg-white rounded-lg shadow-xl border border-gray-200 w-full max-w-md p-6">
-            <div className="text-lg font-semibold text-gray-900 mb-2">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/45 p-4">
+          <div className="nv-surface w-full max-w-md p-5">
+            <div className="mb-2 text-base font-semibold text-slate-900">
               {isRendering ? '動画を書き出し中...' : 'プレビュー生成中...'}
             </div>
-            <div className="text-sm text-gray-600 mb-4">
+            <div className="mb-3 text-sm text-slate-600">
               {progress.message || progress.stage || '処理中'}
             </div>
-
-            <div className="w-full bg-gray-200 rounded-full h-2 mb-3">
-              <div
-                className="bg-blue-600 h-2 rounded-full transition-all"
-                style={{ width: `${Math.min(100, Math.max(0, progress.percent ?? 0))}%` }}
-              />
-            </div>
-
-            <div className="flex items-center justify-between text-xs text-gray-500">
+            <ProgressBar value={Math.min(100, Math.max(0, progress.percent ?? 0))} max={100} />
+            <div className="mt-2 flex items-center justify-between text-xs text-slate-500">
               <div>{typeof progress.percent === 'number' ? `${progress.percent}%` : ''}</div>
               {typeof progress.current === 'number' && typeof progress.total === 'number' && (
                 <div>
@@ -707,14 +721,10 @@ export function VideoManagePage() {
                 </div>
               )}
             </div>
-
             <div className="mt-4 flex justify-end">
-              <button
-                onClick={handleCancel}
-                className="px-4 py-2 text-sm text-gray-700 border border-gray-300 rounded-lg hover:bg-gray-50"
-              >
+              <Button variant="secondary" onClick={handleCancel}>
                 キャンセル
-              </button>
+              </Button>
             </div>
           </div>
         </div>

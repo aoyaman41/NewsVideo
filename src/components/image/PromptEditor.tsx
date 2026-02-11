@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { ImagePrompt } from '../../schemas';
+import { Button } from '../ui';
 
 interface PromptEditorProps {
   prompt: ImagePrompt;
@@ -24,7 +25,6 @@ export function PromptEditor({
   const [editedNegativePrompt, setEditedNegativePrompt] = useState(prompt.negativePrompt || '');
   const [isAdvancedMode, setIsAdvancedMode] = useState(false);
 
-  // パート選択切替時に、前のプロンプト編集状態が残らないよう同期する
   useEffect(() => {
     setEditedPrompt(prompt.prompt);
     setEditedNegativePrompt(prompt.negativePrompt || '');
@@ -32,10 +32,7 @@ export function PromptEditor({
 
   const hasChanges = useMemo(() => {
     const baseNegative = prompt.negativePrompt || '';
-    return (
-      editedPrompt !== prompt.prompt ||
-      editedNegativePrompt !== baseNegative
-    );
+    return editedPrompt !== prompt.prompt || editedNegativePrompt !== baseNegative;
   }, [editedNegativePrompt, editedPrompt, prompt.negativePrompt, prompt.prompt]);
 
   const handleSave = () => {
@@ -60,15 +57,12 @@ export function PromptEditor({
 
   return (
     <div className="space-y-4">
-      {/* プロンプト表示/編集 */}
       <div>
-        <div className="flex items-center justify-between mb-2">
-          <label className="block text-sm font-medium text-gray-700">
-            画像プロンプト
-          </label>
+        <div className="mb-2 flex items-center justify-between">
+          <label className="block text-sm font-medium text-slate-700">画像プロンプト</label>
           <button
             onClick={() => setIsAdvancedMode(!isAdvancedMode)}
-            className="text-sm text-purple-600 hover:text-purple-700"
+            className="text-sm text-[var(--nv-color-accent)] hover:text-[#114f88]"
           >
             {isAdvancedMode ? '詳細を閉じる' : '詳細設定'}
           </button>
@@ -77,31 +71,27 @@ export function PromptEditor({
         <textarea
           value={editedPrompt}
           onChange={(e) => setEditedPrompt(e.target.value)}
-          className="w-full h-32 px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500 resize-none"
+          className="nv-input h-32 resize-none"
           placeholder="画像生成プロンプト（日本語）"
         />
       </div>
 
-      {/* ネガティブプロンプト（上級者モードのみ） */}
       {isAdvancedMode && (
         <div>
-          <label className="block text-sm font-medium text-gray-700 mb-2">
+          <label className="mb-2 block text-sm font-medium text-slate-700">
             ネガティブプロンプト（除外したい要素）
           </label>
           <textarea
             value={editedNegativePrompt}
             onChange={(e) => setEditedNegativePrompt(e.target.value)}
-            className="w-full h-20 px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500 resize-none"
+            className="nv-input h-20 resize-none"
             placeholder="除外したい要素（日本語）"
           />
         </div>
       )}
 
-      {/* アスペクト比 */}
       <div>
-        <label className="block text-sm font-medium text-gray-700 mb-2">
-          アスペクト比
-        </label>
+        <label className="mb-2 block text-sm font-medium text-slate-700">アスペクト比</label>
         <div className="flex gap-2">
           {[
             { value: '16:9', label: '16:9 (横長)' },
@@ -111,61 +101,31 @@ export function PromptEditor({
             <button
               key={option.value}
               disabled
-              className={`px-4 py-2 text-sm rounded-lg border ${
+              className={`rounded-[8px] border px-4 py-2 text-sm ${
                 prompt.aspectRatio === option.value
-                  ? 'border-purple-500 bg-purple-50 text-purple-700'
-                  : 'border-gray-200 text-gray-400'
+                  ? 'border-[var(--nv-color-accent)] bg-blue-50 text-blue-700'
+                  : 'border-[var(--nv-color-border)] text-slate-400'
               }`}
             >
               {option.label}
             </button>
           ))}
         </div>
-        <p className="text-xs text-gray-500 mt-1">
-          アスペクト比はプロジェクト設定で変更できます
-        </p>
+        <p className="mt-1 text-xs text-slate-500">アスペクト比はプロジェクト設定で変更できます</p>
       </div>
 
-      {/* アクションボタン */}
-      <div className="flex justify-end gap-2 pt-4 border-t">
+      <div className="flex justify-end gap-2 border-t border-[var(--nv-color-border)] pt-4">
         {onRegenerate && (
-          <button
-            onClick={onRegenerate}
-            disabled={isRegenerating}
-            className="px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed rounded-lg transition-colors"
-          >
+          <Button variant="secondary" onClick={onRegenerate} disabled={isRegenerating}>
             {isRegenerating ? '再生成中...' : 'プロンプト再生成'}
-          </button>
+          </Button>
         )}
-        <button
-          onClick={handleSave}
-          disabled={!hasChanges}
-          className="px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed rounded-lg transition-colors"
-        >
+        <Button variant="secondary" onClick={handleSave} disabled={!hasChanges}>
           保存
-        </button>
-        <button
-          onClick={handleGenerate}
-          disabled={isGenerating}
-          className="px-4 py-2 text-sm bg-purple-600 text-white rounded-lg hover:bg-purple-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
-        >
-          {isGenerating ? (
-            <>
-              <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24">
-                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
-                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-              </svg>
-              生成中...
-            </>
-          ) : (
-            <>
-              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
-              </svg>
-              画像を生成
-            </>
-          )}
-        </button>
+        </Button>
+        <Button onClick={handleGenerate} disabled={isGenerating}>
+          {isGenerating ? '生成中...' : '画像を生成'}
+        </Button>
       </div>
     </div>
   );

@@ -18,7 +18,7 @@ type TokenUsage = {
 
 interface ElectronAPI {
   project: {
-    list: () => Promise<ProjectMeta[]>;
+    list: () => Promise<ProjectListItem[]>;
     load: (projectId: string) => Promise<Project>;
     save: (project: Project) => Promise<{ success: boolean; savedAt: string }>;
     delete: (projectId: string) => Promise<{ success: boolean }>;
@@ -110,6 +110,25 @@ interface ProjectMeta {
   createdAt: string;
   updatedAt: string;
   path: string;
+}
+
+type WorkflowStage = 'article' | 'script' | 'image' | 'audio' | 'video';
+
+interface ProjectProgressSummary {
+  stage: WorkflowStage;
+  completedSteps: number;
+  totalSteps: 5;
+  partCount: number;
+  missingPrompts: number;
+  missingImages: number;
+  missingAudio: number;
+  hasVideoOutput: boolean;
+}
+
+interface ProjectListItem extends ProjectMeta {
+  articleTitle?: string;
+  thumbnailImageId?: string;
+  summary?: ProjectProgressSummary;
 }
 
 interface Project extends ProjectMeta {

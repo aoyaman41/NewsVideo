@@ -1,11 +1,13 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useParams } from 'react-router-dom';
 import { Header, WorkflowNav } from '../components/layout';
 import { PartList, ScriptEditor } from '../components/script';
+import { Badge, Card, EmptyState, StatusChip } from '../components/ui';
 import { useAutoSave } from '../hooks';
 import type { Project, PartEdit } from '../schemas';
 import { createNewPart } from '../schemas';
 import { createOpenAIUsageRecord } from '../utils/usage';
+import { summarizeProjectProgress } from '../utils/projectHealth';
 
 export function ScriptEditPage() {
   const { projectId } = useParams<{ projectId: string }>();
@@ -16,8 +18,10 @@ export function ScriptEditPage() {
   const [isProcessing, setIsProcessing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [lastCommentAppliedAt, setLastCommentAppliedAt] = useState<string | null>(null);
+  const [lastDiffByPart, setLastDiffByPart] = useState<
+    Record<string, { before: string; after: string }>
+  >({});
 
-  // プロジェクト読み込み
   useEffect(() => {
     if (!projectId) return;
 
@@ -26,7 +30,6 @@ export function ScriptEditPage() {
       try {
         const loaded = await window.electronAPI.project.load(projectId);
         setProject(loaded);
-        // 最初のパートを選択
         if (loaded.parts.length > 0) {
           setSelectedPartId(loaded.parts[0].id);
         }
@@ -38,20 +41,16 @@ export function ScriptEditPage() {
       }
     };
 
-    loadProject();
+    void loadProject();
   }, [projectId]);
 
-  // 自動保存
-  const handleSave = useCallback(
-    async (data: Project) => {
-      try {
-        await window.electronAPI.project.save(data);
-      } catch (err) {
-        console.error('Auto-save failed:', err);
-      }
-    },
-    []
-  );
+  const handleSave = useCallback(async (data: Project) => {
+    try {
+      await window.electronAPI.project.save(data);
+    } catch (err) {
+      console.error('Auto-save failed:', err);
+    }
+  }, []);
 
   const autoSaveState = useAutoSave({
     data: project!,
@@ -60,7 +59,6 @@ export function ScriptEditPage() {
     enabled: !!project,
   });
 
-  // パート追加
   const handleAddPart = useCallback(async () => {
     if (!project) return;
 
@@ -80,7 +78,6 @@ export function ScriptEditPage() {
     }
   }, [project]);
 
-  // パート削除
   const handleDeletePart = useCallback(
     async (partId: string) => {
       if (!project) return;
@@ -96,7 +93,6 @@ export function ScriptEditPage() {
       };
       setProject(updatedProject);
 
-      // 削除したパートが選択されていた場合、次のパートを選択
       if (selectedPartId === partId) {
         setSelectedPartId(updatedParts.length > 0 ? updatedParts[0].id : null);
       }
@@ -110,7 +106,6 @@ export function ScriptEditPage() {
     [project, selectedPartId]
   );
 
-  // パート並び替え
   const handleReorderParts = useCallback(
     async (fromIndex: number, toIndex: number) => {
       if (!project) return;
@@ -118,8 +113,6 @@ export function ScriptEditPage() {
       const newParts = [...project.parts];
       const [movedPart] = newParts.splice(fromIndex, 1);
       newParts.splice(toIndex, 0, movedPart);
-
-      // インデックスを更新
       const updatedParts = newParts.map((p, index) => ({ ...p, index }));
 
       const updatedProject = {
@@ -138,7 +131,6 @@ export function ScriptEditPage() {
     [project]
   );
 
-  // パート保存
   const handleSavePart = useCallback(
     (partId: string, data: PartEdit) => {
       if (!project) return;
@@ -148,6 +140,7 @@ export function ScriptEditPage() {
           ? {
               ...p,
               title: data.title,
+              summary: data.summary ?? '',
               scriptText: data.scriptText,
               scriptModifiedByUser: true,
               updatedAt: new Date().toISOString(),
@@ -164,7 +157,6 @@ export function ScriptEditPage() {
     [project]
   );
 
-  // コメントでスクリプト修正
   const handleRegenerateWithComment = useCallback(
     async (partId: string, comment: string) => {
       if (!project) return;
@@ -176,6 +168,7 @@ export function ScriptEditPage() {
       setError(null);
 
       try {
+        const before = part.scriptText;
         const result = await window.electronAPI.ai.applyComment(
           { type: 'script', id: partId, currentText: part.scriptText },
           comment
@@ -204,9 +197,14 @@ export function ScriptEditPage() {
         setProject({
           ...project,
           parts: updatedParts,
-          usage: usageRecord ? [...(project.usage ?? []), usageRecord] : project.usage ?? [],
+          usage: usageRecord ? [...(project.usage ?? []), usageRecord] : (project.usage ?? []),
           updatedAt: new Date().toISOString(),
         });
+
+        setLastDiffByPart((prev) => ({
+          ...prev,
+          [partId]: { before, after: result.text },
+        }));
         setLastCommentAppliedAt(new Date().toISOString());
       } catch (err) {
         console.error('Failed to regenerate script:', err);
@@ -218,50 +216,47 @@ export function ScriptEditPage() {
     [project]
   );
 
-  const selectedPart = project?.parts.find((p) => p.id === selectedPartId);
+  const selectedPart = project?.parts.find((p) => p.id === selectedPartId) ?? null;
+  const summary = useMemo(() => (project ? summarizeProjectProgress(project) : null), [project]);
 
   if (isLoading) {
     return (
-      <div className="flex-1 flex items-center justify-center">
-        <p className="text-gray-500">読み込み中...</p>
+      <div className="flex flex-1 items-center justify-center">
+        <p className="text-slate-500">読み込み中...</p>
       </div>
     );
   }
 
   if (!project) {
     return (
-      <div className="flex-1 flex items-center justify-center">
+      <div className="flex flex-1 items-center justify-center">
         <p className="text-red-500">{error || 'プロジェクトが見つかりません'}</p>
       </div>
     );
   }
 
   return (
-    <div className="flex-1 flex flex-col overflow-hidden">
+    <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
       <Header
         title="スクリプト"
         subtitle={project.name}
+        statusLabel={summary ? `未音声 ${summary.missingAudio}` : undefined}
+        statusTone={summary && summary.missingAudio > 0 ? 'warning' : 'success'}
       />
 
       {projectId && <WorkflowNav projectId={projectId} current="script" project={project} />}
 
-      {/* エラー表示 */}
       {error && (
-        <div className="mx-6 mt-4 bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg">
+        <div className="mx-5 mt-4 rounded-[8px] border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
           {error}
-          <button
-            onClick={() => setError(null)}
-            className="ml-4 text-red-500 hover:text-red-700"
-          >
+          <button onClick={() => setError(null)} className="ml-3 text-red-500 hover:text-red-700">
             ×
           </button>
         </div>
       )}
 
-      {/* メインコンテンツ */}
-      <div className="flex-1 flex overflow-hidden">
-        {/* 左ペイン: パート一覧 */}
-        <div className="w-72 border-r border-gray-200 bg-white overflow-hidden flex flex-col">
+      <div className="flex min-h-0 flex-1 gap-4 overflow-hidden p-4">
+        <div className="w-80 min-w-[280px] overflow-hidden rounded-[12px] border border-[var(--nv-color-border)] bg-white">
           <PartList
             parts={project.parts}
             selectedPartId={selectedPartId}
@@ -272,8 +267,7 @@ export function ScriptEditPage() {
           />
         </div>
 
-        {/* 右ペイン: スクリプト編集 */}
-        <div className="flex-1 bg-gray-50 overflow-hidden flex flex-col">
+        <div className="min-w-0 flex-1 overflow-auto rounded-[12px] border border-[var(--nv-color-border)] bg-[var(--nv-color-canvas)]">
           {selectedPart ? (
             <ScriptEditor
               part={selectedPart}
@@ -283,11 +277,45 @@ export function ScriptEditPage() {
               lastCommentAppliedAt={lastCommentAppliedAt}
               autoSaveStatus={autoSaveState}
               autoSaveDelayMs={1200}
+              diffPreview={lastDiffByPart[selectedPart.id] ?? null}
             />
           ) : (
-            <div className="flex-1 flex items-center justify-center text-gray-500">
-              パートを選択してください
+            <div className="p-4">
+              <EmptyState title="パートを選択してください" />
             </div>
+          )}
+        </div>
+
+        <div className="w-72 min-w-[260px] space-y-3 overflow-auto">
+          <Card title="編集メモ" subtitle="この画面の使い方">
+            <ul className="space-y-2 text-xs text-slate-600">
+              <li>・要約と原稿を編集すると自動保存されます。</li>
+              <li>・コメント修正でAI再生成できます。</li>
+              <li>・差分は「再生成差分」に表示されます。</li>
+            </ul>
+          </Card>
+
+          {selectedPart && (
+            <Card title="選択中パート" subtitle={`No.${selectedPart.index + 1}`}>
+              <div className="space-y-2 text-xs text-slate-600">
+                <div className="flex items-center justify-between">
+                  <span>タイトル</span>
+                  <Badge tone="info" className="max-w-[140px] truncate">
+                    {selectedPart.title}
+                  </Badge>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span>推定時間</span>
+                  <StatusChip
+                    tone="neutral"
+                    label={`${Math.round(selectedPart.durationEstimateSec)}秒`}
+                  />
+                </div>
+                <p className="rounded-[8px] border border-[var(--nv-color-border)] bg-slate-50 p-2 text-[11px] text-slate-500">
+                  {selectedPart.summary || '要約が未設定です'}
+                </p>
+              </div>
+            </Card>
           )}
         </div>
       </div>

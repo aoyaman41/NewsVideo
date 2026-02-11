@@ -1,8 +1,15 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { Header, WorkflowNav } from '../components/layout';
-import { ArticleInput } from '../components/article';
-import type { ArticleInput as ArticleInputType, AutoGenerationStatus, ImageAsset, Project } from '../schemas';
+import { ArticleInput, FileImport, ImageDropzone } from '../components/article';
+import { Badge, Card, StatusChip } from '../components/ui';
+import type {
+  ArticleInput as ArticleInputType,
+  AutoGenerationStatus,
+  ImageAsset,
+  Project,
+} from '../schemas';
+import { nextActionLabel, stageLabel, summarizeProjectProgress } from '../utils/projectHealth';
 import {
   createGeminiImageUsageRecord,
   createGeminiTtsUsageRecord,
@@ -20,6 +27,7 @@ export function ArticleInputPage() {
     bodyText: '',
   });
   const [images, setImages] = useState<ImageAsset[]>([]);
+  const [blobUrls, setBlobUrls] = useState<Map<string, string>>(new Map());
   const [isGenerating, setIsGenerating] = useState(false);
   const [isAutoGenerating, setIsAutoGenerating] = useState(false);
   const [autoStatus, setAutoStatus] = useState<string | null>(null);
@@ -27,10 +35,18 @@ export function ArticleInputPage() {
   const [targetPartCount, setTargetPartCount] = useState<number>(5);
   const autoCancelRef = useRef(false);
   const isMountedRef = useRef(true);
+  const blobUrlsRef = useRef<Map<string, string>>(new Map());
+
+  useEffect(() => {
+    blobUrlsRef.current = blobUrls;
+  }, [blobUrls]);
 
   useEffect(() => {
     return () => {
       isMountedRef.current = false;
+      for (const url of blobUrlsRef.current.values()) {
+        URL.revokeObjectURL(url);
+      }
     };
   }, []);
 
@@ -55,6 +71,12 @@ export function ArticleInputPage() {
 
         const imported = (project.article?.importedImages ?? []) as ImageAsset[];
         setImages(imported);
+        setBlobUrls((prev) => {
+          for (const url of prev.values()) {
+            URL.revokeObjectURL(url);
+          }
+          return new Map();
+        });
 
         if (project.autoGenerationStatus?.running) {
           setIsAutoGenerating(true);
@@ -142,10 +164,10 @@ export function ArticleInputPage() {
     const isNewRun = patch.running && Boolean(patch.startedAt);
     const finishedAt =
       patch.running === false
-        ? patch.finishedAt ?? now
+        ? (patch.finishedAt ?? now)
         : isNewRun
           ? undefined
-          : patch.finishedAt ?? latestStatus?.finishedAt;
+          : (patch.finishedAt ?? latestStatus?.finishedAt);
     const mergedSteps = {
       ...(latestStatus?.steps ?? {}),
       ...(patch.steps ?? {}),
@@ -195,7 +217,12 @@ export function ArticleInputPage() {
     }
   };
 
-  const buildTtsOptions = (settings: { ttsEngine?: string; ttsVoice?: string; ttsSpeakingRate?: number; ttsPitch?: number }) => {
+  const buildTtsOptions = (settings: {
+    ttsEngine?: string;
+    ttsVoice?: string;
+    ttsSpeakingRate?: number;
+    ttsPitch?: number;
+  }) => {
     const voiceName = settings.ttsVoice || 'Charon';
     const match = voiceName.match(/^([a-z]{2}-[A-Z]{2})/);
     const languageCode = match?.[1] || 'ja-JP';
@@ -320,9 +347,10 @@ export function ArticleInputPage() {
         cancelRequested: false,
         error: undefined,
         finishedAt: undefined,
-        steps: mode === 'restart'
-          ? { script: false, prompts: false, images: false, audio: false, video: false }
-          : undefined,
+        steps:
+          mode === 'restart'
+            ? { script: false, prompts: false, images: false, audio: false, video: false }
+            : undefined,
         clearLastVideoPath: mode === 'restart',
       });
       await ensureNotCancelled();
@@ -333,7 +361,8 @@ export function ArticleInputPage() {
         const script = total > 0;
         const partIdSet = new Set(parts.map((part) => part.id));
         const promptsCount = p.prompts
-          ? new Set(p.prompts.filter((prompt) => partIdSet.has(prompt.partId)).map((p) => p.partId)).size
+          ? new Set(p.prompts.filter((prompt) => partIdSet.has(prompt.partId)).map((p) => p.partId))
+              .size
           : 0;
         const prompts = script && promptsCount === total;
         const images = script && parts.every((part) => (part.panelImages?.length ?? 0) > 0);
@@ -361,7 +390,11 @@ export function ArticleInputPage() {
         await window.electronAPI.project.save(project);
         setProjectSafe(project);
         steps = computeStepState(project);
-        await updateAutoStatus(project, { running: true, step: 'スクリプト完了', steps: { script: true } });
+        await updateAutoStatus(project, {
+          running: true,
+          step: 'スクリプト完了',
+          steps: { script: true },
+        });
         await ensureNotCancelled();
       }
 
@@ -390,14 +423,18 @@ export function ArticleInputPage() {
           setProjectSafe(project);
         }
         steps = computeStepState(project);
-        await updateAutoStatus(project, { running: true, step: '画像プロンプト完了', steps: { prompts: true } });
+        await updateAutoStatus(project, {
+          running: true,
+          step: '画像プロンプト完了',
+          steps: { prompts: true },
+        });
         await ensureNotCancelled();
       }
 
       if (!steps.images) {
         await updateAutoStatus(project, { running: true, step: '画像を生成中...' });
         const partById = new Map(project.parts.map((p) => [p.id, p]));
-        const latestPromptByPart = new Map<string, typeof project.prompts[number]>();
+        const latestPromptByPart = new Map<string, (typeof project.prompts)[number]>();
         for (const prompt of project.prompts) {
           if (!partById.has(prompt.partId)) continue;
           const current = latestPromptByPart.get(prompt.partId);
@@ -439,10 +476,7 @@ export function ArticleInputPage() {
           await ensureNotCancelled();
         }
 
-        const imageUsage = createGeminiImageUsageRecord(
-          imageAssets.length,
-          'image_generate_batch'
-        );
+        const imageUsage = createGeminiImageUsageRecord(imageAssets.length, 'image_generate_batch');
 
         const promptById = new Map(promptsToGenerate.map((p) => [p.id, p]));
         for (const imageAsset of imageAssets) {
@@ -453,7 +487,11 @@ export function ArticleInputPage() {
           const part = nextPartsById.get(p.partId);
           if (!part) continue;
           if ((part.panelImages?.length ?? 0) > 0) continue;
-          nextPartsById.set(p.partId, { ...part, panelImages: [{ imageId: imageAsset.id }], updatedAt: now });
+          nextPartsById.set(p.partId, {
+            ...part,
+            panelImages: [{ imageId: imageAsset.id }],
+            updatedAt: now,
+          });
         }
 
         project.parts = project.parts.map((p) => nextPartsById.get(p.id) ?? p);
@@ -465,7 +503,11 @@ export function ArticleInputPage() {
         await window.electronAPI.project.save(project);
         setProjectSafe(project);
         steps = computeStepState(project);
-        await updateAutoStatus(project, { running: true, step: '画像生成完了', steps: { images: true } });
+        await updateAutoStatus(project, {
+          running: true,
+          step: '画像生成完了',
+          steps: { images: true },
+        });
         await ensureNotCancelled();
       }
 
@@ -481,7 +523,11 @@ export function ArticleInputPage() {
         for (const part of nextParts) {
           await ensureNotCancelled();
           if (part.audio) continue;
-          const result = await window.electronAPI.tts.generate(part.scriptText, ttsOptions, projectId);
+          const result = await window.electronAPI.tts.generate(
+            part.scriptText,
+            ttsOptions,
+            projectId
+          );
           await ensureNotCancelled();
           const usageRecord = createGeminiTtsUsageRecord('tts_generate', result.usage);
           if (usageRecord) audioUsageRecords.push(usageRecord);
@@ -499,7 +545,11 @@ export function ArticleInputPage() {
         await window.electronAPI.project.save(project);
         setProjectSafe(project);
         steps = computeStepState(project);
-        await updateAutoStatus(project, { running: true, step: '音声生成完了', steps: { audio: true } });
+        await updateAutoStatus(project, {
+          running: true,
+          step: '音声生成完了',
+          steps: { audio: true },
+        });
         await ensureNotCancelled();
       }
 
@@ -533,7 +583,11 @@ export function ArticleInputPage() {
         if (projectId) {
           try {
             const latest = await window.electronAPI.project.load(projectId);
-            await updateAutoStatus(latest, { running: false, step: 'キャンセル', cancelRequested: false });
+            await updateAutoStatus(latest, {
+              running: false,
+              step: 'キャンセル',
+              cancelRequested: false,
+            });
           } catch {
             // ignore
           }
@@ -544,7 +598,12 @@ export function ArticleInputPage() {
         if (projectId) {
           try {
             const latest = await window.electronAPI.project.load(projectId);
-            await updateAutoStatus(latest, { running: false, step: 'エラー', error: message, cancelRequested: false });
+            await updateAutoStatus(latest, {
+              running: false,
+              step: 'エラー',
+              error: message,
+              cancelRequested: false,
+            });
           } catch {
             // ignore
           }
@@ -592,67 +651,139 @@ export function ArticleInputPage() {
 
   const autoRunning = Boolean(isAutoGenerating || project?.autoGenerationStatus?.running);
   const currentAutoStatus = autoStatus ?? project?.autoGenerationStatus?.step;
+  const summary = useMemo(() => (project ? summarizeProjectProgress(project) : null), [project]);
+
+  const handleImportedText = (title: string, text: string) => {
+    setArticleData((prev) => ({
+      ...prev,
+      title: prev.title && prev.title.trim().length > 0 ? prev.title : title,
+      bodyText: text,
+    }));
+  };
+
+  const handleImagesAdded = (added: ImageAsset[], addedBlobUrls: Map<string, string>) => {
+    setImages((prev) => [...prev, ...added]);
+    setBlobUrls((prev) => {
+      const next = new Map(prev);
+      for (const [id, url] of addedBlobUrls.entries()) {
+        next.set(id, url);
+      }
+      return next;
+    });
+  };
+
+  const handleImageRemoved = (imageId: string) => {
+    setImages((prev) => prev.filter((image) => image.id !== imageId));
+    setBlobUrls((prev) => {
+      const next = new Map(prev);
+      const url = next.get(imageId);
+      if (url) URL.revokeObjectURL(url);
+      next.delete(imageId);
+      return next;
+    });
+  };
 
   return (
-    <div className="flex-1 flex flex-col overflow-hidden">
+    <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
       <Header
         title="記事"
         subtitle={project?.name}
+        statusLabel={summary ? `次: ${stageLabel(summary.stage)}` : undefined}
+        statusTone="info"
       />
 
       {projectId && <WorkflowNav projectId={projectId} current="article" project={project} />}
 
-      <div className="flex-1 overflow-auto p-6">
-        <div className="max-w-4xl mx-auto space-y-8">
-          {/* エラー表示 */}
-          {error && (
-            <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg">
-              {error}
-            </div>
-          )}
-          {autoRunning && currentAutoStatus && (
-            <div className="bg-blue-50 border border-blue-200 text-blue-700 px-4 py-3 rounded-lg">
-              自動生成中: {currentAutoStatus}
-            </div>
-          )}
+      <div className="flex-1 overflow-auto p-5">
+        <div className="mx-auto grid w-full max-w-7xl gap-4 lg:grid-cols-[2fr_1fr]">
+          <div className="space-y-4">
+            {error && (
+              <div className="rounded-[8px] border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+                {error}
+              </div>
+            )}
 
-          {/* 記事入力フォーム */}
-          <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
-            <h2 className="text-lg font-semibold text-gray-900 mb-4">スクリプト生成設定</h2>
-            <div className="flex flex-wrap items-center gap-4">
-              <label className="text-sm font-medium text-gray-700">パート数</label>
-              <input
-                type="number"
-                min={1}
-                max={20}
-                value={targetPartCount}
-                onChange={(e) => {
-                  const next = Number(e.target.value);
-                  if (!Number.isFinite(next)) return;
-                  setTargetPartCount(Math.min(20, Math.max(1, Math.round(next))));
-                }}
-                className="w-24 px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+            <Card title="スクリプト生成設定" subtitle="記事入力後のパート分割数を指定">
+              <div className="flex flex-wrap items-center gap-4">
+                <label className="text-sm font-medium text-slate-700">パート数</label>
+                <input
+                  type="number"
+                  min={1}
+                  max={20}
+                  value={targetPartCount}
+                  onChange={(e) => {
+                    const next = Number(e.target.value);
+                    if (!Number.isFinite(next)) return;
+                    setTargetPartCount(Math.min(20, Math.max(1, Math.round(next))));
+                  }}
+                  className="nv-input w-28"
+                />
+                <Badge tone="info">1〜20</Badge>
+              </div>
+              <p className="mt-2 text-xs text-slate-500">
+                画像を分けたい場合はパート数を増やしてください（後から編集可能）。
+              </p>
+            </Card>
+
+            <Card title="記事情報" subtitle="必須項目を入力してスクリプトを生成">
+              <ArticleInput
+                defaultValues={articleData}
+                onSubmit={handleSubmit}
+                onAutoSubmit={handleAutoResume}
+                onAutoRestart={handleAutoRestart}
+                onAutoCancel={handleAutoCancel}
+                isLoading={isGenerating}
+                isAutoLoading={autoRunning}
               />
-              <span className="text-sm text-gray-500">1〜20</span>
-            </div>
-            <p className="text-xs text-gray-500 mt-2">
-              画像を分けたい場合はパートを増やす運用を推奨します（後から編集も可能です）
-            </p>
+            </Card>
           </div>
 
-          <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
-            <h2 className="text-lg font-semibold text-gray-900 mb-4">記事情報</h2>
-            <ArticleInput
-              defaultValues={articleData}
-              onSubmit={handleSubmit}
-              onAutoSubmit={handleAutoResume}
-              onAutoRestart={handleAutoRestart}
-              onAutoCancel={handleAutoCancel}
-              isLoading={isGenerating}
-              isAutoLoading={autoRunning}
-            />
-          </div>
+          <div className="space-y-4">
+            <Card title="進行状況" subtitle="次に行う作業と不足項目">
+              <div className="space-y-2 text-sm text-slate-600">
+                {summary && (
+                  <>
+                    <div className="flex items-center justify-between gap-2">
+                      <StatusChip
+                        tone={summary.hasVideoOutput ? 'success' : 'info'}
+                        label={`次: ${stageLabel(summary.stage)}`}
+                      />
+                      <Badge tone={summary.hasVideoOutput ? 'success' : 'warning'}>
+                        {summary.completedSteps}/{summary.totalSteps}
+                      </Badge>
+                    </div>
+                    <p className="text-xs text-slate-500">
+                      推奨アクション: {nextActionLabel(summary)}
+                    </p>
+                    <div className="grid grid-cols-3 gap-2 text-[11px]">
+                      <Badge tone="warning">未プロンプト {summary.missingPrompts}</Badge>
+                      <Badge tone="warning">未画像 {summary.missingImages}</Badge>
+                      <Badge tone="warning">未音声 {summary.missingAudio}</Badge>
+                    </div>
+                  </>
+                )}
+                {autoRunning && currentAutoStatus && (
+                  <div className="rounded-[8px] border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-700">
+                    自動生成中: {currentAutoStatus}
+                  </div>
+                )}
+              </div>
+            </Card>
 
+            <Card title="テキストインポート" subtitle="txt / md / docx を読み込み">
+              <FileImport onTextImported={handleImportedText} />
+            </Card>
+
+            <Card title="記事関連画像" subtitle="ドラッグ&ドロップで登録">
+              <ImageDropzone
+                images={images}
+                projectId={projectId}
+                onImagesAdded={handleImagesAdded}
+                onImageRemoved={handleImageRemoved}
+                blobUrlMap={blobUrls}
+              />
+            </Card>
+          </div>
         </div>
       </div>
     </div>
