@@ -2,6 +2,19 @@ import { useEffect, useMemo, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { Header } from '../components/layout';
 import { Badge, Button, Card, StatusChip } from '../components/ui';
+import {
+  DEFAULT_IMAGE_MODEL,
+  DEFAULT_IMAGE_PROMPT_TEXT_MODEL,
+  DEFAULT_IMAGE_RESOLUTION,
+  DEFAULT_SCRIPT_TEXT_MODEL,
+  IMAGE_MODELS,
+  IMAGE_RESOLUTION_LABELS,
+  IMAGE_RESOLUTIONS,
+  TEXT_COMPLETION_MODELS,
+  type ImageModel,
+  type ImageResolution,
+  type TextCompletionModel,
+} from '../../shared/constants/models';
 
 type ApiKeyService = 'openai' | 'google_ai' | 'google_tts';
 
@@ -16,10 +29,10 @@ interface Settings {
   ttsVoice: string;
   ttsSpeakingRate: number;
   ttsPitch: number;
-  scriptTextModel: 'gpt-5.2' | 'gemini-3.1-pro';
-  imagePromptTextModel: 'gpt-5.2' | 'gemini-3.1-pro';
-  imageModel: 'gemini-3.1-flash-image-preview' | 'gemini-3-pro-image-preview';
-  imageResolution: 'fhd' | '2k' | '4k';
+  scriptTextModel: TextCompletionModel;
+  imagePromptTextModel: TextCompletionModel;
+  imageModel: ImageModel;
+  imageResolution: ImageResolution;
   defaultAspectRatio: '16:9' | '1:1' | '9:16';
   videoResolution: '1920x1080' | '1280x720' | '3840x2160';
   videoFps: number;
@@ -37,10 +50,10 @@ const defaultSettings: Settings = {
   ttsVoice: 'Charon',
   ttsSpeakingRate: 1.0,
   ttsPitch: 0,
-  scriptTextModel: 'gpt-5.2',
-  imagePromptTextModel: 'gpt-5.2',
-  imageModel: 'gemini-3.1-flash-image-preview',
-  imageResolution: 'fhd',
+  scriptTextModel: DEFAULT_SCRIPT_TEXT_MODEL,
+  imagePromptTextModel: DEFAULT_IMAGE_PROMPT_TEXT_MODEL,
+  imageModel: DEFAULT_IMAGE_MODEL,
+  imageResolution: DEFAULT_IMAGE_RESOLUTION,
   defaultAspectRatio: '16:9',
   videoResolution: '1920x1080',
   videoFps: 30,
@@ -276,8 +289,11 @@ export function SettingsPage() {
                         }
                         className="nv-input"
                       >
-                        <option value="gpt-5.2">gpt-5.2</option>
-                        <option value="gemini-3.1-pro">gemini-3.1-pro</option>
+                        {TEXT_COMPLETION_MODELS.map((model) => (
+                          <option key={model} value={model}>
+                            {model}
+                          </option>
+                        ))}
                       </select>
                     </div>
                     <div>
@@ -294,8 +310,11 @@ export function SettingsPage() {
                         }
                         className="nv-input"
                       >
-                        <option value="gpt-5.2">gpt-5.2</option>
-                        <option value="gemini-3.1-pro">gemini-3.1-pro</option>
+                        {TEXT_COMPLETION_MODELS.map((model) => (
+                          <option key={model} value={model}>
+                            {model}
+                          </option>
+                        ))}
                       </select>
                     </div>
                   </div>
@@ -598,12 +617,11 @@ export function SettingsPage() {
                     }
                     className="nv-input"
                   >
-                    <option value="gemini-3.1-flash-image-preview">
-                      gemini-3.1-flash-image-preview
-                    </option>
-                    <option value="gemini-3-pro-image-preview">
-                      gemini-3-pro-image-preview
-                    </option>
+                    {IMAGE_MODELS.map((model) => (
+                      <option key={model} value={model}>
+                        {model}
+                      </option>
+                    ))}
                   </select>
                 </div>
                 <div>
@@ -620,9 +638,11 @@ export function SettingsPage() {
                     }
                     className="nv-input"
                   >
-                    <option value="fhd">Full HD 相当 (16:9=1920x1080)</option>
-                    <option value="2k">2K 相当 (16:9=2560x1440)</option>
-                    <option value="4k">4K 相当 (16:9=3840x2160)</option>
+                    {IMAGE_RESOLUTIONS.map((resolution) => (
+                      <option key={resolution} value={resolution}>
+                        {IMAGE_RESOLUTION_LABELS[resolution]}
+                      </option>
+                    ))}
                   </select>
                 </div>
               </div>

@@ -1,6 +1,22 @@
 import { ipcMain, app, safeStorage } from 'electron';
 import * as fs from 'fs/promises';
 import * as path from 'path';
+import { z } from 'zod';
+import {
+  DEFAULT_IMAGE_MODEL,
+  DEFAULT_IMAGE_PROMPT_TEXT_MODEL,
+  DEFAULT_IMAGE_RESOLUTION,
+  DEFAULT_SCRIPT_TEXT_MODEL,
+  IMAGE_MODELS,
+  IMAGE_RESOLUTIONS,
+  TEXT_COMPLETION_MODELS,
+  isImageModel,
+  isImageResolution,
+  isTextCompletionModel,
+  type ImageModel,
+  type ImageResolution,
+  type TextCompletionModel,
+} from '../../shared/constants/models';
 
 // 設定ファイルのパス
 const getSettingsPath = () => path.join(app.getPath('userData'), 'settings.json');
@@ -8,15 +24,6 @@ const getSecretsPath = () => path.join(app.getPath('userData'), 'secrets.enc');
 
 // デフォルト設定
 type TTSEngine = 'google_tts' | 'gemini_tts' | 'macos_tts';
-type ImageModel = 'gemini-3.1-flash-image-preview' | 'gemini-3-pro-image-preview';
-type TextCompletionModel = 'gpt-5.2' | 'gemini-3.1-pro';
-type ImageResolution = 'fhd' | '2k' | '4k';
-const SUPPORTED_IMAGE_MODELS: readonly ImageModel[] = [
-  'gemini-3.1-flash-image-preview',
-  'gemini-3-pro-image-preview',
-];
-const SUPPORTED_TEXT_MODELS: readonly TextCompletionModel[] = ['gpt-5.2', 'gemini-3.1-pro'];
-const SUPPORTED_IMAGE_RESOLUTIONS: readonly ImageResolution[] = ['fhd', '2k', '4k'];
 
 const defaultSettings = {
   // TTS設定
@@ -24,12 +31,12 @@ const defaultSettings = {
   ttsVoice: 'Charon',
   ttsSpeakingRate: 1.0,
   ttsPitch: 0,
-  scriptTextModel: 'gpt-5.2' as TextCompletionModel,
-  imagePromptTextModel: 'gpt-5.2' as TextCompletionModel,
+  scriptTextModel: DEFAULT_SCRIPT_TEXT_MODEL as TextCompletionModel,
+  imagePromptTextModel: DEFAULT_IMAGE_PROMPT_TEXT_MODEL as TextCompletionModel,
 
   // 画像設定
-  imageModel: 'gemini-3.1-flash-image-preview' as ImageModel,
-  imageResolution: 'fhd' as ImageResolution,
+  imageModel: DEFAULT_IMAGE_MODEL as ImageModel,
+  imageResolution: DEFAULT_IMAGE_RESOLUTION as ImageResolution,
   defaultAspectRatio: '16:9' as const,
 
   // 動画設定
@@ -47,7 +54,31 @@ const defaultSettings = {
   defaultProjectDir: '',
 };
 
-type Settings = typeof defaultSettings;
+type Settings = typeof defaultSettings & { cost?: unknown };
+
+const settingsUpdateSchema = z
+  .object({
+    ttsEngine: z.enum(['google_tts', 'gemini_tts', 'macos_tts']).optional(),
+    ttsVoice: z.string().optional(),
+    ttsSpeakingRate: z.number().finite().optional(),
+    ttsPitch: z.number().finite().optional(),
+    scriptTextModel: z.enum(TEXT_COMPLETION_MODELS).optional(),
+    imagePromptTextModel: z.enum(TEXT_COMPLETION_MODELS).optional(),
+    imageModel: z.enum(IMAGE_MODELS).optional(),
+    imageResolution: z.enum(IMAGE_RESOLUTIONS).optional(),
+    defaultAspectRatio: z.enum(['16:9', '1:1', '9:16']).optional(),
+    videoResolution: z.enum(['1920x1080', '1280x720', '3840x2160']).optional(),
+    videoFps: z.number().finite().optional(),
+    videoBitrate: z.string().optional(),
+    audioBitrate: z.string().optional(),
+    videoPartLeadInSec: z.number().finite().optional(),
+    openingVideoPath: z.string().optional(),
+    endingVideoPath: z.string().optional(),
+    autoSaveInterval: z.number().finite().optional(),
+    defaultProjectDir: z.string().optional(),
+    cost: z.unknown().optional(),
+  })
+  .strip();
 
 // APIキーの種類
 type ApiKeyService = 'openai' | 'google_ai' | 'google_tts';
@@ -71,16 +102,16 @@ async function readSettings(): Promise<Settings> {
     if (!merged.ttsVoice || merged.ttsVoice.includes('-')) {
       merged.ttsVoice = defaultSettings.ttsVoice;
     }
-    if (!SUPPORTED_IMAGE_MODELS.includes(merged.imageModel)) {
+    if (!isImageModel(merged.imageModel)) {
       merged.imageModel = defaultSettings.imageModel;
     }
-    if (!SUPPORTED_IMAGE_RESOLUTIONS.includes(merged.imageResolution)) {
+    if (!isImageResolution(merged.imageResolution)) {
       merged.imageResolution = defaultSettings.imageResolution;
     }
-    if (!SUPPORTED_TEXT_MODELS.includes(merged.scriptTextModel)) {
+    if (!isTextCompletionModel(merged.scriptTextModel)) {
       merged.scriptTextModel = defaultSettings.scriptTextModel;
     }
-    if (!SUPPORTED_TEXT_MODELS.includes(merged.imagePromptTextModel)) {
+    if (!isTextCompletionModel(merged.imagePromptTextModel)) {
       merged.imagePromptTextModel = defaultSettings.imagePromptTextModel;
     }
     return merged;
@@ -116,10 +147,11 @@ ipcMain.handle('settings:get', async (): Promise<Settings> => {
 });
 
 // 設定保存
-ipcMain.handle('settings:set', async (_, settings: Partial<Settings>) => {
+ipcMain.handle('settings:set', async (_, settings: unknown) => {
   const settingsPath = getSettingsPath();
   const currentSettings = await readSettings();
-  const newSettings = { ...currentSettings, ...settings };
+  const validatedSettings = settingsUpdateSchema.parse(settings);
+  const newSettings = { ...currentSettings, ...validatedSettings };
 
   await fs.writeFile(settingsPath, JSON.stringify(newSettings, null, 2));
   return { success: true };

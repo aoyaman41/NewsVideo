@@ -15,8 +15,7 @@ import {
   createGeminiTtsUsageRecord,
   createOpenAIUsageRecord,
 } from '../utils/usage';
-
-const DEFAULT_IMAGE_MODEL = 'gemini-3.1-flash-image-preview';
+import { DEFAULT_IMAGE_MODEL } from '../../shared/constants/models';
 
 async function getImageModelFromSettings(): Promise<string> {
   try {

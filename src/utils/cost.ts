@@ -1,15 +1,16 @@
 import type { UsageRecord } from '../schemas';
+import {
+  DEFAULT_IMAGE_MODEL,
+  DEFAULT_SCRIPT_TEXT_MODEL,
+  IMAGE_MODELS,
+} from '../../shared/constants/models';
 
 type ImageCostRate = {
   inputPerImageUsd: number;
   outputPerImageUsd: number;
 };
 
-const DEFAULT_GEMINI_IMAGE_MODEL = 'gemini-3.1-flash-image-preview';
-const KNOWN_GEMINI_IMAGE_MODELS = [
-  'gemini-3.1-flash-image-preview',
-  'gemini-3-pro-image-preview',
-] as const;
+const KNOWN_GEMINI_IMAGE_MODELS = IMAGE_MODELS;
 const DEFAULT_IMAGE_COST_RATE: ImageCostRate = {
   inputPerImageUsd: 0.0011,
   outputPerImageUsd: 0.134,
@@ -37,7 +38,7 @@ export type CostRates = {
 export const DEFAULT_COST_RATES: CostRates = {
   currency: 'USD',
   openai: {
-    model: 'gpt-5.2',
+    model: DEFAULT_SCRIPT_TEXT_MODEL,
     inputPer1MTokensUsd: 1.75,
     outputPer1MTokensUsd: 14.0,
   },
@@ -45,10 +46,10 @@ export const DEFAULT_COST_RATES: CostRates = {
     ttsModel: 'gemini-2.5-pro-preview-tts',
     ttsInputPer1MTokensUsd: 1.0,
     ttsOutputPer1MTokensUsd: 20.0,
-    imageModel: DEFAULT_GEMINI_IMAGE_MODEL,
+    imageModel: DEFAULT_IMAGE_MODEL,
     imageRatesByModel: {
-      'gemini-3.1-flash-image-preview': { ...DEFAULT_IMAGE_COST_RATE },
-      'gemini-3-pro-image-preview': { ...DEFAULT_IMAGE_COST_RATE },
+      [IMAGE_MODELS[0]]: { ...DEFAULT_IMAGE_COST_RATE },
+      [IMAGE_MODELS[1]]: { ...DEFAULT_IMAGE_COST_RATE },
     },
   },
 };

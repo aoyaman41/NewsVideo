@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import type { ImagePrompt } from '../../schemas';
 import { Badge, Button, StatusChip } from '../ui';
+import { FIXED_IMAGE_STYLE_PRESET } from '../../../shared/constants/models';
 
 interface PromptEditorProps {
   prompt: ImagePrompt;
@@ -10,8 +11,6 @@ interface PromptEditorProps {
   isGenerating?: boolean;
   isRegenerating?: boolean;
 }
-
-const FIXED_STYLE_PRESET = 'infographic';
 
 function formatPromptForReadability(value: string): string {
   return value
@@ -50,7 +49,7 @@ export function PromptEditor({
       ...prompt,
       prompt: editedPrompt,
       negativePrompt: editedNegativePrompt,
-      stylePreset: FIXED_STYLE_PRESET,
+      stylePreset: FIXED_IMAGE_STYLE_PRESET,
       version: prompt.version + 1,
     });
   };
@@ -60,7 +59,7 @@ export function PromptEditor({
       ...prompt,
       prompt: editedPrompt,
       negativePrompt: editedNegativePrompt,
-      stylePreset: FIXED_STYLE_PRESET,
+      stylePreset: FIXED_IMAGE_STYLE_PRESET,
     };
     onGenerate(updatedPrompt);
   };

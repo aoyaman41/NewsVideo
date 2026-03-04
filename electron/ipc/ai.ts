@@ -4,18 +4,23 @@ import * as path from 'path';
 import OpenAI from 'openai';
 import { zodResponseFormat } from 'openai/helpers/zod';
 import { z } from 'zod/v3';
+import {
+  DEFAULT_IMAGE_PROMPT_TEXT_MODEL,
+  DEFAULT_SCRIPT_TEXT_MODEL,
+  FIXED_IMAGE_STYLE_PRESET,
+  GEMINI_TEXT_COMPLETION_MODEL,
+  OPENAI_TEXT_COMPLETION_MODEL,
+  isTextCompletionModel,
+  type TextCompletionModel,
+} from '../../shared/constants/models';
 
 // シークレットファイルのパス
 const getSecretsPath = () => path.join(app.getPath('userData'), 'secrets.enc');
 const getSettingsPath = () => path.join(app.getPath('userData'), 'settings.json');
 
-type TextCompletionModel = 'gpt-5.2' | 'gemini-3.1-pro';
 type TextGenerationScope = 'script' | 'image_prompt';
 type GeminiThinkingLevel = 'low' | 'high';
 
-const DEFAULT_SCRIPT_TEXT_MODEL: TextCompletionModel = 'gpt-5.2';
-const DEFAULT_IMAGE_PROMPT_TEXT_MODEL: TextCompletionModel = 'gpt-5.2';
-const SUPPORTED_TEXT_MODELS = new Set<TextCompletionModel>(['gpt-5.2', 'gemini-3.1-pro']);
 const GEMINI_3_PRO_THINKING_LEVEL: GeminiThinkingLevel = 'high';
 const GEMINI_3_PRO_API_MODEL_ID = 'gemini-3-pro-preview';
 
@@ -252,7 +257,7 @@ async function generateGeminiTextContent(params: {
 }
 
 function resolveGeminiApiModel(selectedModel: TextCompletionModel): string {
-  if (selectedModel === 'gemini-3.1-pro') {
+  if (selectedModel === GEMINI_TEXT_COMPLETION_MODEL) {
     return GEMINI_3_PRO_API_MODEL_ID;
   }
   return selectedModel;
@@ -270,8 +275,8 @@ async function readTextCompletionModel(scope: TextGenerationScope): Promise<Text
     };
     const selectedRaw =
       scope === 'script' ? settings.scriptTextModel : settings.imagePromptTextModel;
-    if (selectedRaw && SUPPORTED_TEXT_MODELS.has(selectedRaw as TextCompletionModel)) {
-      return selectedRaw as TextCompletionModel;
+    if (selectedRaw && isTextCompletionModel(selectedRaw)) {
+      return selectedRaw;
     }
   } catch {
     // 設定未作成時はデフォルトを利用
@@ -409,7 +414,7 @@ ipcMain.handle(
     };
     let usage: OpenAIUsageSummary | null = null;
 
-    if (selectedModel === 'gpt-5.2') {
+    if (selectedModel === OPENAI_TEXT_COMPLETION_MODEL) {
       const apiKey = await readApiKey('openai');
       if (!apiKey) {
         throw new Error('OpenAI APIキーが設定されていません。設定画面からAPIキーを入力してください。');
@@ -554,8 +559,6 @@ const ImagePromptExtractionSchema = z.object({
 });
 
 type ImagePromptExtraction = z.infer<typeof ImagePromptExtractionSchema>;
-
-const FIXED_IMAGE_STYLE_PRESET = 'infographic';
 
 const INFOGRAPHIC_STYLE_PRESET: StylePresetConfig = {
   id: FIXED_IMAGE_STYLE_PRESET,
@@ -1268,7 +1271,7 @@ async function extractSinglePartPromptCandidate(params: {
   let resolvedParsed: ImagePromptExtraction | null = null;
   let usage: OpenAIUsageSummary | null = null;
 
-  if (params.selectedModel === 'gpt-5.2') {
+  if (params.selectedModel === OPENAI_TEXT_COMPLETION_MODEL) {
     const apiKey = await readApiKey('openai');
     if (!apiKey) {
       throw new Error('OpenAI APIキーが設定されていません。設定画面からAPIキーを入力してください。');
@@ -1490,7 +1493,7 @@ JSONのみを出力してください。`;
     let text = '';
     let usage: OpenAIUsageSummary | null = null;
 
-    if (selectedModel === 'gpt-5.2') {
+    if (selectedModel === OPENAI_TEXT_COMPLETION_MODEL) {
       const apiKey = await readApiKey('openai');
       if (!apiKey) {
         throw new Error('OpenAI APIキーが設定されていません。設定画面からAPIキーを入力してください。');

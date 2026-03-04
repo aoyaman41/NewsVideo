@@ -2,6 +2,15 @@ import { ipcMain, app, safeStorage } from 'electron';
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import { GoogleGenerativeAI } from '@google/generative-ai';
+import {
+  DEFAULT_IMAGE_MODEL,
+  DEFAULT_IMAGE_RESOLUTION,
+  FIXED_IMAGE_STYLE_PRESET,
+  isImageModel,
+  isImageResolution,
+  type ImageModel,
+  type ImageResolution,
+} from '../../shared/constants/models';
 
 // シークレットファイルのパス
 const getSecretsPath = () => path.join(app.getPath('userData'), 'secrets.enc');
@@ -12,17 +21,7 @@ const getSettingsPath = () => path.join(app.getPath('userData'), 'settings.json'
 // プロジェクトディレクトリのパス
 const getProjectsPath = () => path.join(app.getPath('userData'), 'projects');
 
-type ImageModel = 'gemini-3.1-flash-image-preview' | 'gemini-3-pro-image-preview';
-type ImageResolution = 'fhd' | '2k' | '4k';
 type ImageAspectRatio = '16:9' | '1:1' | '9:16';
-
-const DEFAULT_IMAGE_MODEL: ImageModel = 'gemini-3.1-flash-image-preview';
-const DEFAULT_IMAGE_RESOLUTION: ImageResolution = 'fhd';
-const SUPPORTED_IMAGE_MODELS = new Set<ImageModel>([
-  'gemini-3.1-flash-image-preview',
-  'gemini-3-pro-image-preview',
-]);
-const SUPPORTED_IMAGE_RESOLUTIONS = new Set<ImageResolution>(['fhd', '2k', '4k']);
 
 // APIキーを読み込み
 async function readApiKey(service: string): Promise<string | null> {
@@ -52,14 +51,11 @@ async function readImageGenerationSettings(): Promise<{
     const settingsPath = getSettingsPath();
     const content = await fs.readFile(settingsPath, 'utf-8');
     const parsed = JSON.parse(content) as { imageModel?: string; imageResolution?: string };
-    if (parsed.imageModel && SUPPORTED_IMAGE_MODELS.has(parsed.imageModel as ImageModel)) {
-      imageModel = parsed.imageModel as ImageModel;
+    if (isImageModel(parsed.imageModel)) {
+      imageModel = parsed.imageModel;
     }
-    if (
-      parsed.imageResolution &&
-      SUPPORTED_IMAGE_RESOLUTIONS.has(parsed.imageResolution as ImageResolution)
-    ) {
-      imageResolution = parsed.imageResolution as ImageResolution;
+    if (isImageResolution(parsed.imageResolution)) {
+      imageResolution = parsed.imageResolution;
     }
   } catch {
     // 設定未作成時などはデフォルトを使用
@@ -124,8 +120,6 @@ type StylePresetConfig = {
   };
   negative: string;
 };
-
-const FIXED_IMAGE_STYLE_PRESET = 'infographic';
 
 const INFOGRAPHIC_STYLE_PRESET: StylePresetConfig = {
   id: FIXED_IMAGE_STYLE_PRESET,

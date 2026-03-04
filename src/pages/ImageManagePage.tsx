@@ -6,8 +6,7 @@ import { Badge, Button, Card, EmptyState, StatusChip } from '../components/ui';
 import type { Project, ImageAssetRef, ImagePrompt } from '../schemas';
 import { summarizeProjectProgress } from '../utils/projectHealth';
 import { createGeminiImageUsageRecord, createOpenAIUsageRecord } from '../utils/usage';
-
-const DEFAULT_IMAGE_MODEL = 'gemini-3.1-flash-image-preview';
+import { DEFAULT_IMAGE_MODEL } from '../../shared/constants/models';
 
 async function getImageModelFromSettings(): Promise<string> {
   try {
