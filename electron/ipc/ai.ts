@@ -562,7 +562,8 @@ function normalizeString(value: unknown): string {
 const MAX_EXTRACTED_TEXT_CHARS = 60;
 const MAX_VISUAL_SLOT_SOURCE_CHARS = 40;
 const MAX_COMPOSITION_NOTE_CHARS = 120;
-const MAX_IMAGE_PROMPT_CHARS = 900;
+// 異常系ガード用の非常上限（通常は切り詰めない想定）
+const MAX_IMAGE_PROMPT_CHARS = 12000;
 
 function truncateTextByChars(value: string, maxChars: number): string {
   const trimmed = value.trim();

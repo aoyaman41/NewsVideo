@@ -144,16 +144,19 @@ function getStylePreset(): StylePresetConfig {
   return INFOGRAPHIC_STYLE_PRESET;
 }
 
-const IMAGE_SYSTEM_POLICY_CORE = `あなたは画像生成モデルです。以下を厳守してください。
-- 出力は画像のみ。説明文や前置きは返さない。
+const IMAGE_SYSTEM_POLICY_CORE = `タスク:
+「指示」ブロックの内容に基づき、1枚の画像を生成する。
+
+制約:
 - 「指示」ブロックを最優先の描画仕様として扱う。
 - 「指示」にない要素・見出し・数値・キャプションを追加しない。
 - 文字を配置する場合は短いラベルまたは数値のみ。長文を配置しない。
 - 写実表現は禁止。`;
 
-const MAX_USER_PROMPT_CHARS = 900;
-const MAX_NEGATIVE_PROMPT_CHARS = 500;
-const MAX_MODEL_INPUT_PROMPT_CHARS = 3200;
+// 異常な長文入力のみを防ぐための非常上限（通常運用では切り詰めない）
+const MAX_USER_PROMPT_CHARS = 12000;
+const MAX_NEGATIVE_PROMPT_CHARS = 4000;
+const MAX_MODEL_INPUT_PROMPT_CHARS = 20000;
 
 function truncateTextByChars(value: string, maxChars: number): string {
   const trimmed = value.trim();
