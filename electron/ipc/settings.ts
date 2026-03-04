@@ -28,7 +28,6 @@ const defaultSettings = {
   imagePromptTextModel: 'gpt-5.2' as TextCompletionModel,
 
   // 画像設定
-  imageStylePreset: 'news_panel',
   imageModel: 'gemini-3.1-flash-image-preview' as ImageModel,
   imageResolution: 'fhd' as ImageResolution,
   defaultAspectRatio: '16:9' as const,

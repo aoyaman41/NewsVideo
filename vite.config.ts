@@ -4,21 +4,35 @@ import electron from 'vite-plugin-electron';
 import renderer from 'vite-plugin-electron-renderer';
 import path from 'path';
 import fs from 'fs';
+import { transformSync } from 'esbuild';
 
-// preload.cjsをdist-electronにコピーするプラグイン
-const copyPreloadPlugin = () => ({
-  name: 'copy-preload',
+const PRELOAD_SOURCE = path.resolve(__dirname, 'electron/preload.ts');
+const PRELOAD_OUTPUT = path.resolve(__dirname, 'dist-electron/preload.cjs');
+
+function compilePreload(): void {
+  const source = fs.readFileSync(PRELOAD_SOURCE, 'utf-8');
+  const { code } = transformSync(source, {
+    loader: 'ts',
+    format: 'cjs',
+    platform: 'node',
+    target: 'node20',
+    sourcemap: false,
+  });
+
+  fs.mkdirSync(path.dirname(PRELOAD_OUTPUT), { recursive: true });
+  fs.writeFileSync(PRELOAD_OUTPUT, code, 'utf-8');
+}
+
+// preload.ts を dist-electron/preload.cjs に変換するプラグイン
+const buildPreloadPlugin = () => ({
+  name: 'build-preload',
   buildStart() {
-    const src = path.resolve(__dirname, 'electron/preload.cjs');
-    const dest = path.resolve(__dirname, 'dist-electron/preload.cjs');
-    fs.mkdirSync(path.dirname(dest), { recursive: true });
-    fs.copyFileSync(src, dest);
+    compilePreload();
   },
   handleHotUpdate({ file }: { file: string }) {
-    if (file.endsWith('preload.cjs')) {
-      const src = path.resolve(__dirname, 'electron/preload.cjs');
-      const dest = path.resolve(__dirname, 'dist-electron/preload.cjs');
-      fs.copyFileSync(src, dest);
+    const normalized = path.normalize(file);
+    if (normalized === path.normalize(PRELOAD_SOURCE)) {
+      compilePreload();
     }
   },
 });
@@ -26,7 +40,7 @@ const copyPreloadPlugin = () => ({
 export default defineConfig({
   plugins: [
     react(),
-    copyPreloadPlugin(),
+    buildPreloadPlugin(),
     electron([
       {
         entry: 'electron/main.ts',

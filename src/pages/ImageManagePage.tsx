@@ -108,8 +108,7 @@ export function ImageManagePage() {
 
       const result = await window.electronAPI.ai.generateImagePrompts(
         project.parts,
-        project.article,
-        'infographic'
+        project.article
       );
       const usageRecord = createOpenAIUsageRecord('image_prompt_generate', result.usage);
 

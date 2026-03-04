@@ -39,8 +39,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   ai: {
     generateScript: (article: unknown, options: unknown) =>
       ipcRenderer.invoke('ai:generateScript', article, options),
-    generateImagePrompts: (parts: unknown[], article: unknown, stylePreset: string) =>
-      ipcRenderer.invoke('ai:generateImagePrompts', parts, article, stylePreset),
+    generateImagePrompts: (parts: unknown[], article: unknown) =>
+      ipcRenderer.invoke('ai:generateImagePrompts', parts, article),
     generateImagePromptForTarget: (parts: unknown[], article: unknown, targetId: string) =>
       ipcRenderer.invoke('ai:generateImagePromptForTarget', parts, article, targetId),
     applyComment: (target: unknown, comment: string) =>
@@ -53,6 +53,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('image:generate', prompt, projectId),
     generateBatch: (prompts: unknown[], projectId: string) =>
       ipcRenderer.invoke('image:generateBatch', prompts, projectId),
+    delete: (filePath: string) => ipcRenderer.invoke('image:delete', filePath),
+    import: (sourcePath: string, projectId: string) =>
+      ipcRenderer.invoke('image:import', sourcePath, projectId),
   },
 
   // TTS操作

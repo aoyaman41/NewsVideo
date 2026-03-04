@@ -453,8 +453,7 @@ export function ArticleInputPage() {
           await updateAutoStatus(project, { running: true, step: '画像プロンプトを生成中...' });
           const promptResult = await window.electronAPI.ai.generateImagePrompts(
             missingParts,
-            project.article,
-            'infographic'
+            project.article
           );
           await ensureNotCancelled();
           const promptUsage = createOpenAIUsageRecord('image_prompt_generate', promptResult.usage);

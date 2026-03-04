@@ -557,36 +557,25 @@ type ImagePromptExtraction = z.infer<typeof ImagePromptExtractionSchema>;
 
 const FIXED_IMAGE_STYLE_PRESET = 'infographic';
 
-const STYLE_PRESETS: Record<string, StylePresetConfig> = {
-  infographic: {
-    id: 'infographic',
-    baseStyle: '16:9 editorial infographic slide, flat clean vector style, no photorealism',
-    colorPalette: 'white and light gray base, dark navy structure, one muted teal accent',
-    lighting: 'flat and matte',
-    background: 'plain light background with generous whitespace',
-    density: 'low',
-    layoutVariants: {
-      dataAndLocation: '左右2カラム。左60%に主ビジュアル、右40%を上下2段（上:地図、下:図表）',
-      dataOnly: '左右2カラム。左60%に主ビジュアル、右40%に図表パネル',
-      locationOnly: '左右2カラム。左60%に主ビジュアル、右40%に地図パネル',
-      general: '左右2カラム。左60%に主ビジュアル、右40%に補助情報パネル',
-    },
-    negative:
-      '人物, 顔, 手, 群衆, 肖像, インタビュー, アナウンサー, 記者, 番組セット, テロップ, 速報帯, ティッカー, ニュース名, 番組名, 局名, 番組タイトル, カテゴリー名, ロゴ, 透かし, QRコード, 商標, 写真, 実写, 写真風, 写実, フォトリアル, フォトリアリスティック, カメラ風, 過度なネオン, 強コントラスト, ギラついた光沢, サイバーパンク, アニメ調',
+const INFOGRAPHIC_STYLE_PRESET: StylePresetConfig = {
+  id: FIXED_IMAGE_STYLE_PRESET,
+  baseStyle: '16:9 editorial infographic slide, flat clean vector style, no photorealism',
+  colorPalette: 'white and light gray base, dark navy structure, one muted teal accent',
+  lighting: 'flat and matte',
+  background: 'plain light background with generous whitespace',
+  density: 'low',
+  layoutVariants: {
+    dataAndLocation: '左右2カラム。左60%に主ビジュアル、右40%を上下2段（上:地図、下:図表）',
+    dataOnly: '左右2カラム。左60%に主ビジュアル、右40%に図表パネル',
+    locationOnly: '左右2カラム。左60%に主ビジュアル、右40%に地図パネル',
+    general: '左右2カラム。左60%に主ビジュアル、右40%に補助情報パネル',
   },
+  negative:
+    '人物, 顔, 手, 群衆, 肖像, インタビュー, アナウンサー, 記者, 番組セット, テロップ, 速報帯, ティッカー, ニュース名, 番組名, 局名, 番組タイトル, カテゴリー名, ロゴ, 透かし, QRコード, 商標, 写真, 実写, 写真風, 写実, フォトリアル, フォトリアリスティック, カメラ風, 過度なネオン, 強コントラスト, ギラついた光沢, サイバーパンク, アニメ調',
 };
 
-const STYLE_PRESET_ALIASES: Record<string, string> = {
-  news_broadcast: FIXED_IMAGE_STYLE_PRESET,
-  news_panel: FIXED_IMAGE_STYLE_PRESET,
-  documentary: FIXED_IMAGE_STYLE_PRESET,
-  photorealistic: FIXED_IMAGE_STYLE_PRESET,
-  illustration: FIXED_IMAGE_STYLE_PRESET,
-};
-
-function getStylePreset(stylePreset: string): StylePresetConfig {
-  const resolved = STYLE_PRESET_ALIASES[stylePreset] || stylePreset;
-  return STYLE_PRESETS[resolved] || STYLE_PRESETS[FIXED_IMAGE_STYLE_PRESET];
+function getStylePreset(): StylePresetConfig {
+  return INFOGRAPHIC_STYLE_PRESET;
 }
 
 function normalizeString(value: unknown): string {
@@ -1341,8 +1330,7 @@ ipcMain.handle(
   async (
     _,
     parts: GeneratedPart[],
-    article: Article,
-    stylePreset: string
+    article: Article
   ): Promise<{
     prompts: Array<{
       id: string;
@@ -1356,8 +1344,7 @@ ipcMain.handle(
     }>;
     usage: OpenAIUsageSummary | null;
   }> => {
-    void stylePreset;
-    const styleConfig = getStylePreset(FIXED_IMAGE_STYLE_PRESET);
+    const styleConfig = getStylePreset();
     const cleanedBodyText = sanitizeArticleText(article.bodyText ?? '');
     const bodyTextForPrompt = cleanedBodyText || article.bodyText || '';
     const articleText = `${article.title}\n${article.source ?? ''}\n${bodyTextForPrompt}`.trim();
@@ -1412,7 +1399,7 @@ ipcMain.handle(
     article: Article,
     targetId: string
   ): Promise<{ prompt: ImagePrompt; usage: OpenAIUsageSummary | null }> => {
-    const styleConfig = getStylePreset(FIXED_IMAGE_STYLE_PRESET);
+    const styleConfig = getStylePreset();
     const cleanedBodyText = sanitizeArticleText(article.bodyText ?? '');
     const bodyTextForPrompt = cleanedBodyText || article.bodyText || '';
     const articleText = `${article.title}\n${article.source ?? ''}\n${bodyTextForPrompt}`.trim();

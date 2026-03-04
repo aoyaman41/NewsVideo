@@ -18,7 +18,6 @@ interface Settings {
   ttsPitch: number;
   scriptTextModel: 'gpt-5.2' | 'gemini-3.1-pro';
   imagePromptTextModel: 'gpt-5.2' | 'gemini-3.1-pro';
-  imageStylePreset: string;
   imageModel: 'gemini-3.1-flash-image-preview' | 'gemini-3-pro-image-preview';
   imageResolution: 'fhd' | '2k' | '4k';
   defaultAspectRatio: '16:9' | '1:1' | '9:16';
@@ -40,7 +39,6 @@ const defaultSettings: Settings = {
   ttsPitch: 0,
   scriptTextModel: 'gpt-5.2',
   imagePromptTextModel: 'gpt-5.2',
-  imageStylePreset: 'news_panel',
   imageModel: 'gemini-3.1-flash-image-preview',
   imageResolution: 'fhd',
   defaultAspectRatio: '16:9',

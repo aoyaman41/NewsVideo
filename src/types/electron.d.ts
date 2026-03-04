@@ -44,8 +44,7 @@ interface ElectronAPI {
     ) => Promise<{ parts: Part[]; usage?: TokenUsage | null }>;
     generateImagePrompts: (
       parts: Part[],
-      article: Article,
-      stylePreset: string
+      article: Article
     ) => Promise<{ prompts: ImagePrompt[]; usage?: TokenUsage | null }>;
     generateImagePromptForTarget: (
       parts: Part[],
@@ -262,7 +261,6 @@ interface Settings {
   ttsPitch: number;
   scriptTextModel: 'gpt-5.2' | 'gemini-3.1-pro';
   imagePromptTextModel: 'gpt-5.2' | 'gemini-3.1-pro';
-  imageStylePreset: string;
   imageModel: 'gemini-3.1-flash-image-preview' | 'gemini-3-pro-image-preview';
   imageResolution: 'fhd' | '2k' | '4k';
   defaultAspectRatio: '16:9' | '1:1' | '9:16';
