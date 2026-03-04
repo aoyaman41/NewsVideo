@@ -1,3 +1,10 @@
+import type {
+  type ImageModel,
+  type ImageResolution,
+  type TextCompletionModel,
+} from '../../shared/constants/models';
+import type { type TTSEngine } from '../../shared/settings/appSettings';
+
 // Electron API の型定義
 
 type AllowedEventChannel =
@@ -75,7 +82,7 @@ interface ElectronAPI {
       options: TTSOptions,
       projectId: string
     ) => Promise<Array<{ audio: AudioAsset; usage?: TokenUsage | null }>>;
-    getVoices: (engine?: 'google_tts' | 'gemini_tts' | 'macos_tts') => Promise<VoiceInfo[]>;
+    getVoices: (engine?: TTSEngine) => Promise<VoiceInfo[]>;
   };
 
   video: {
@@ -231,7 +238,7 @@ interface AudioAsset {
   id: string;
   filePath: string;
   durationSec: number;
-  ttsEngine: 'google_tts' | 'gemini_tts' | 'macos_tts';
+  ttsEngine: TTSEngine;
   voiceId: string;
   segments?: string[];
   timepoints?: Array<{
@@ -255,14 +262,14 @@ interface Comment {
 
 // 設定関連の型
 interface Settings {
-  ttsEngine: 'google_tts' | 'gemini_tts' | 'macos_tts';
+  ttsEngine: TTSEngine;
   ttsVoice: string;
   ttsSpeakingRate: number;
   ttsPitch: number;
-  scriptTextModel: 'gpt-5.2' | 'gemini-3.1-pro';
-  imagePromptTextModel: 'gpt-5.2' | 'gemini-3.1-pro';
-  imageModel: 'gemini-3.1-flash-image-preview' | 'gemini-3-pro-image-preview';
-  imageResolution: 'fhd' | '2k' | '4k';
+  scriptTextModel: TextCompletionModel;
+  imagePromptTextModel: TextCompletionModel;
+  imageModel: ImageModel;
+  imageResolution: ImageResolution;
   defaultAspectRatio: '16:9' | '1:1' | '9:16';
   videoResolution: '1920x1080' | '1280x720' | '3840x2160';
   videoFps: number;
@@ -292,7 +299,7 @@ interface CommentTarget {
 }
 
 interface TTSOptions {
-  ttsEngine: 'google_tts' | 'gemini_tts' | 'macos_tts';
+  ttsEngine: TTSEngine;
   voiceName: string;
   languageCode: string;
   speakingRate: number;

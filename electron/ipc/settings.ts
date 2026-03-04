@@ -1,84 +1,18 @@
 import { ipcMain, app, safeStorage } from 'electron';
 import * as fs from 'fs/promises';
 import * as path from 'path';
-import { z } from 'zod';
 import {
-  DEFAULT_IMAGE_MODEL,
-  DEFAULT_IMAGE_PROMPT_TEXT_MODEL,
-  DEFAULT_IMAGE_RESOLUTION,
-  DEFAULT_SCRIPT_TEXT_MODEL,
-  IMAGE_MODELS,
-  IMAGE_RESOLUTIONS,
-  TEXT_COMPLETION_MODELS,
-  isImageModel,
-  isImageResolution,
-  isTextCompletionModel,
-  type ImageModel,
-  type ImageResolution,
-  type TextCompletionModel,
-} from '../../shared/constants/models';
+  DEFAULT_SETTINGS,
+  normalizeSettings,
+  parseSettingsUpdate,
+  type AppSettings,
+} from '../../shared/settings/appSettings';
 
 // 設定ファイルのパス
 const getSettingsPath = () => path.join(app.getPath('userData'), 'settings.json');
 const getSecretsPath = () => path.join(app.getPath('userData'), 'secrets.enc');
 
-// デフォルト設定
-type TTSEngine = 'google_tts' | 'gemini_tts' | 'macos_tts';
-
-const defaultSettings = {
-  // TTS設定
-  ttsEngine: 'gemini_tts' as TTSEngine,
-  ttsVoice: 'Charon',
-  ttsSpeakingRate: 1.0,
-  ttsPitch: 0,
-  scriptTextModel: DEFAULT_SCRIPT_TEXT_MODEL as TextCompletionModel,
-  imagePromptTextModel: DEFAULT_IMAGE_PROMPT_TEXT_MODEL as TextCompletionModel,
-
-  // 画像設定
-  imageModel: DEFAULT_IMAGE_MODEL as ImageModel,
-  imageResolution: DEFAULT_IMAGE_RESOLUTION as ImageResolution,
-  defaultAspectRatio: '16:9' as const,
-
-  // 動画設定
-  videoResolution: '1920x1080' as const,
-  videoFps: 30,
-  videoBitrate: '8M',
-  audioBitrate: '192k',
-  // パート切替後、読み上げ開始までの「間」（秒）
-  videoPartLeadInSec: 0.3,
-  openingVideoPath: '',
-  endingVideoPath: '',
-
-  // その他
-  autoSaveInterval: 60, // 秒
-  defaultProjectDir: '',
-};
-
-type Settings = typeof defaultSettings & { cost?: unknown };
-
-const settingsUpdateSchema = z
-  .object({
-    ttsEngine: z.enum(['google_tts', 'gemini_tts', 'macos_tts']).optional(),
-    ttsVoice: z.string().optional(),
-    ttsSpeakingRate: z.number().finite().optional(),
-    ttsPitch: z.number().finite().optional(),
-    scriptTextModel: z.enum(TEXT_COMPLETION_MODELS).optional(),
-    imagePromptTextModel: z.enum(TEXT_COMPLETION_MODELS).optional(),
-    imageModel: z.enum(IMAGE_MODELS).optional(),
-    imageResolution: z.enum(IMAGE_RESOLUTIONS).optional(),
-    defaultAspectRatio: z.enum(['16:9', '1:1', '9:16']).optional(),
-    videoResolution: z.enum(['1920x1080', '1280x720', '3840x2160']).optional(),
-    videoFps: z.number().finite().optional(),
-    videoBitrate: z.string().optional(),
-    audioBitrate: z.string().optional(),
-    videoPartLeadInSec: z.number().finite().optional(),
-    openingVideoPath: z.string().optional(),
-    endingVideoPath: z.string().optional(),
-    autoSaveInterval: z.number().finite().optional(),
-    defaultProjectDir: z.string().optional(),
-    cost: z.unknown().optional(),
-  })
-  .strip();
+type Settings = AppSettings;
 
 // APIキーの種類
 type ApiKeyService = 'openai' | 'google_ai' | 'google_tts';
@@ -91,32 +25,9 @@ async function readSettings(): Promise<Settings> {
   try {
     const settingsPath = getSettingsPath();
     const content = await fs.readFile(settingsPath, 'utf-8');
-    const merged = { ...defaultSettings, ...JSON.parse(content) } as Settings;
-    // 旧ボイス名の移行
-    if (merged.ttsVoice === 'ja-JP-Chirp3-HD-Aoife') {
-      merged.ttsVoice = defaultSettings.ttsVoice;
-    }
-    // 本アプリでは Gemini TTS をデフォルト運用にする
-    merged.ttsEngine = 'gemini_tts';
-    // 旧Google/macos系のボイス名が残っている場合はGemini側のデフォルトへ寄せる
-    if (!merged.ttsVoice || merged.ttsVoice.includes('-')) {
-      merged.ttsVoice = defaultSettings.ttsVoice;
-    }
-    if (!isImageModel(merged.imageModel)) {
-      merged.imageModel = defaultSettings.imageModel;
-    }
-    if (!isImageResolution(merged.imageResolution)) {
-      merged.imageResolution = defaultSettings.imageResolution;
-    }
-    if (!isTextCompletionModel(merged.scriptTextModel)) {
-      merged.scriptTextModel = defaultSettings.scriptTextModel;
-    }
-    if (!isTextCompletionModel(merged.imagePromptTextModel)) {
-      merged.imagePromptTextModel = defaultSettings.imagePromptTextModel;
-    }
-    return merged;
+    return normalizeSettings(JSON.parse(content));
   } catch {
-    return defaultSettings;
+    return normalizeSettings(DEFAULT_SETTINGS);
   }
 }
 
@@ -150,8 +61,8 @@ ipcMain.handle('settings:get', async (): Promise<Settings> => {
 ipcMain.handle('settings:set', async (_, settings: unknown) => {
   const settingsPath = getSettingsPath();
   const currentSettings = await readSettings();
-  const validatedSettings = settingsUpdateSchema.parse(settings);
-  const newSettings = { ...currentSettings, ...validatedSettings };
+  const validatedSettings = parseSettingsUpdate(settings);
+  const newSettings = normalizeSettings({ ...currentSettings, ...validatedSettings });
 
   await fs.writeFile(settingsPath, JSON.stringify(newSettings, null, 2));
   return { success: true };

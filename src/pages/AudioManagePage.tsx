@@ -115,11 +115,7 @@ export function AudioManagePage() {
         setSettings((prev) => {
           if (list.length === 0) return prev;
           if (list.some((v) => v.name === prev.ttsVoice)) return prev;
-          const preferred =
-            prev.ttsEngine === 'google_tts'
-              ? list.find((v) => v.languageCodes.some((lc) => lc.startsWith('ja'))) || list[0]
-              : list[0];
-          return { ...prev, ttsVoice: preferred.name };
+          return { ...prev, ttsVoice: list[0].name };
         });
       } catch (err) {
         console.warn('Failed to load voices:', err);
@@ -561,18 +557,11 @@ export function AudioManagePage() {
                     className="nv-input"
                     disabled={isLoadingVoices}
                   >
-                    {voices
-                      .filter((v) =>
-                        settings.ttsEngine === 'google_tts'
-                          ? v.languageCodes.some((lc) => lc.startsWith('ja'))
-                          : true
-                      )
-                      .slice(0, 200)
-                      .map((v) => (
-                        <option key={v.name} value={v.name}>
-                          {v.name}
-                        </option>
-                      ))}
+                    {voices.slice(0, 200).map((v) => (
+                      <option key={v.name} value={v.name}>
+                        {v.name}
+                      </option>
+                    ))}
                   </select>
                 ) : (
                   <input
