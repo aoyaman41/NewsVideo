@@ -13,6 +13,34 @@ const PRELOAD_WATCH_ROOTS = [
 ];
 const PRELOAD_WATCH_EXTENSIONS = new Set(['.ts', '.tsx', '.js', '.mjs', '.cjs']);
 
+function getRendererManualChunk(id: string): string | undefined {
+  if (!id.includes('node_modules')) return undefined;
+
+  if (
+    id.includes('/mammoth/') ||
+    id.includes('/jszip/') ||
+    id.includes('/underscore/') ||
+    id.includes('/lop/') ||
+    id.includes('/xmlbuilder/')
+  ) {
+    return 'vendor-mammoth';
+  }
+
+  if (id.includes('/react-router/') || id.includes('/react-router-dom/')) {
+    return 'vendor-router';
+  }
+
+  if (id.includes('/react/') || id.includes('/react-dom/')) {
+    return 'vendor-react';
+  }
+
+  if (id.includes('/@dnd-kit/')) {
+    return 'vendor-dnd';
+  }
+
+  return 'vendor-misc';
+}
+
 function compilePreload(): void {
   buildSync({
     entryPoints: [PRELOAD_SOURCE],
@@ -81,5 +109,10 @@ export default defineConfig({
   build: {
     outDir: 'dist',
     emptyOutDir: true,
+    rollupOptions: {
+      output: {
+        manualChunks: getRendererManualChunk,
+      },
+    },
   },
 });
