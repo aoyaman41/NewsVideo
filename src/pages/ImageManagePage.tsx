@@ -7,6 +7,17 @@ import type { Project, ImageAssetRef, ImagePrompt } from '../schemas';
 import { summarizeProjectProgress } from '../utils/projectHealth';
 import { createGeminiImageUsageRecord, createOpenAIUsageRecord } from '../utils/usage';
 
+const DEFAULT_IMAGE_MODEL = 'gemini-3.1-flash-image-preview';
+
+async function getImageModelFromSettings(): Promise<string> {
+  try {
+    const settings = await window.electronAPI.settings.get();
+    return settings.imageModel || DEFAULT_IMAGE_MODEL;
+  } catch {
+    return DEFAULT_IMAGE_MODEL;
+  }
+}
+
 export function ImageManagePage() {
   const { projectId } = useParams<{ projectId: string }>();
   const navigate = useNavigate();
@@ -164,7 +175,8 @@ export function ImageManagePage() {
         setError(null);
 
         const imageAsset = await window.electronAPI.image.generate(prompt, projectId);
-        const usageRecord = createGeminiImageUsageRecord(1, 'image_generate');
+        const imageModel = await getImageModelFromSettings();
+        const usageRecord = createGeminiImageUsageRecord(1, 'image_generate', imageModel);
 
         // プロジェクトを更新
         const now = new Date().toISOString();
@@ -211,7 +223,12 @@ export function ImageManagePage() {
       setError(null);
 
       const imageAssets = await window.electronAPI.image.generateBatch(targetPrompts, projectId);
-      const usageRecord = createGeminiImageUsageRecord(imageAssets.length, 'image_generate_batch');
+      const imageModel = await getImageModelFromSettings();
+      const usageRecord = createGeminiImageUsageRecord(
+        imageAssets.length,
+        'image_generate_batch',
+        imageModel
+      );
 
       // プロジェクトを更新
       const now = new Date().toISOString();
@@ -446,7 +463,7 @@ export function ImageManagePage() {
         </Card>
       </div>
 
-      <div className="grid min-h-0 flex-1 grid-cols-[280px_minmax(0,1fr)_minmax(0,1.1fr)] gap-4 overflow-hidden p-4">
+      <div className="grid min-h-0 flex-1 grid-cols-[260px_minmax(0,1.15fr)_minmax(0,1.15fr)] gap-4 overflow-hidden p-4">
         <Card
           title="パート一覧"
           subtitle={`${project.parts.length}パート`}
@@ -524,7 +541,7 @@ export function ImageManagePage() {
 
         <Card
           title="画像割り当て"
-          subtitle="候補から採用画像を決定"
+          subtitle="候補をクリックで即割り当て（右上アイコンで拡大）"
           className="min-h-0 overflow-auto"
         >
           {selectedPart ? (

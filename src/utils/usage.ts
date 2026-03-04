@@ -5,11 +5,13 @@ type TokenUsage = {
   outputTokens?: number;
   totalTokens?: number;
   model?: string;
+  provider?: 'openai' | 'gemini';
 };
 
 const DEFAULT_OPENAI_MODEL = 'gpt-5.2';
+const DEFAULT_GEMINI_TEXT_MODEL = 'gemini-3.1-pro';
 const DEFAULT_GEMINI_TTS_MODEL = 'gemini-2.5-pro-preview-tts';
-const DEFAULT_GEMINI_IMAGE_MODEL = 'gemini-3-pro-image-preview';
+const DEFAULT_GEMINI_IMAGE_MODEL = 'gemini-3.1-flash-image-preview';
 
 function clampNonNegative(value?: number): number {
   if (!Number.isFinite(value)) return 0;
@@ -21,11 +23,13 @@ export function createOpenAIUsageRecord(
   usage?: TokenUsage | null
 ): UsageRecord | null {
   if (!usage) return null;
+  const provider = usage.provider === 'gemini' ? 'gemini' : 'openai';
+  const defaultModel = provider === 'gemini' ? DEFAULT_GEMINI_TEXT_MODEL : DEFAULT_OPENAI_MODEL;
   return {
     id: crypto.randomUUID(),
-    provider: 'openai',
+    provider,
     category: 'text',
-    model: usage.model || DEFAULT_OPENAI_MODEL,
+    model: usage.model || defaultModel,
     operation,
     inputTokens: clampNonNegative(usage.inputTokens),
     outputTokens: clampNonNegative(usage.outputTokens),
@@ -52,7 +56,8 @@ export function createGeminiTtsUsageRecord(
 
 export function createGeminiImageUsageRecord(
   imageCount: number,
-  operation: string = 'image_generate'
+  operation: string = 'image_generate',
+  model: string = DEFAULT_GEMINI_IMAGE_MODEL
 ): UsageRecord | null {
   const count = clampNonNegative(imageCount);
   if (count <= 0) return null;
@@ -60,7 +65,7 @@ export function createGeminiImageUsageRecord(
     id: crypto.randomUUID(),
     provider: 'gemini',
     category: 'image',
-    model: DEFAULT_GEMINI_IMAGE_MODEL,
+    model: model || DEFAULT_GEMINI_IMAGE_MODEL,
     operation,
     imageCount: count,
     createdAt: new Date().toISOString(),

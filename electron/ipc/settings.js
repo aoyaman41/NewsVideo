@@ -4,14 +4,24 @@ import * as path from 'path';
 // 設定ファイルのパス
 const getSettingsPath = () => path.join(app.getPath('userData'), 'settings.json');
 const getSecretsPath = () => path.join(app.getPath('userData'), 'secrets.enc');
+const SUPPORTED_IMAGE_MODELS = [
+    'gemini-3.1-flash-image-preview',
+    'gemini-3-pro-image-preview',
+];
+const SUPPORTED_TEXT_MODELS = ['gpt-5.2', 'gemini-3.1-pro'];
+const SUPPORTED_IMAGE_RESOLUTIONS = ['fhd', '2k', '4k'];
 const defaultSettings = {
     // TTS設定
     ttsEngine: 'gemini_tts',
     ttsVoice: 'Charon',
     ttsSpeakingRate: 1.0,
     ttsPitch: 0,
+    scriptTextModel: 'gpt-5.2',
+    imagePromptTextModel: 'gpt-5.2',
     // 画像設定
     imageStylePreset: 'news_panel',
+    imageModel: 'gemini-3.1-flash-image-preview',
+    imageResolution: 'fhd',
     defaultAspectRatio: '16:9',
     // 動画設定
     videoResolution: '1920x1080',
@@ -43,6 +53,18 @@ async function readSettings() {
         // 旧Google/macos系のボイス名が残っている場合はGemini側のデフォルトへ寄せる
         if (!merged.ttsVoice || merged.ttsVoice.includes('-')) {
             merged.ttsVoice = defaultSettings.ttsVoice;
+        }
+        if (!SUPPORTED_IMAGE_MODELS.includes(merged.imageModel)) {
+            merged.imageModel = defaultSettings.imageModel;
+        }
+        if (!SUPPORTED_IMAGE_RESOLUTIONS.includes(merged.imageResolution)) {
+            merged.imageResolution = defaultSettings.imageResolution;
+        }
+        if (!SUPPORTED_TEXT_MODELS.includes(merged.scriptTextModel)) {
+            merged.scriptTextModel = defaultSettings.scriptTextModel;
+        }
+        if (!SUPPORTED_TEXT_MODELS.includes(merged.imagePromptTextModel)) {
+            merged.imagePromptTextModel = defaultSettings.imagePromptTextModel;
         }
         return merged;
     }

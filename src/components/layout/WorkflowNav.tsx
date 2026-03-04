@@ -1,7 +1,13 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import type { Project } from '../../schemas';
-import { DEFAULT_COST_RATES, formatUsd, sumUsageCostUsd, type CostRates } from '../../utils/cost';
+import {
+  DEFAULT_COST_RATES,
+  formatUsd,
+  normalizeCostRates,
+  sumUsageCostUsd,
+  type CostRates,
+} from '../../utils/cost';
 import { stageLabel, summarizeProjectProgress } from '../../utils/projectHealth';
 import type { WorkflowStage } from '../../types/ui';
 import { Badge } from '../ui';
@@ -116,7 +122,7 @@ export function WorkflowNav({
       try {
         const settings = await window.electronAPI.settings.get();
         if (cancelled) return;
-        if (settings?.cost) setCostRates(settings.cost);
+        setCostRates(normalizeCostRates(settings?.cost));
       } catch {
         // noop
       }

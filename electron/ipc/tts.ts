@@ -6,6 +6,7 @@ import * as fs from 'fs/promises';
 import * as path from 'path';
 
 const execFileAsync = promisify(execFile);
+const TTS_API_TIMEOUT_MS = 60_000;
 
 type TTSEngine = 'google_tts' | 'gemini_tts' | 'macos_tts';
 
@@ -60,6 +61,29 @@ type ApiKeyService = 'google_tts' | 'google_ai';
 
 const getSecretsPath = () => path.join(app.getPath('userData'), 'secrets.enc');
 const getProjectsPath = () => path.join(app.getPath('userData'), 'projects');
+
+function isAbortLikeError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  return error.name === 'AbortError' || error.name === 'TimeoutError';
+}
+
+async function fetchWithTimeout(
+  input: string,
+  init: RequestInit,
+  timeoutMs: number = TTS_API_TIMEOUT_MS
+): Promise<Response> {
+  try {
+    return await fetch(input, {
+      ...init,
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+  } catch (error) {
+    if (isAbortLikeError(error)) {
+      throw new Error(`TTS APIの応答がタイムアウトしました（${Math.floor(timeoutMs / 1000)}秒）`);
+    }
+    throw error;
+  }
+}
 
 async function readApiKey(service: ApiKeyService): Promise<string | null> {
   if (!safeStorage.isEncryptionAvailable()) {
@@ -241,13 +265,17 @@ async function synthesizeGoogleTts(
     ...(enableSync ? { enableTimePointing: ['SSML_MARK'] } : {}),
   };
 
-  const response = await withRetry(async () => {
-    return fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(requestBody),
-    });
-  });
+  const response = await withRetry(
+    async () => {
+      return fetchWithTimeout(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(requestBody),
+      });
+    },
+    2,
+    1000
+  );
 
   const data = (await response.json().catch(() => ({}))) as {
     audioContent?: string;
@@ -344,16 +372,20 @@ async function synthesizeGeminiTts(
     },
   };
 
-  const response = await withRetry(async () => {
-    return fetch(url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-goog-api-key': apiKey,
-      },
-      body: JSON.stringify(requestBody),
-    });
-  });
+  const response = await withRetry(
+    async () => {
+      return fetchWithTimeout(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-goog-api-key': apiKey,
+        },
+        body: JSON.stringify(requestBody),
+      });
+    },
+    2,
+    1000
+  );
 
   const data = (await response.json().catch(() => ({}))) as {
     candidates?: Array<{

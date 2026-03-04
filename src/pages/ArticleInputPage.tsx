@@ -16,6 +16,17 @@ import {
   createOpenAIUsageRecord,
 } from '../utils/usage';
 
+const DEFAULT_IMAGE_MODEL = 'gemini-3.1-flash-image-preview';
+
+async function getImageModelFromSettings(): Promise<string> {
+  try {
+    const settings = await window.electronAPI.settings.get();
+    return settings.imageModel || DEFAULT_IMAGE_MODEL;
+  } catch {
+    return DEFAULT_IMAGE_MODEL;
+  }
+}
+
 export function ArticleInputPage() {
   const { projectId } = useParams<{ projectId: string }>();
   const navigate = useNavigate();
@@ -509,7 +520,12 @@ export function ArticleInputPage() {
           await ensureNotCancelled();
         }
 
-        const imageUsage = createGeminiImageUsageRecord(imageAssets.length, 'image_generate_batch');
+        const imageModel = await getImageModelFromSettings();
+        const imageUsage = createGeminiImageUsageRecord(
+          imageAssets.length,
+          'image_generate_batch',
+          imageModel
+        );
 
         const promptById = new Map(promptsToGenerate.map((p) => [p.id, p]));
         for (const imageAsset of imageAssets) {
@@ -552,21 +568,36 @@ export function ArticleInputPage() {
         const nextAudioAssets = [...project.audio];
         const nextParts = project.parts.map((p) => ({ ...p }));
         const audioUsageRecords = [];
+        const audioErrors: string[] = [];
+        const totalTargets = nextParts.filter((p) => !p.audio).length;
+        let completedTargets = 0;
 
         for (const part of nextParts) {
           await ensureNotCancelled();
           if (part.audio) continue;
-          const result = await window.electronAPI.tts.generate(
-            part.scriptText,
-            ttsOptions,
-            projectId
-          );
-          await ensureNotCancelled();
-          const usageRecord = createGeminiTtsUsageRecord('tts_generate', result.usage);
-          if (usageRecord) audioUsageRecords.push(usageRecord);
-          part.audio = result.audio;
-          part.updatedAt = new Date().toISOString();
-          nextAudioAssets.push(result.audio);
+          await updateAutoStatus(project, {
+            running: true,
+            step: `音声を生成中... (${completedTargets + 1}/${Math.max(1, totalTargets)})`,
+          });
+          try {
+            const scriptText = part.scriptText?.trim() ?? '';
+            if (!scriptText) {
+              throw new Error('スクリプトが空です');
+            }
+            const result = await window.electronAPI.tts.generate(scriptText, ttsOptions, projectId);
+            await ensureNotCancelled();
+            const usageRecord = createGeminiTtsUsageRecord('tts_generate', result.usage);
+            if (usageRecord) audioUsageRecords.push(usageRecord);
+            part.audio = result.audio;
+            part.updatedAt = new Date().toISOString();
+            nextAudioAssets.push(result.audio);
+          } catch (error) {
+            audioErrors.push(
+              `パート${part.index + 1}: ${error instanceof Error ? error.message : String(error)}`
+            );
+          } finally {
+            completedTargets += 1;
+          }
         }
 
         if (audioUsageRecords.length > 0) {
@@ -584,6 +615,12 @@ export function ArticleInputPage() {
           steps: { audio: true },
         });
         await ensureNotCancelled();
+
+        if (audioErrors.length > 0) {
+          const head = audioErrors.slice(0, 3).join(' / ');
+          const tail = audioErrors.length > 3 ? `（他${audioErrors.length - 3}件）` : '';
+          throw new Error(`音声生成の一部に失敗しました: ${head}${tail}`);
+        }
       }
 
       steps = computeStepState(project);

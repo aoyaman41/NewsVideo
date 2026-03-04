@@ -6,6 +6,12 @@ import { zodResponseFormat } from 'openai/helpers/zod';
 import { z } from 'zod/v3';
 // シークレットファイルのパス
 const getSecretsPath = () => path.join(app.getPath('userData'), 'secrets.enc');
+const getSettingsPath = () => path.join(app.getPath('userData'), 'settings.json');
+const DEFAULT_SCRIPT_TEXT_MODEL = 'gpt-5.2';
+const DEFAULT_IMAGE_PROMPT_TEXT_MODEL = 'gpt-5.2';
+const SUPPORTED_TEXT_MODELS = new Set(['gpt-5.2', 'gemini-3.1-pro']);
+const GEMINI_3_PRO_THINKING_LEVEL = 'high';
+const GEMINI_3_PRO_API_MODEL_ID = 'gemini-3-pro-preview';
 // APIキーを読み込み
 async function readApiKey(service) {
     if (!safeStorage.isEncryptionAvailable()) {
@@ -42,14 +48,124 @@ async function withRetry(fn, maxRetries = 3, baseDelay = 1000) {
     throw lastError;
 }
 function mapOpenAIUsage(usage, model) {
-    if (!usage)
+    if (!usage && !model)
         return null;
     return {
-        inputTokens: usage.prompt_tokens,
-        outputTokens: usage.completion_tokens,
-        totalTokens: usage.total_tokens,
+        provider: 'openai',
+        inputTokens: usage?.prompt_tokens,
+        outputTokens: usage?.completion_tokens,
+        totalTokens: usage?.total_tokens,
         model,
     };
+}
+function mapGeminiUsage(usage, model) {
+    if (!usage && !model)
+        return null;
+    return {
+        provider: 'gemini',
+        inputTokens: usage?.promptTokenCount ?? usage?.prompt_token_count,
+        outputTokens: usage?.candidatesTokenCount ?? usage?.candidates_token_count,
+        totalTokens: usage?.totalTokenCount ?? usage?.total_token_count,
+        model,
+    };
+}
+async function generateGeminiTextContent(params) {
+    const apiKey = await readApiKey('google_ai');
+    if (!apiKey) {
+        throw new Error('Google AI APIキーが設定されていません。設定画面から（Google AI Studio / Generative Language）用のAPIキーを入力してください。');
+    }
+    const requestBody = {
+        contents: [
+            {
+                role: 'user',
+                parts: [{ text: `SYSTEM:\n${params.systemPrompt}\n\nUSER:\n${params.userPrompt}` }],
+            },
+        ],
+        generationConfig: {
+            temperature: params.temperature,
+            thinkingConfig: {
+                // Gemini 3 Pro は low/high のみ。GPT-5.2のデフォルト寄せとして high を指定
+                thinkingLevel: GEMINI_3_PRO_THINKING_LEVEL,
+            },
+            ...(params.responseMimeType ? { responseMimeType: params.responseMimeType } : {}),
+        },
+    };
+    const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${params.model}:generateContent`;
+    const response = await withRetry(async () => {
+        return fetch(endpoint, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'x-goog-api-key': apiKey,
+            },
+            body: JSON.stringify(requestBody),
+        });
+    });
+    const data = (await response.json().catch(() => ({})));
+    if (!response.ok) {
+        throw new Error(`Gemini APIエラー: ${response.status} ${data.error?.message || response.statusText}`);
+    }
+    const parts = data.candidates?.[0]?.content?.parts ?? [];
+    const text = parts
+        .map((part) => part.text || '')
+        .join('\n')
+        .trim();
+    if (!text) {
+        throw new Error('AIからの応答が空でした');
+    }
+    return {
+        text,
+        usage: mapGeminiUsage(data.usageMetadata, params.model),
+    };
+}
+function resolveGeminiApiModel(selectedModel) {
+    if (selectedModel === 'gemini-3.1-pro') {
+        return GEMINI_3_PRO_API_MODEL_ID;
+    }
+    return selectedModel;
+}
+async function readTextCompletionModel(scope) {
+    const fallback = scope === 'script' ? DEFAULT_SCRIPT_TEXT_MODEL : DEFAULT_IMAGE_PROMPT_TEXT_MODEL;
+    try {
+        const settingsPath = getSettingsPath();
+        const content = await fs.readFile(settingsPath, 'utf-8');
+        const settings = JSON.parse(content);
+        const selectedRaw = scope === 'script' ? settings.scriptTextModel : settings.imagePromptTextModel;
+        if (selectedRaw && SUPPORTED_TEXT_MODELS.has(selectedRaw)) {
+            return selectedRaw;
+        }
+    }
+    catch {
+        // 設定未作成時はデフォルトを利用
+    }
+    return fallback;
+}
+function extractJsonPayload(text) {
+    const trimmed = text.trim();
+    if (!trimmed)
+        return trimmed;
+    const fenceMatch = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i);
+    if (fenceMatch?.[1]) {
+        return fenceMatch[1].trim();
+    }
+    const firstBrace = trimmed.indexOf('{');
+    const lastBrace = trimmed.lastIndexOf('}');
+    if (firstBrace >= 0 && lastBrace > firstBrace) {
+        return trimmed.slice(firstBrace, lastBrace + 1);
+    }
+    return trimmed;
+}
+function parseJsonResponse(text) {
+    const payload = extractJsonPayload(text);
+    return JSON.parse(payload);
+}
+function tryParseJsonResponse(text) {
+    try {
+        return parseJsonResponse(text);
+    }
+    catch {
+        return null;
+    }
 }
 // スクリプト生成プロンプト
 function createScriptGenerationPrompt(article, options) {
@@ -95,33 +211,47 @@ JSONのみを出力してください。説明や補足は不要です。`;
 }
 // スクリプト生成ハンドラ
 ipcMain.handle('ai:generateScript', async (_, article, options = {}) => {
-    const apiKey = await readApiKey('openai');
-    if (!apiKey) {
-        throw new Error('OpenAI APIキーが設定されていません。設定画面からAPIキーを入力してください。');
-    }
-    const openai = new OpenAI({ apiKey });
-    const response = await withRetry(async () => {
-        return openai.chat.completions.parse({
-            model: 'gpt-5.2',
-            messages: [
-                {
-                    role: 'system',
-                    content: 'あなたは報道動画のスクリプトライターです。与えられた記事を読みやすいナレーションスクリプトに変換します。',
-                },
-                {
-                    role: 'user',
-                    content: createScriptGenerationPrompt(article, options),
-                },
-            ],
-            response_format: { type: 'json_object' },
-            temperature: 0.7,
+    const selectedModel = await readTextCompletionModel('script');
+    const scriptSystemPrompt = 'あなたは報道動画のスクリプトライターです。与えられた記事を読みやすいナレーションスクリプトに変換します。';
+    const scriptUserPrompt = createScriptGenerationPrompt(article, options);
+    let parsed;
+    let usage = null;
+    if (selectedModel === 'gpt-5.2') {
+        const apiKey = await readApiKey('openai');
+        if (!apiKey) {
+            throw new Error('OpenAI APIキーが設定されていません。設定画面からAPIキーを入力してください。');
+        }
+        const openai = new OpenAI({ apiKey });
+        const response = await withRetry(async () => {
+            return openai.chat.completions.parse({
+                model: selectedModel,
+                messages: [
+                    { role: 'system', content: scriptSystemPrompt },
+                    { role: 'user', content: scriptUserPrompt },
+                ],
+                response_format: { type: 'json_object' },
+                temperature: 0.7,
+            });
         });
-    });
-    const content = response.choices[0]?.message?.content;
-    if (!content) {
-        throw new Error('AIからの応答が空でした');
+        const content = response.choices[0]?.message?.content;
+        if (!content) {
+            throw new Error('AIからの応答が空でした');
+        }
+        parsed = parseJsonResponse(content);
+        usage = mapOpenAIUsage(response.usage, response.model);
     }
-    const parsed = JSON.parse(content);
+    else {
+        const apiModel = resolveGeminiApiModel(selectedModel);
+        const geminiResult = await generateGeminiTextContent({
+            model: apiModel,
+            systemPrompt: scriptSystemPrompt,
+            userPrompt: scriptUserPrompt,
+            temperature: 0.7,
+            responseMimeType: 'application/json',
+        });
+        parsed = parseJsonResponse(geminiResult.text);
+        usage = geminiResult.usage;
+    }
     const now = new Date().toISOString();
     const closingLine = '以上、ニュースをお届けしました';
     // パートデータを整形
@@ -149,7 +279,7 @@ ipcMain.handle('ai:generateScript', async (_, article, options = {}) => {
     }
     return {
         parts,
-        usage: mapOpenAIUsage(response.usage, response.model),
+        usage,
     };
 });
 const QuantFactSchema = z.object({
@@ -526,6 +656,137 @@ function normalizeVisualSlots(value, limit) {
         .filter((item) => item !== null);
     return items.slice(0, limit);
 }
+function toObjectRecord(value) {
+    if (!value || typeof value !== 'object' || Array.isArray(value))
+        return null;
+    return value;
+}
+function getFirstDefined(record, keys) {
+    for (const key of keys) {
+        if (Object.prototype.hasOwnProperty.call(record, key)) {
+            return record[key];
+        }
+    }
+    return undefined;
+}
+function normalizeLooseStringArray(value, limit) {
+    if (Array.isArray(value)) {
+        return normalizeStringArray(value, limit);
+    }
+    const single = normalizeString(value);
+    if (!single)
+        return [];
+    const split = single
+        .split(/[,、\n]/)
+        .map((item) => item.trim())
+        .filter((item) => item.length > 0);
+    return split.slice(0, limit);
+}
+function normalizeLooseQuantFacts(value, limit) {
+    if (!Array.isArray(value))
+        return [];
+    const normalized = value
+        .map((item) => {
+        const record = toObjectRecord(item);
+        if (!record)
+            return null;
+        const metric = normalizeString(getFirstDefined(record, ['metric', 'name', 'title', 'item', 'label']));
+        if (!metric)
+            return null;
+        const directionRaw = normalizeString(getFirstDefined(record, ['direction', 'trend']));
+        const direction = (directionRaw === 'increase' ||
+            directionRaw === 'decrease' ||
+            directionRaw === 'stable' ||
+            directionRaw === 'comparison'
+            ? directionRaw
+            : 'unknown');
+        const valueStr = normalizeString(getFirstDefined(record, ['value', 'number', 'amount']));
+        const unit = normalizeString(getFirstDefined(record, ['unit']));
+        const timeframe = normalizeString(getFirstDefined(record, ['timeframe', 'period', 'date']));
+        return {
+            metric,
+            direction,
+            value: valueStr,
+            unit,
+            timeframe,
+        };
+    })
+        .filter((item) => item !== null);
+    return normalized.slice(0, limit);
+}
+function normalizeLooseVisualSlots(value, limit) {
+    if (!Array.isArray(value))
+        return [];
+    const normalized = value
+        .map((item) => {
+        const record = toObjectRecord(item);
+        if (!record)
+            return null;
+        const slotName = normalizeSlotName(getFirstDefined(record, ['slot', 'position', 'area']));
+        const elementType = normalizeElementType(getFirstDefined(record, ['elementType', 'element_type', 'element', 'type']));
+        if (!slotName || !elementType)
+            return null;
+        const source = normalizeString(getFirstDefined(record, ['source', 'reference', 'basis']));
+        return {
+            slot: slotName,
+            elementType,
+            source: source || undefined,
+        };
+    })
+        .filter((item) => item !== null);
+    return normalized.slice(0, limit);
+}
+function coerceImagePromptExtraction(raw) {
+    const direct = ImagePromptExtractionSchema.safeParse(raw);
+    if (direct.success)
+        return direct.data;
+    const root = toObjectRecord(raw);
+    const rawPrompts = (root ? getFirstDefined(root, ['prompts', 'items', 'data']) : undefined) ?? raw;
+    const promptItems = Array.isArray(rawPrompts)
+        ? rawPrompts
+        : toObjectRecord(rawPrompts)
+            ? [rawPrompts]
+            : root && getFirstDefined(root, ['topic', 'subject'])
+                ? [root]
+                : [];
+    const prompts = promptItems.map((item) => {
+        const record = toObjectRecord(item) || {};
+        const topic = normalizeString(getFirstDefined(record, ['topic', 'subject', 'theme']));
+        const entities = normalizeLooseStringArray(getFirstDefined(record, ['entities', 'entityList', 'entity_list', 'entity', 'keywords']), 5);
+        const locations = normalizeLooseStringArray(getFirstDefined(record, ['locations', 'locationList', 'location_list', 'location']), 3);
+        const quantFactsSource = getFirstDefined(record, ['quantFacts', 'quant_facts', 'facts']);
+        const quantFacts = normalizeLooseQuantFacts(quantFactsSource, 3).map((fact) => ({
+            metric: fact.metric,
+            direction: fact.direction ?? 'unknown',
+            value: fact.value || '',
+            unit: fact.unit || '',
+            timeframe: fact.timeframe || '',
+        }));
+        const visualSlotsSource = getFirstDefined(record, ['visualSlots', 'visual_slots', 'slots']);
+        const visualSlots = normalizeLooseVisualSlots(visualSlotsSource, 3).map((slot) => ({
+            slot: slot.slot,
+            elementType: slot.elementType,
+            source: slot.source || '',
+        }));
+        const heroSubject = normalizeString(getFirstDefined(record, ['heroSubject', 'hero_subject', 'mainSubject']));
+        const heroSetting = normalizeString(getFirstDefined(record, ['heroSetting', 'hero_setting', 'mainSetting']));
+        const compositionNote = normalizeString(getFirstDefined(record, ['compositionNote', 'composition_note', 'layoutNote', 'layout_note']));
+        return {
+            topic,
+            entities,
+            locations,
+            quantFacts,
+            visualSlots,
+            heroSubject,
+            heroSetting,
+            compositionNote,
+        };
+    });
+    const fallback = ImagePromptExtractionSchema.safeParse({ prompts });
+    if (fallback.success)
+        return fallback.data;
+    return { prompts: [] };
+}
 function buildImagePromptText(candidate, context) {
     const p = candidate ?? {};
     const sourceText = context.articleText;
@@ -621,11 +882,6 @@ function buildImagePromptText(candidate, context) {
 }
 // 画像プロンプト生成ハンドラ
 ipcMain.handle('ai:generateImagePrompts', async (_, parts, article, stylePreset) => {
-    const apiKey = await readApiKey('openai');
-    if (!apiKey) {
-        throw new Error('OpenAI APIキーが設定されていません。設定画面からAPIキーを入力してください。');
-    }
-    const openai = new OpenAI({ apiKey });
     void stylePreset;
     const styleConfig = getStylePreset('news_broadcast');
     const partsDescription = parts.map((p, i) => `パート${i + 1}: ${p.title}`).join('\n');
@@ -633,13 +889,7 @@ ipcMain.handle('ai:generateImagePrompts', async (_, parts, article, stylePreset)
     const bodyTextForPrompt = cleanedBodyText || article.bodyText || '';
     const articleText = `${article.title}\n${article.source ?? ''}\n${bodyTextForPrompt}`.trim();
     const articleContext = `タイトル: ${article.title}\n${article.source ? `出典: ${article.source}` : ''}\n本文:\n${bodyTextForPrompt}`;
-    const response = await withRetry(async () => {
-        return openai.chat.completions.create({
-            model: 'gpt-5.2',
-            messages: [
-                {
-                    role: 'system',
-                    content: `あなたは「記事本文から、画像生成に必要な情報だけを抽出して仕様化する」担当です。
+    const systemPrompt = `あなたは「記事本文から、画像生成に必要な情報だけを抽出して仕様化する」担当です。
 入力は「記事全文」と「パート見出し」です。出力は指定スキーマの JSON オブジェクトのみです（説明文・Markdown・前置き禁止）。
 
 目的:
@@ -681,11 +931,8 @@ compositionNote（構図メモ）の制約:
 
 最終チェック:
 - topic/entities/locations/metric/value/unit/timeframe/source/heroSubject/heroSetting が本文中に存在しない場合は削除または空にする。
-- JSON以外を絶対に出力しない。`,
-                },
-                {
-                    role: 'user',
-                    content: `以下の「記事全文」と「パート見出し」を基に、画像生成に必要な抽出情報を JSON で出力してください。
+- JSON以外を絶対に出力しない。`;
+    const userPrompt = `以下の「記事全文」と「パート見出し」を基に、画像生成に必要な抽出情報を JSON で出力してください。
 本文由来フィールドは必ず本文からの抜き出しにしてください。本文に無い情報は空にしてください。
 入力にノイズ（ファイルパス、URL、コード断片、ログ等）が混ざる場合は無視してください。
 
@@ -721,23 +968,54 @@ ${partsDescription}
   ]
 }
 
-JSONのみを出力してください。`,
-                },
-            ],
-            response_format: zodResponseFormat(ImagePromptExtractionSchema, 'image_prompt_extraction'),
-            temperature: 0.3,
+JSONのみを出力してください。`;
+    const selectedModel = await readTextCompletionModel('image_prompt');
+    let resolvedParsed = null;
+    let usage = null;
+    if (selectedModel === 'gpt-5.2') {
+        const apiKey = await readApiKey('openai');
+        if (!apiKey) {
+            throw new Error('OpenAI APIキーが設定されていません。設定画面からAPIキーを入力してください。');
+        }
+        const openai = new OpenAI({ apiKey });
+        const response = await withRetry(async () => {
+            return openai.chat.completions.create({
+                model: selectedModel,
+                messages: [
+                    { role: 'system', content: systemPrompt },
+                    { role: 'user', content: userPrompt },
+                ],
+                response_format: zodResponseFormat(ImagePromptExtractionSchema, 'image_prompt_extraction'),
+                temperature: 0.3,
+            });
         });
-    });
-    const message = response.choices[0]?.message;
-    if (!message) {
-        throw new Error('AIからの応答が空でした');
+        const message = response.choices[0]?.message;
+        if (!message) {
+            throw new Error('AIからの応答が空でした');
+        }
+        if (message.refusal) {
+            throw new Error(`AIが拒否しました: ${message.refusal}`);
+        }
+        const parsed = message.parsed ?? null;
+        const fallbackParsed = !parsed && message.content
+            ? tryParseJsonResponse(message.content)
+            : null;
+        resolvedParsed = coerceImagePromptExtraction(parsed ?? fallbackParsed ?? {});
+        usage = mapOpenAIUsage(response.usage, response.model);
     }
-    if (message.refusal) {
-        throw new Error(`AIが拒否しました: ${message.refusal}`);
+    else {
+        const apiModel = resolveGeminiApiModel(selectedModel);
+        const geminiResult = await generateGeminiTextContent({
+            model: apiModel,
+            systemPrompt,
+            userPrompt,
+            temperature: 0.3,
+            responseMimeType: 'application/json',
+        });
+        const parsed = tryParseJsonResponse(geminiResult.text);
+        resolvedParsed = coerceImagePromptExtraction(parsed ?? {});
+        usage = geminiResult.usage;
     }
-    const parsed = message.parsed ?? null;
-    const fallbackParsed = !parsed && message.content ? JSON.parse(message.content) : null;
-    const resolvedParsed = parsed ?? fallbackParsed;
     if (!resolvedParsed) {
         throw new Error('AIからの応答が空でした');
     }
@@ -760,16 +1038,11 @@ JSONのみを出力してください。`,
     });
     return {
         prompts,
-        usage: mapOpenAIUsage(response.usage, response.model),
+        usage,
     };
 });
 // 単一ターゲットの画像プロンプト生成ハンドラ
 ipcMain.handle('ai:generateImagePromptForTarget', async (_, parts, article, targetId) => {
-    const apiKey = await readApiKey('openai');
-    if (!apiKey) {
-        throw new Error('OpenAI APIキーが設定されていません。設定画面からAPIキーを入力してください。');
-    }
-    const openai = new OpenAI({ apiKey });
     const styleConfig = getStylePreset('news_broadcast');
     const cleanedBodyText = sanitizeArticleText(article.bodyText ?? '');
     const bodyTextForPrompt = cleanedBodyText || article.bodyText || '';
@@ -860,27 +1133,53 @@ ${partsDescription}
 }
 
 JSONのみを出力してください。`;
-    const response = await withRetry(async () => {
-        return openai.chat.completions.create({
-            model: 'gpt-5.2',
-            messages: [
-                { role: 'system', content: systemPrompt },
-                { role: 'user', content: userPrompt },
-            ],
-            response_format: zodResponseFormat(ImagePromptExtractionSchema, 'image_prompt_extraction'),
-            temperature: 0.3,
+    const selectedModel = await readTextCompletionModel('image_prompt');
+    let resolvedParsed = null;
+    let usage = null;
+    if (selectedModel === 'gpt-5.2') {
+        const apiKey = await readApiKey('openai');
+        if (!apiKey) {
+            throw new Error('OpenAI APIキーが設定されていません。設定画面からAPIキーを入力してください。');
+        }
+        const openai = new OpenAI({ apiKey });
+        const response = await withRetry(async () => {
+            return openai.chat.completions.create({
+                model: selectedModel,
+                messages: [
+                    { role: 'system', content: systemPrompt },
+                    { role: 'user', content: userPrompt },
+                ],
+                response_format: zodResponseFormat(ImagePromptExtractionSchema, 'image_prompt_extraction'),
+                temperature: 0.3,
+            });
         });
-    });
-    const message = response.choices[0]?.message;
-    if (!message) {
-        throw new Error('AIからの応答が空でした');
+        const message = response.choices[0]?.message;
+        if (!message) {
+            throw new Error('AIからの応答が空でした');
+        }
+        if (message.refusal) {
+            throw new Error(`AIが拒否しました: ${message.refusal}`);
+        }
+        const parsed = message.parsed ?? null;
+        const fallbackParsed = !parsed && message.content
+            ? tryParseJsonResponse(message.content)
+            : null;
+        resolvedParsed = coerceImagePromptExtraction(parsed ?? fallbackParsed ?? {});
+        usage = mapOpenAIUsage(response.usage, response.model);
     }
-    if (message.refusal) {
-        throw new Error(`AIが拒否しました: ${message.refusal}`);
+    else {
+        const apiModel = resolveGeminiApiModel(selectedModel);
+        const geminiResult = await generateGeminiTextContent({
+            model: apiModel,
+            systemPrompt,
+            userPrompt,
+            temperature: 0.3,
+            responseMimeType: 'application/json',
+        });
+        const parsed = tryParseJsonResponse(geminiResult.text);
+        resolvedParsed = coerceImagePromptExtraction(parsed ?? {});
+        usage = geminiResult.usage;
     }
-    const parsed = message.parsed ?? null;
-    const fallbackParsed = !parsed && message.content ? JSON.parse(message.content) : null;
-    const resolvedParsed = parsed ?? fallbackParsed;
     if (!resolvedParsed) {
         throw new Error('AIからの応答が空でした');
     }
@@ -899,30 +1198,17 @@ JSONのみを出力してください。`;
     };
     return {
         prompt,
-        usage: mapOpenAIUsage(response.usage, response.model),
+        usage,
     };
 });
 // コメント反映ハンドラ
 ipcMain.handle('ai:applyComment', async (_, target, comment) => {
-    const apiKey = await readApiKey('openai');
-    if (!apiKey) {
-        throw new Error('OpenAI APIキーが設定されていません。設定画面からAPIキーを入力してください。');
-    }
-    const openai = new OpenAI({ apiKey });
+    const scope = target.type === 'script' ? 'script' : 'image_prompt';
+    const selectedModel = await readTextCompletionModel(scope);
     const systemPrompt = target.type === 'script'
         ? 'あなたは報道動画のスクリプトエディターです。与えられたコメントに基づいてスクリプトを修正します。'
         : 'あなたは画像生成プロンプトのエディターです。与えられたコメントに基づいてプロンプトを修正します。';
-    const response = await withRetry(async () => {
-        return openai.chat.completions.create({
-            model: 'gpt-5.2',
-            messages: [
-                {
-                    role: 'system',
-                    content: systemPrompt,
-                },
-                {
-                    role: 'user',
-                    content: `以下の${target.type === 'script' ? 'スクリプト' : 'プロンプト'}を、コメントに基づいて修正してください。
+    const userPrompt = `以下の${target.type === 'script' ? 'スクリプト' : 'プロンプト'}を、コメントに基づいて修正してください。
 
 ## 現在の内容
 ${target.currentText}
@@ -933,18 +1219,44 @@ ${comment}
 ## 要件
 - コメントの意図を反映した修正を行ってください
 - 元の構成や意図はできるだけ維持してください
-- 修正後の本文のみを出力してください（説明不要）`,
-                },
-            ],
+- 修正後の本文のみを出力してください（説明不要）`;
+    let text = '';
+    let usage = null;
+    if (selectedModel === 'gpt-5.2') {
+        const apiKey = await readApiKey('openai');
+        if (!apiKey) {
+            throw new Error('OpenAI APIキーが設定されていません。設定画面からAPIキーを入力してください。');
+        }
+        const openai = new OpenAI({ apiKey });
+        const response = await withRetry(async () => {
+            return openai.chat.completions.create({
+                model: selectedModel,
+                messages: [
+                    { role: 'system', content: systemPrompt },
+                    { role: 'user', content: userPrompt },
+                ],
+                temperature: 0.7,
+            });
+        });
+        text = response.choices[0]?.message?.content || '';
+        usage = mapOpenAIUsage(response.usage, response.model);
+    }
+    else {
+        const apiModel = resolveGeminiApiModel(selectedModel);
+        const geminiResult = await generateGeminiTextContent({
+            model: apiModel,
+            systemPrompt,
+            userPrompt,
             temperature: 0.7,
         });
-    });
-    const content = response.choices[0]?.message?.content;
-    if (!content) {
+        text = geminiResult.text;
+        usage = geminiResult.usage;
+    }
+    if (!text) {
         throw new Error('AIからの応答が空でした');
     }
     return {
-        text: content,
-        usage: mapOpenAIUsage(response.usage, response.model),
+        text,
+        usage,
     };
 });

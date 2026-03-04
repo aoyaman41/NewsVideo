@@ -14,6 +14,7 @@ type TokenUsage = {
   outputTokens?: number;
   totalTokens?: number;
   model?: string;
+  provider?: 'openai' | 'gemini';
 };
 
 interface ElectronAPI {
@@ -259,7 +260,11 @@ interface Settings {
   ttsVoice: string;
   ttsSpeakingRate: number;
   ttsPitch: number;
+  scriptTextModel: 'gpt-5.2' | 'gemini-3.1-pro';
+  imagePromptTextModel: 'gpt-5.2' | 'gemini-3.1-pro';
   imageStylePreset: string;
+  imageModel: 'gemini-3.1-flash-image-preview' | 'gemini-3-pro-image-preview';
+  imageResolution: 'fhd' | '2k' | '4k';
   defaultAspectRatio: '16:9' | '1:1' | '9:16';
   videoResolution: '1920x1080' | '1280x720' | '3840x2160';
   videoFps: number;
@@ -316,8 +321,15 @@ interface CostRates {
     ttsInputPer1MTokensUsd: number;
     ttsOutputPer1MTokensUsd: number;
     imageModel: string;
-    imageInputPerImageUsd: number;
-    imageOutputPerImageUsd: number;
+    imageRatesByModel: Record<
+      string,
+      {
+        inputPerImageUsd: number;
+        outputPerImageUsd: number;
+      }
+    >;
+    imageInputPerImageUsd?: number;
+    imageOutputPerImageUsd?: number;
   };
 }
 

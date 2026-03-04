@@ -5,8 +5,28 @@ import { promisify } from 'util';
 import * as fs from 'fs/promises';
 import * as path from 'path';
 const execFileAsync = promisify(execFile);
+const TTS_API_TIMEOUT_MS = 60_000;
 const getSecretsPath = () => path.join(app.getPath('userData'), 'secrets.enc');
 const getProjectsPath = () => path.join(app.getPath('userData'), 'projects');
+function isAbortLikeError(error) {
+    if (!(error instanceof Error))
+        return false;
+    return error.name === 'AbortError' || error.name === 'TimeoutError';
+}
+async function fetchWithTimeout(input, init, timeoutMs = TTS_API_TIMEOUT_MS) {
+    try {
+        return await fetch(input, {
+            ...init,
+            signal: AbortSignal.timeout(timeoutMs),
+        });
+    }
+    catch (error) {
+        if (isAbortLikeError(error)) {
+            throw new Error(`TTS APIの応答がタイムアウトしました（${Math.floor(timeoutMs / 1000)}秒）`);
+        }
+        throw error;
+    }
+}
 async function readApiKey(service) {
     if (!safeStorage.isEncryptionAvailable()) {
         return null;
@@ -160,12 +180,12 @@ async function synthesizeGoogleTts(text, options, projectPath) {
         ...(enableSync ? { enableTimePointing: ['SSML_MARK'] } : {}),
     };
     const response = await withRetry(async () => {
-        return fetch(url, {
+        return fetchWithTimeout(url, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(requestBody),
         });
-    });
+    }, 2, 1000);
     const data = (await response.json().catch(() => ({})));
     if (!response.ok) {
         throw new Error(data.error?.message || `Google TTS APIエラー: ${response.status} ${response.statusText}`);
@@ -238,7 +258,7 @@ async function synthesizeGeminiTts(text, options, projectPath) {
         },
     };
     const response = await withRetry(async () => {
-        return fetch(url, {
+        return fetchWithTimeout(url, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
@@ -246,7 +266,7 @@ async function synthesizeGeminiTts(text, options, projectPath) {
             },
             body: JSON.stringify(requestBody),
         });
-    });
+    }, 2, 1000);
     const data = (await response.json().catch(() => ({})));
     if (!response.ok) {
         throw new Error(data.error?.message || `Gemini TTS APIエラー: ${response.status} ${response.statusText}`);

@@ -1,5 +1,20 @@
 import type { UsageRecord } from '../schemas';
 
+type ImageCostRate = {
+  inputPerImageUsd: number;
+  outputPerImageUsd: number;
+};
+
+const DEFAULT_GEMINI_IMAGE_MODEL = 'gemini-3.1-flash-image-preview';
+const KNOWN_GEMINI_IMAGE_MODELS = [
+  'gemini-3.1-flash-image-preview',
+  'gemini-3-pro-image-preview',
+] as const;
+const DEFAULT_IMAGE_COST_RATE: ImageCostRate = {
+  inputPerImageUsd: 0.0011,
+  outputPerImageUsd: 0.134,
+};
+
 export type CostRates = {
   currency: 'USD';
   openai: {
@@ -12,8 +27,10 @@ export type CostRates = {
     ttsInputPer1MTokensUsd: number;
     ttsOutputPer1MTokensUsd: number;
     imageModel: string;
-    imageInputPerImageUsd: number;
-    imageOutputPerImageUsd: number;
+    imageRatesByModel: Record<string, ImageCostRate>;
+    // 旧設定との互換用（単一レート）
+    imageInputPerImageUsd?: number;
+    imageOutputPerImageUsd?: number;
   };
 };
 
@@ -28,11 +45,136 @@ export const DEFAULT_COST_RATES: CostRates = {
     ttsModel: 'gemini-2.5-pro-preview-tts',
     ttsInputPer1MTokensUsd: 1.0,
     ttsOutputPer1MTokensUsd: 20.0,
-    imageModel: 'gemini-3-pro-image-preview',
-    imageInputPerImageUsd: 0.0011,
-    imageOutputPerImageUsd: 0.134,
+    imageModel: DEFAULT_GEMINI_IMAGE_MODEL,
+    imageRatesByModel: {
+      'gemini-3.1-flash-image-preview': { ...DEFAULT_IMAGE_COST_RATE },
+      'gemini-3-pro-image-preview': { ...DEFAULT_IMAGE_COST_RATE },
+    },
   },
 };
+
+function toNonNegativeNumber(value: unknown): number | null {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) return null;
+  return value;
+}
+
+function resolveImageCostRate(model: string | undefined, rates: CostRates): ImageCostRate {
+  const byModel = rates.gemini.imageRatesByModel || {};
+  if (model && byModel[model]) {
+    return byModel[model];
+  }
+
+  const configuredDefault = rates.gemini.imageModel;
+  if (configuredDefault && byModel[configuredDefault]) {
+    return byModel[configuredDefault];
+  }
+
+  const legacyInput = toNonNegativeNumber(rates.gemini.imageInputPerImageUsd);
+  const legacyOutput = toNonNegativeNumber(rates.gemini.imageOutputPerImageUsd);
+  if (legacyInput !== null && legacyOutput !== null) {
+    return { inputPerImageUsd: legacyInput, outputPerImageUsd: legacyOutput };
+  }
+
+  const firstRate = Object.values(byModel)[0];
+  return firstRate ?? DEFAULT_IMAGE_COST_RATE;
+}
+
+export function normalizeCostRates(input?: unknown): CostRates {
+  const base = DEFAULT_COST_RATES;
+  if (!input || typeof input !== 'object') return base;
+
+  const raw = input as {
+    openai?: {
+      model?: unknown;
+      inputPer1MTokensUsd?: unknown;
+      outputPer1MTokensUsd?: unknown;
+    };
+    gemini?: {
+      ttsModel?: unknown;
+      ttsInputPer1MTokensUsd?: unknown;
+      ttsOutputPer1MTokensUsd?: unknown;
+      imageModel?: unknown;
+      imageRatesByModel?: unknown;
+      imageInputPerImageUsd?: unknown;
+      imageOutputPerImageUsd?: unknown;
+    };
+  };
+
+  const openai = {
+    model:
+      typeof raw.openai?.model === 'string' && raw.openai.model.trim().length > 0
+        ? raw.openai.model
+        : base.openai.model,
+    inputPer1MTokensUsd:
+      toNonNegativeNumber(raw.openai?.inputPer1MTokensUsd) ?? base.openai.inputPer1MTokensUsd,
+    outputPer1MTokensUsd:
+      toNonNegativeNumber(raw.openai?.outputPer1MTokensUsd) ?? base.openai.outputPer1MTokensUsd,
+  };
+
+  const imageModel =
+    typeof raw.gemini?.imageModel === 'string' && raw.gemini.imageModel.trim().length > 0
+      ? raw.gemini.imageModel
+      : base.gemini.imageModel;
+
+  const imageRatesByModel: Record<string, ImageCostRate> = {
+    ...base.gemini.imageRatesByModel,
+  };
+
+  const imageRatesRaw = raw.gemini?.imageRatesByModel;
+  let hasMapOverride = false;
+  if (imageRatesRaw && typeof imageRatesRaw === 'object') {
+    for (const [model, rate] of Object.entries(imageRatesRaw as Record<string, unknown>)) {
+      if (!rate || typeof rate !== 'object') continue;
+      const rateRaw = rate as { inputPerImageUsd?: unknown; outputPerImageUsd?: unknown };
+      const inputPerImageUsd = toNonNegativeNumber(rateRaw.inputPerImageUsd);
+      const outputPerImageUsd = toNonNegativeNumber(rateRaw.outputPerImageUsd);
+      if (inputPerImageUsd === null || outputPerImageUsd === null) continue;
+      imageRatesByModel[model] = { inputPerImageUsd, outputPerImageUsd };
+      hasMapOverride = true;
+    }
+  }
+
+  const legacyInput = toNonNegativeNumber(raw.gemini?.imageInputPerImageUsd);
+  const legacyOutput = toNonNegativeNumber(raw.gemini?.imageOutputPerImageUsd);
+  if (legacyInput !== null && legacyOutput !== null) {
+    const legacyRate = { inputPerImageUsd: legacyInput, outputPerImageUsd: legacyOutput };
+    if (!hasMapOverride) {
+      for (const model of Object.keys(imageRatesByModel)) {
+        imageRatesByModel[model] = legacyRate;
+      }
+    }
+    imageRatesByModel[imageModel] = legacyRate;
+  }
+
+  for (const model of KNOWN_GEMINI_IMAGE_MODELS) {
+    if (!imageRatesByModel[model]) {
+      imageRatesByModel[model] = { ...DEFAULT_IMAGE_COST_RATE };
+    }
+  }
+
+  const gemini = {
+    ttsModel:
+      typeof raw.gemini?.ttsModel === 'string' && raw.gemini.ttsModel.trim().length > 0
+        ? raw.gemini.ttsModel
+        : base.gemini.ttsModel,
+    ttsInputPer1MTokensUsd:
+      toNonNegativeNumber(raw.gemini?.ttsInputPer1MTokensUsd) ??
+      base.gemini.ttsInputPer1MTokensUsd,
+    ttsOutputPer1MTokensUsd:
+      toNonNegativeNumber(raw.gemini?.ttsOutputPer1MTokensUsd) ??
+      base.gemini.ttsOutputPer1MTokensUsd,
+    imageModel,
+    imageRatesByModel,
+    imageInputPerImageUsd: legacyInput ?? undefined,
+    imageOutputPerImageUsd: legacyOutput ?? undefined,
+  };
+
+  return {
+    currency: 'USD',
+    openai,
+    gemini,
+  };
+}
 
 export function estimateUsageCostUsd(record: UsageRecord, rates: CostRates): number {
   if (record.provider === 'openai') {
@@ -50,7 +192,8 @@ export function estimateUsageCostUsd(record: UsageRecord, rates: CostRates): num
 
     if (record.category === 'image') {
       const count = record.imageCount ?? 0;
-      return count * (rates.gemini.imageInputPerImageUsd + rates.gemini.imageOutputPerImageUsd);
+      const rate = resolveImageCostRate(record.model, rates);
+      return count * (rate.inputPerImageUsd + rate.outputPerImageUsd);
     }
   }
 

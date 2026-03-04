@@ -6,8 +6,23 @@ import { GoogleGenerativeAI } from '@google/generative-ai';
 // シークレットファイルのパス
 const getSecretsPath = () => path.join(app.getPath('userData'), 'secrets.enc');
 
+// 設定ファイルのパス
+const getSettingsPath = () => path.join(app.getPath('userData'), 'settings.json');
+
 // プロジェクトディレクトリのパス
 const getProjectsPath = () => path.join(app.getPath('userData'), 'projects');
+
+type ImageModel = 'gemini-3.1-flash-image-preview' | 'gemini-3-pro-image-preview';
+type ImageResolution = 'fhd' | '2k' | '4k';
+type ImageAspectRatio = '16:9' | '1:1' | '9:16';
+
+const DEFAULT_IMAGE_MODEL: ImageModel = 'gemini-3.1-flash-image-preview';
+const DEFAULT_IMAGE_RESOLUTION: ImageResolution = 'fhd';
+const SUPPORTED_IMAGE_MODELS = new Set<ImageModel>([
+  'gemini-3.1-flash-image-preview',
+  'gemini-3-pro-image-preview',
+]);
+const SUPPORTED_IMAGE_RESOLUTIONS = new Set<ImageResolution>(['fhd', '2k', '4k']);
 
 // APIキーを読み込み
 async function readApiKey(service: string): Promise<string | null> {
@@ -24,6 +39,36 @@ async function readApiKey(service: string): Promise<string | null> {
   } catch {
     return null;
   }
+}
+
+async function readImageGenerationSettings(): Promise<{
+  imageModel: ImageModel;
+  imageResolution: ImageResolution;
+}> {
+  let imageModel = DEFAULT_IMAGE_MODEL;
+  let imageResolution = DEFAULT_IMAGE_RESOLUTION;
+
+  try {
+    const settingsPath = getSettingsPath();
+    const content = await fs.readFile(settingsPath, 'utf-8');
+    const parsed = JSON.parse(content) as { imageModel?: string; imageResolution?: string };
+    if (parsed.imageModel && SUPPORTED_IMAGE_MODELS.has(parsed.imageModel as ImageModel)) {
+      imageModel = parsed.imageModel as ImageModel;
+    }
+    if (
+      parsed.imageResolution &&
+      SUPPORTED_IMAGE_RESOLUTIONS.has(parsed.imageResolution as ImageResolution)
+    ) {
+      imageResolution = parsed.imageResolution as ImageResolution;
+    }
+  } catch {
+    // 設定未作成時などはデフォルトを使用
+  }
+
+  return {
+    imageModel,
+    imageResolution,
+  };
 }
 
 // 指数バックオフ + ジッター付きリトライ
@@ -59,7 +104,7 @@ interface ImagePrompt {
   stylePreset: string;
   prompt: string;
   negativePrompt?: string;
-  aspectRatio: '16:9' | '1:1' | '9:16';
+  aspectRatio: ImageAspectRatio;
   version: number;
   createdAt: string;
 }
@@ -225,9 +270,20 @@ function getAspectRatioLabel(aspectRatio: ImagePrompt['aspectRatio']): string {
   }
 }
 
-function buildImagePromptText(prompt: ImagePrompt): string {
+function getImageResolutionLabel(imageResolution: ImageResolution): string {
+  switch (imageResolution) {
+    case '2k':
+      return '2K';
+    case '4k':
+      return '4K';
+    default:
+      return 'Full HD';
+  }
+}
+
+function buildImagePromptText(prompt: ImagePrompt, imageResolution: ImageResolution): string {
   const styleConfig = getStylePreset('news_broadcast');
-  const dimensions = getDimensions(prompt.aspectRatio);
+  const dimensions = getDimensions(prompt.aspectRatio, imageResolution);
   const styleLines = [
     styleConfig.baseStyle,
     `- Color: ${styleConfig.colorPalette}`,
@@ -237,7 +293,7 @@ function buildImagePromptText(prompt: ImagePrompt): string {
   ].join('\n');
   const constraintsLine = `Aspect ratio: ${prompt.aspectRatio} (${getAspectRatioLabel(
     prompt.aspectRatio
-  )}). Target resolution: ${dimensions.width}x${dimensions.height}. Keep this aspect ratio strictly.`;
+  )}). Target resolution: ${dimensions.width}x${dimensions.height} (${getImageResolutionLabel(imageResolution)} preset). Keep this aspect ratio strictly.`;
   const negativeRaw = normalizeNegativePrompt(prompt.negativePrompt || styleConfig.negative);
   const strictlyAvoidLine = negativeRaw ? `Strictly avoid: ${negativeRaw}` : '';
 
@@ -269,16 +325,22 @@ interface ImageAsset {
 }
 
 // アスペクト比から寸法を計算
-function getDimensions(aspectRatio: '16:9' | '1:1' | '9:16'): { width: number; height: number } {
+function getDimensions(
+  aspectRatio: ImageAspectRatio,
+  imageResolution: ImageResolution
+): { width: number; height: number } {
+  const longEdge =
+    imageResolution === '4k' ? 3840 : imageResolution === '2k' ? 2560 : 1920;
+
   switch (aspectRatio) {
     case '16:9':
-      return { width: 1920, height: 1080 };
+      return { width: longEdge, height: Math.round((longEdge * 9) / 16) };
     case '1:1':
-      return { width: 1024, height: 1024 };
+      return { width: longEdge, height: longEdge };
     case '9:16':
-      return { width: 1080, height: 1920 };
+      return { width: Math.round((longEdge * 9) / 16), height: longEdge };
     default:
-      return { width: 1920, height: 1080 };
+      return { width: longEdge, height: Math.round((longEdge * 9) / 16) };
   }
 }
 
@@ -351,16 +413,17 @@ ipcMain.handle(
     console.log('[image:generate] Project path:', projectPath);
 
     const genAI = new GoogleGenerativeAI(apiKey);
+    const { imageModel, imageResolution } = await readImageGenerationSettings();
 
-    // Nano Banana Pro (gemini-3-pro-image-preview) モデルを使用
+    // 設定で選択された画像生成モデルを使用
     const model = genAI.getGenerativeModel({
-      model: 'gemini-3-pro-image-preview',
+      model: imageModel,
     });
 
-    const enhancedPrompt = buildImagePromptText(prompt);
+    const enhancedPrompt = buildImagePromptText(prompt, imageResolution);
 
     const imageId = crypto.randomUUID();
-    const dimensions = getDimensions(prompt.aspectRatio);
+    const dimensions = getDimensions(prompt.aspectRatio, imageResolution);
 
     console.log('[image:generate] Starting image generation with prompt:', enhancedPrompt);
 
@@ -439,10 +502,11 @@ ipcMain.handle(
     console.log('[image:generateBatch] Project path:', projectPath);
 
     const genAI = new GoogleGenerativeAI(apiKey);
+    const { imageModel, imageResolution } = await readImageGenerationSettings();
 
-    // Nano Banana Pro (gemini-3-pro-image-preview) モデルを使用
+    // 設定で選択された画像生成モデルを使用
     const model = genAI.getGenerativeModel({
-      model: 'gemini-3-pro-image-preview',
+      model: imageModel,
     });
 
     console.log('[image:generateBatch] Starting batch generation for', prompts.length, 'prompts');
@@ -450,7 +514,7 @@ ipcMain.handle(
     const settled = await Promise.all(
       prompts.map(async (prompt, index) => {
         try {
-          const enhancedPrompt = buildImagePromptText(prompt);
+          const enhancedPrompt = buildImagePromptText(prompt, imageResolution);
 
           console.log(
             `[image:generateBatch] Generating image ${index + 1}/${prompts.length}:`,
@@ -458,7 +522,7 @@ ipcMain.handle(
           );
 
           const imageId = crypto.randomUUID();
-          const dimensions = getDimensions(prompt.aspectRatio);
+          const dimensions = getDimensions(prompt.aspectRatio, imageResolution);
 
           const response = await withRetry(async () => {
             return model.generateContent({

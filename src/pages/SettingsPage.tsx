@@ -16,7 +16,11 @@ interface Settings {
   ttsVoice: string;
   ttsSpeakingRate: number;
   ttsPitch: number;
+  scriptTextModel: 'gpt-5.2' | 'gemini-3.1-pro';
+  imagePromptTextModel: 'gpt-5.2' | 'gemini-3.1-pro';
   imageStylePreset: string;
+  imageModel: 'gemini-3.1-flash-image-preview' | 'gemini-3-pro-image-preview';
+  imageResolution: 'fhd' | '2k' | '4k';
   defaultAspectRatio: '16:9' | '1:1' | '9:16';
   videoResolution: '1920x1080' | '1280x720' | '3840x2160';
   videoFps: number;
@@ -34,7 +38,11 @@ const defaultSettings: Settings = {
   ttsVoice: 'Charon',
   ttsSpeakingRate: 1.0,
   ttsPitch: 0,
+  scriptTextModel: 'gpt-5.2',
+  imagePromptTextModel: 'gpt-5.2',
   imageStylePreset: 'news_panel',
+  imageModel: 'gemini-3.1-flash-image-preview',
+  imageResolution: 'fhd',
   defaultAspectRatio: '16:9',
   videoResolution: '1920x1080',
   videoFps: 30,
@@ -83,7 +91,9 @@ export function SettingsPage() {
   const [settings, setSettings] = useState<Settings>(defaultSettings);
   const [isSavingSettings, setIsSavingSettings] = useState(false);
   const [settingsSaved, setSettingsSaved] = useState(false);
-  const [activeTab, setActiveTab] = useState<'api' | 'video' | 'audio' | 'other'>('api');
+  const [activeTab, setActiveTab] = useState<'api' | 'video' | 'audio' | 'image' | 'other'>(
+    'api'
+  );
 
   useEffect(() => {
     loadApiKeys();
@@ -169,13 +179,13 @@ export function SettingsPage() {
 
   const serviceLabels: Record<ApiKeyService, { name: string; description: string; url: string }> = {
     openai: {
-      name: 'OpenAI（スクリプト生成）',
-      description: 'GPT-5.2を使用してスクリプトを生成します',
+      name: 'OpenAI',
+      description: '選択した文章生成モデルがOpenAI系の場合に使用します',
       url: 'https://platform.openai.com/',
     },
     google_ai: {
-      name: 'Google AI（画像生成）',
-      description: 'Gemini 3 Pro Imageを使用して画像を生成します',
+      name: 'Google AI',
+      description: '画像生成と、選択した文章生成モデルがGemini系の場合に使用します',
       url: 'https://aistudio.google.com/',
     },
     google_tts: {
@@ -227,6 +237,7 @@ export function SettingsPage() {
               { key: 'api', label: 'API' },
               { key: 'video', label: '動画' },
               { key: 'audio', label: '音声' },
+              { key: 'image', label: '画像' },
               { key: 'other', label: 'その他' },
             ].map((tab) => (
               <button
@@ -247,6 +258,50 @@ export function SettingsPage() {
           {activeTab === 'api' && (
             <Card title="API設定" subtitle="各サービスの接続状態を確認しながら保存">
               <div className="space-y-4">
+                <div className="rounded-[8px] border border-[var(--nv-color-border)] p-4">
+                  <h3 className="text-sm font-semibold text-slate-900">文章生成モデル</h3>
+                  <p className="mt-1 text-xs text-slate-500">
+                    スクリプト生成と画像プロンプト生成で別々に選択できます
+                  </p>
+                  <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2">
+                    <div>
+                      <label className="mb-1 block text-xs font-semibold text-slate-600">
+                        スクリプト生成モデル
+                      </label>
+                      <select
+                        value={settings.scriptTextModel}
+                        onChange={(e) =>
+                          setSettings((prev) => ({
+                            ...prev,
+                            scriptTextModel: e.target.value as Settings['scriptTextModel'],
+                          }))
+                        }
+                        className="nv-input"
+                      >
+                        <option value="gpt-5.2">gpt-5.2</option>
+                        <option value="gemini-3.1-pro">gemini-3.1-pro</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="mb-1 block text-xs font-semibold text-slate-600">
+                        画像プロンプト生成モデル
+                      </label>
+                      <select
+                        value={settings.imagePromptTextModel}
+                        onChange={(e) =>
+                          setSettings((prev) => ({
+                            ...prev,
+                            imagePromptTextModel: e.target.value as Settings['imagePromptTextModel'],
+                          }))
+                        }
+                        className="nv-input"
+                      >
+                        <option value="gpt-5.2">gpt-5.2</option>
+                        <option value="gemini-3.1-pro">gemini-3.1-pro</option>
+                      </select>
+                    </div>
+                  </div>
+                </div>
                 {(Object.keys(serviceLabels) as ApiKeyService[]).map((service) => (
                   <div
                     key={service}
@@ -523,6 +578,54 @@ export function SettingsPage() {
                       {settings.ttsSpeakingRate.toFixed(1)}x
                     </span>
                   </div>
+                </div>
+              </div>
+            </Card>
+          )}
+
+          {activeTab === 'image' && (
+            <Card title="デフォルト画像設定" subtitle="画像生成モデルと解像度の選択">
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                <div>
+                  <label className="mb-1 block text-xs font-semibold text-slate-600">
+                    画像生成モデル
+                  </label>
+                  <select
+                    value={settings.imageModel}
+                    onChange={(e) =>
+                      setSettings((prev) => ({
+                        ...prev,
+                        imageModel: e.target.value as Settings['imageModel'],
+                      }))
+                    }
+                    className="nv-input"
+                  >
+                    <option value="gemini-3.1-flash-image-preview">
+                      gemini-3.1-flash-image-preview
+                    </option>
+                    <option value="gemini-3-pro-image-preview">
+                      gemini-3-pro-image-preview
+                    </option>
+                  </select>
+                </div>
+                <div>
+                  <label className="mb-1 block text-xs font-semibold text-slate-600">
+                    画像生成解像度
+                  </label>
+                  <select
+                    value={settings.imageResolution}
+                    onChange={(e) =>
+                      setSettings((prev) => ({
+                        ...prev,
+                        imageResolution: e.target.value as Settings['imageResolution'],
+                      }))
+                    }
+                    className="nv-input"
+                  >
+                    <option value="fhd">Full HD 相当 (16:9=1920x1080)</option>
+                    <option value="2k">2K 相当 (16:9=2560x1440)</option>
+                    <option value="4k">4K 相当 (16:9=3840x2160)</option>
+                  </select>
                 </div>
               </div>
             </Card>

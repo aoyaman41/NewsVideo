@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { ImagePrompt } from '../../schemas';
-import { Button } from '../ui';
+import { Badge, Button, StatusChip } from '../ui';
 
 interface PromptEditorProps {
   prompt: ImagePrompt;
@@ -12,6 +12,14 @@ interface PromptEditorProps {
 }
 
 const FIXED_STYLE_PRESET = 'news_broadcast';
+
+function formatPromptForReadability(value: string): string {
+  return value
+    .replace(/[、,]\s*/g, '、\n')
+    .replace(/。\s*/g, '。\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
 
 export function PromptEditor({
   prompt,
@@ -35,6 +43,13 @@ export function PromptEditor({
     return editedPrompt !== prompt.prompt || editedNegativePrompt !== baseNegative;
   }, [editedNegativePrompt, editedPrompt, prompt.negativePrompt, prompt.prompt]);
 
+  const promptCharCount = useMemo(() => editedPrompt.trim().length, [editedPrompt]);
+  const promptLineCount = useMemo(
+    () => (editedPrompt.length === 0 ? 0 : editedPrompt.split(/\r?\n/).length),
+    [editedPrompt]
+  );
+  const negativeCharCount = useMemo(() => editedNegativePrompt.trim().length, [editedNegativePrompt]);
+
   const handleSave = () => {
     onSave({
       ...prompt,
@@ -55,64 +70,66 @@ export function PromptEditor({
     onGenerate(updatedPrompt);
   };
 
+  const handleFormat = () => {
+    const formatted = formatPromptForReadability(editedPrompt);
+    if (formatted.length > 0) {
+      setEditedPrompt(formatted);
+    }
+  };
+
   return (
     <div className="space-y-4">
+      <div className="nv-surface-muted flex flex-wrap items-center justify-between gap-2 px-3 py-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <StatusChip tone={hasChanges ? 'warning' : 'success'} label={hasChanges ? '未保存' : '保存済み'} />
+          <Badge tone="neutral">v{prompt.version}</Badge>
+          <Badge tone="info">{prompt.aspectRatio}</Badge>
+        </div>
+        <div className="text-xs text-slate-500">
+          {promptLineCount}行 / {promptCharCount}文字
+        </div>
+      </div>
+
       <div>
-        <div className="mb-2 flex items-center justify-between">
+        <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
           <label className="block text-sm font-medium text-slate-700">画像プロンプト</label>
-          <button
-            onClick={() => setIsAdvancedMode(!isAdvancedMode)}
-            className="text-sm text-[var(--nv-color-accent)] hover:text-[#114f88]"
-          >
-            {isAdvancedMode ? '詳細を閉じる' : '詳細設定'}
-          </button>
+          <div className="flex items-center gap-1">
+            <Button size="sm" variant="ghost" onClick={handleFormat}>
+              整形
+            </Button>
+            <Button size="sm" variant="ghost" onClick={() => setIsAdvancedMode((prev) => !prev)}>
+              {isAdvancedMode ? '詳細を閉じる' : '詳細設定'}
+            </Button>
+          </div>
         </div>
 
         <textarea
           value={editedPrompt}
           onChange={(e) => setEditedPrompt(e.target.value)}
-          className="nv-input h-32 resize-none"
+          className="nv-input min-h-[260px] resize-y font-mono text-[13px] leading-6"
           placeholder="画像生成プロンプト（日本語）"
         />
+        <p className="mt-1 text-xs text-slate-500">
+          長文は「整形」で改行を入れると読みやすくなります。内容はそのまま保持されます。
+        </p>
       </div>
 
       {isAdvancedMode && (
-        <div>
-          <label className="mb-2 block text-sm font-medium text-slate-700">
-            ネガティブプロンプト（除外したい要素）
-          </label>
+        <div className="rounded-[8px] border border-[var(--nv-color-border)] bg-slate-50 p-3">
+          <div className="mb-2 flex items-center justify-between gap-2">
+            <label className="text-sm font-medium text-slate-700">
+              ネガティブプロンプト（除外したい要素）
+            </label>
+            <span className="text-xs text-slate-500">{negativeCharCount}文字</span>
+          </div>
           <textarea
             value={editedNegativePrompt}
             onChange={(e) => setEditedNegativePrompt(e.target.value)}
-            className="nv-input h-20 resize-none"
+            className="nv-input min-h-[110px] resize-y font-mono text-[12px] leading-5"
             placeholder="除外したい要素（日本語）"
           />
         </div>
       )}
-
-      <div>
-        <label className="mb-2 block text-sm font-medium text-slate-700">アスペクト比</label>
-        <div className="flex gap-2">
-          {[
-            { value: '16:9', label: '16:9 (横長)' },
-            { value: '1:1', label: '1:1 (正方形)' },
-            { value: '9:16', label: '9:16 (縦長)' },
-          ].map((option) => (
-            <button
-              key={option.value}
-              disabled
-              className={`rounded-[8px] border px-4 py-2 text-sm ${
-                prompt.aspectRatio === option.value
-                  ? 'border-[var(--nv-color-accent)] bg-blue-50 text-blue-700'
-                  : 'border-[var(--nv-color-border)] text-slate-400'
-              }`}
-            >
-              {option.label}
-            </button>
-          ))}
-        </div>
-        <p className="mt-1 text-xs text-slate-500">アスペクト比はプロジェクト設定で変更できます</p>
-      </div>
 
       <div className="flex justify-end gap-2 border-t border-[var(--nv-color-border)] pt-4">
         {onRegenerate && (
