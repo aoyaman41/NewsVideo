@@ -125,16 +125,16 @@ type StylePresetConfig = {
 
 const INFOGRAPHIC_STYLE_PRESET: StylePresetConfig = {
   id: FIXED_IMAGE_STYLE_PRESET,
-  baseStyle: '16:9 editorial infographic slide, flat clean vector style, no photorealism',
-  colorPalette: 'white and light gray base, dark navy structure, one muted teal accent',
-  lighting: 'flat and matte',
-  background: 'plain light background with generous whitespace',
-  density: 'low',
+  baseStyle: '16:9の報道向けインフォグラフィック、フラットなベクター調、非写実',
+  colorPalette: '白と淡いグレーを基調、濃紺で構造化、彩度を抑えたティールを1色アクセント',
+  lighting: 'フラットでマットな質感',
+  background: '余白を十分に取った明るい無地背景',
+  density: '低め',
   layoutVariants: {
-    dataAndLocation: 'Two-column layout: left 60% main visual, right 40% split top map and bottom chart',
-    dataOnly: 'Two-column layout: left 60% main visual, right 40% chart panel',
-    locationOnly: 'Two-column layout: left 60% main visual, right 40% map panel',
-    general: 'Two-column layout: left 60% main visual, right 40% supporting information panel',
+    dataAndLocation: '左右2カラム。左60%に主ビジュアル、右40%を上下2段（上:地図、下:図表）',
+    dataOnly: '左右2カラム。左60%に主ビジュアル、右40%に図表パネル',
+    locationOnly: '左右2カラム。左60%に主ビジュアル、右40%に地図パネル',
+    general: '左右2カラム。左60%に主ビジュアル、右40%に補助情報パネル',
   },
   negative:
     '人物, 顔, 手, 群衆, 肖像, インタビュー, アナウンサー, 記者, 番組セット, テロップ, 速報帯, ティッカー, ニュース名, 番組名, 局名, 番組タイトル, カテゴリー名, ロゴ, 透かし, QRコード, 商標, 写真, 実写, 写真風, 写実, フォトリアル, フォトリアリスティック, カメラ風, 過度なネオン, 強コントラスト, ギラついた光沢, サイバーパンク, アニメ調',
@@ -144,12 +144,12 @@ function getStylePreset(): StylePresetConfig {
   return INFOGRAPHIC_STYLE_PRESET;
 }
 
-const IMAGE_SYSTEM_PROMPT_CORE = `Generate exactly one 16:9 infographic slide.
-Treat USER as direct layout instructions for what to place and where to place it.
-Style must be flat infographic / vector-like, with clean shapes and whitespace.
-No photorealism. No people. No faces. No logos. No watermarks.
-If text is requested, use only short labels or numbers. Never add long sentences.
-Do not invent extra objects, titles, or captions not requested in USER.`;
+const IMAGE_SYSTEM_PROMPT_CORE = `16:9のインフォグラフィック画像を1枚だけ生成してください。
+「指示」ブロックは、何をどこに置くかの直接的な配置指示として扱ってください。
+スタイルはフラットなインフォグラフィック（ベクター調）で、形状は明瞭、余白は十分に確保してください。
+写実表現は禁止。人物・顔・ロゴ・透かしは禁止。
+文字を入れる場合は短いラベルまたは数値のみ。長文は禁止。
+「指示」にないオブジェクト・タイトル・キャプションを追加しないでください。`;
 
 const MAX_USER_PROMPT_CHARS = 900;
 const MAX_NEGATIVE_PROMPT_CHARS = 500;
@@ -164,7 +164,7 @@ function truncateTextByChars(value: string, maxChars: number): string {
 function normalizeNegativePrompt(value: string): string {
   const raw = value.trim();
   if (!raw) return '';
-  const withoutPrefix = raw.replace(/^strictly avoid:\s*/i, '');
+  const withoutPrefix = raw.replace(/^(strictly avoid|禁止|避けるべき要素)\s*[:：]\s*/i, '');
   const tokens = withoutPrefix
     .split(/[,、\n]/)
     .map((token) => token.trim())
@@ -183,11 +183,11 @@ function normalizeNegativePrompt(value: string): string {
 function getAspectRatioLabel(aspectRatio: ImagePrompt['aspectRatio']): string {
   switch (aspectRatio) {
     case '1:1':
-      return 'square';
+      return '正方形';
     case '9:16':
-      return 'vertical';
+      return '縦長';
     default:
-      return 'horizontal';
+      return '横長';
   }
 }
 
@@ -198,7 +198,7 @@ function getImageResolutionLabel(imageResolution: ImageResolution): string {
     case '4k':
       return '4K';
     default:
-      return 'Full HD';
+      return 'フルHD';
   }
 }
 
@@ -207,27 +207,27 @@ function buildImagePromptText(prompt: ImagePrompt, imageResolution: ImageResolut
   const dimensions = getDimensions(prompt.aspectRatio, imageResolution);
   const styleLines = [
     styleConfig.baseStyle,
-    `- Color: ${styleConfig.colorPalette}`,
-    `- Lighting: ${styleConfig.lighting}`,
-    `- Background: ${styleConfig.background}`,
-    `- Information density: ${styleConfig.density}`,
+    `- 配色: ${styleConfig.colorPalette}`,
+    `- 光・質感: ${styleConfig.lighting}`,
+    `- 背景: ${styleConfig.background}`,
+    `- 情報密度: ${styleConfig.density}`,
   ].join('\n');
-  const constraintsLine = `Aspect ratio: ${prompt.aspectRatio} (${getAspectRatioLabel(
+  const constraintsLine = `アスペクト比: ${prompt.aspectRatio}（${getAspectRatioLabel(
     prompt.aspectRatio
-  )}). Target resolution: ${dimensions.width}x${dimensions.height} (${getImageResolutionLabel(imageResolution)} preset). Keep this aspect ratio strictly.`;
+  )}）。目標解像度: ${dimensions.width}x${dimensions.height}（${getImageResolutionLabel(imageResolution)}）。この比率を厳守。`;
   const negativeRaw = truncateTextByChars(
     normalizeNegativePrompt(prompt.negativePrompt || styleConfig.negative),
     MAX_NEGATIVE_PROMPT_CHARS
   );
-  const strictlyAvoidLine = negativeRaw ? `Strictly avoid: ${negativeRaw}` : '';
+  const strictlyAvoidLine = negativeRaw ? `禁止: ${negativeRaw}` : '';
   const userPromptText = truncateTextByChars(prompt.prompt, MAX_USER_PROMPT_CHARS);
 
   const composedPrompt = [
-    `SYSTEM:\n${IMAGE_SYSTEM_PROMPT_CORE}`,
-    `Style:\n${styleLines}`,
-    `Constraints:\n${constraintsLine}`,
+    `システム:\n${IMAGE_SYSTEM_PROMPT_CORE}`,
+    `スタイル:\n${styleLines}`,
+    `制約:\n${constraintsLine}`,
     strictlyAvoidLine,
-    `USER:\n${userPromptText}`,
+    `指示:\n${userPromptText}`,
   ]
     .filter((part) => part && part.length > 0)
     .join('\n\n');
