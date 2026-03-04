@@ -7,6 +7,10 @@ import type { AudioAsset, Project, UsageRecord } from '../schemas';
 import { toLocalFileUrl } from '../utils/toLocalFileUrl';
 import { summarizeProjectProgress } from '../utils/projectHealth';
 import { createGeminiTtsUsageRecord } from '../utils/usage';
+import {
+  parseMarkIndex,
+  splitScriptIntoSegments,
+} from '../../shared/utils/ttsSegmentation';
 
 type TTSEngine = 'google_tts' | 'gemini_tts' | 'macos_tts';
 
@@ -34,49 +38,6 @@ const defaultSettings: Settings = {
 function guessLanguageCode(voiceName: string): string {
   const match = voiceName.match(/^([a-z]{2}-[A-Z]{2})/);
   return match?.[1] || 'ja-JP';
-}
-
-function splitScriptIntoSegments(text: string): string[] {
-  const normalized = text.replace(/\r\n/g, '\n').trim();
-  if (!normalized) return [];
-
-  const segments: string[] = [];
-  let buffer = '';
-
-  const flush = () => {
-    const seg = buffer.replace(/\n+/g, ' ').trim();
-    buffer = '';
-    if (seg) segments.push(seg);
-  };
-
-  for (const ch of normalized) {
-    buffer += ch;
-    if (ch === '\n') {
-      flush();
-      continue;
-    }
-    if ('。！？!?'.includes(ch)) {
-      flush();
-      continue;
-    }
-    if (ch === '、' && buffer.length >= 40) {
-      flush();
-      continue;
-    }
-    if (buffer.length >= 80) {
-      flush();
-    }
-  }
-  flush();
-
-  return segments;
-}
-
-function parseMarkIndex(markName: string): number | null {
-  const match = markName.match(/^m(\d+)$/);
-  if (!match) return null;
-  const idx = Number(match[1]);
-  return Number.isFinite(idx) ? idx : null;
 }
 
 export function AudioManagePage() {

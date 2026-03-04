@@ -4,6 +4,7 @@ import { execFile } from 'child_process';
 import { promisify } from 'util';
 import * as fs from 'fs/promises';
 import * as path from 'path';
+import { splitScriptIntoSegments } from '../../shared/utils/ttsSegmentation';
 
 const execFileAsync = promisify(execFile);
 const TTS_API_TIMEOUT_MS = 60_000;
@@ -169,42 +170,6 @@ function escapeSsmlText(text: string): string {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&apos;');
-}
-
-function splitScriptIntoSegments(text: string): string[] {
-  const normalized = text.replace(/\r\n/g, '\n').trim();
-  if (!normalized) return [];
-
-  const segments: string[] = [];
-  let buffer = '';
-
-  const flush = () => {
-    const seg = buffer.replace(/\n+/g, ' ').trim();
-    buffer = '';
-    if (seg) segments.push(seg);
-  };
-
-  for (const ch of normalized) {
-    buffer += ch;
-    if (ch === '\n') {
-      flush();
-      continue;
-    }
-    if ('。！？!?'.includes(ch)) {
-      flush();
-      continue;
-    }
-    if (ch === '、' && buffer.length >= 40) {
-      flush();
-      continue;
-    }
-    if (buffer.length >= 80) {
-      flush();
-    }
-  }
-  flush();
-
-  return segments;
 }
 
 function buildSsmlWithMarks(segments: string[]): string {
