@@ -2,6 +2,7 @@ import { ipcMain, app, safeStorage } from 'electron';
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import OpenAI from 'openai';
+import { GoogleGenAI, ThinkingLevel } from '@google/genai';
 import { z } from 'zod/v3';
 import {
   DEFAULT_IMAGE_PROMPT_TEXT_MODEL,
@@ -18,9 +19,7 @@ const getSecretsPath = () => path.join(app.getPath('userData'), 'secrets.enc');
 const getSettingsPath = () => path.join(app.getPath('userData'), 'settings.json');
 
 type TextGenerationScope = 'script' | 'image_prompt';
-type GeminiThinkingLevel = 'low' | 'high';
-
-const GEMINI_3_PRO_THINKING_LEVEL: GeminiThinkingLevel = 'high';
+const GEMINI_3_PRO_THINKING_LEVEL = ThinkingLevel.HIGH;
 const GEMINI_3_PRO_API_MODEL_ID = 'gemini-3-pro-preview';
 
 // APIキーを読み込み
@@ -92,8 +91,12 @@ function mapGeminiUsage(
   usage:
     | {
         promptTokenCount?: number;
+        responseTokenCount?: number;
         candidatesTokenCount?: number;
         totalTokenCount?: number;
+        promptTokens?: number;
+        completionTokens?: number;
+        totalTokens?: number;
         prompt_token_count?: number;
         candidates_token_count?: number;
         total_token_count?: number;
@@ -104,9 +107,13 @@ function mapGeminiUsage(
   if (!usage && !model) return null;
   return {
     provider: 'gemini',
-    inputTokens: usage?.promptTokenCount ?? usage?.prompt_token_count,
-    outputTokens: usage?.candidatesTokenCount ?? usage?.candidates_token_count,
-    totalTokens: usage?.totalTokenCount ?? usage?.total_token_count,
+    inputTokens: usage?.promptTokenCount ?? usage?.promptTokens ?? usage?.prompt_token_count,
+    outputTokens:
+      usage?.responseTokenCount ??
+      usage?.candidatesTokenCount ??
+      usage?.completionTokens ??
+      usage?.candidates_token_count,
+    totalTokens: usage?.totalTokenCount ?? usage?.totalTokens ?? usage?.total_token_count,
     model,
   };
 }
@@ -159,27 +166,6 @@ async function runWithConcurrency<T, R>(
   return results;
 }
 
-type GeminiGenerateContentApiResponse = {
-  candidates?: Array<{
-    content?: {
-      parts?: Array<{
-        text?: string;
-      }>;
-    };
-  }>;
-  usageMetadata?: {
-    promptTokenCount?: number;
-    candidatesTokenCount?: number;
-    totalTokenCount?: number;
-    prompt_token_count?: number;
-    candidates_token_count?: number;
-    total_token_count?: number;
-  };
-  error?: {
-    message?: string;
-  };
-};
-
 async function generateGeminiTextContent(params: {
   model: string;
   systemPrompt: string;
@@ -193,65 +179,35 @@ async function generateGeminiTextContent(params: {
       'Google AI APIキーが設定されていません。設定画面から（Google AI Studio / Generative Language）用のAPIキーを入力してください。'
     );
   }
-
-  const requestBody: {
-    contents: Array<{ role: 'user'; parts: Array<{ text: string }> }>;
-    generationConfig: {
-      temperature: number;
-      responseMimeType?: string;
-      thinkingConfig: {
-        thinkingLevel: GeminiThinkingLevel;
-      };
-    };
-  } = {
-    contents: [
-      {
-        role: 'user',
-        parts: [{ text: `SYSTEM:\n${params.systemPrompt}\n\nUSER:\n${params.userPrompt}` }],
-      },
-    ],
-    generationConfig: {
-      temperature: params.temperature,
-      thinkingConfig: {
-        // Gemini 3 Pro は low/high のみ。GPT-5.2のデフォルト寄せとして high を指定
-        thinkingLevel: GEMINI_3_PRO_THINKING_LEVEL,
-      },
-      ...(params.responseMimeType ? { responseMimeType: params.responseMimeType } : {}),
-    },
-  };
-
-  const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${params.model}:generateContent`;
+  const ai = new GoogleGenAI({ apiKey });
   const response = await withRetry(async () => {
-    return fetch(endpoint, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-goog-api-key': apiKey,
+    return ai.models.generateContent({
+      model: params.model,
+      contents: params.userPrompt,
+      config: {
+        systemInstruction: params.systemPrompt,
+        temperature: params.temperature,
+        thinkingConfig: {
+          // Gemini 3 Pro は high 寄せで使用
+          thinkingLevel: GEMINI_3_PRO_THINKING_LEVEL,
+        },
+        ...(params.responseMimeType ? { responseMimeType: params.responseMimeType } : {}),
       },
-      body: JSON.stringify(requestBody),
     });
   });
 
-  const data = (await response.json().catch(() => ({}))) as GeminiGenerateContentApiResponse;
-
-  if (!response.ok) {
-    throw new Error(
-      `Gemini APIエラー: ${response.status} ${data.error?.message || response.statusText}`
-    );
-  }
-
-  const parts = data.candidates?.[0]?.content?.parts ?? [];
-  const text = parts
+  const fallbackText = (response.candidates?.[0]?.content?.parts ?? [])
     .map((part) => part.text || '')
     .join('\n')
     .trim();
+  const text = normalizeString(response.text) || fallbackText;
   if (!text) {
     throw new Error('AIからの応答が空でした');
   }
 
   return {
     text,
-    usage: mapGeminiUsage(data.usageMetadata, params.model),
+    usage: mapGeminiUsage(response.usageMetadata, params.model),
   };
 }
 
@@ -580,7 +536,7 @@ type ImagePromptExtraction = z.infer<typeof ImagePromptExtractionSchema>;
 
 const INFOGRAPHIC_STYLE_PRESET: StylePresetConfig = {
   id: FIXED_IMAGE_STYLE_PRESET,
-  baseStyle: '16:9 editorial infographic slide, flat clean vector style, no photorealism',
+  baseStyle: 'フラットで明瞭なベクター調、非写実',
   colorPalette: 'white and light gray base, dark navy structure, one muted teal accent',
   lighting: 'flat and matte',
   background: 'plain light background with generous whitespace',
@@ -1185,7 +1141,7 @@ function buildImagePromptText(
       : '主題の要点を一目で理解できるように整理する';
 
   const promptLines = [
-    'インフォグラフィック仕様（16:9）',
+    'スライド仕様',
     `背景: ${backgroundSummary}`,
     `意図: ${intentSummary}`,
     `主題: ${topic || 'このパートの要点を1枚で説明'}`,
@@ -1208,7 +1164,7 @@ function createSinglePartExtractionPrompts(articleContext: string, partContext: 
   userPrompt: string;
 } {
   const systemPrompt = `タスク:
-入力の記事情報と対象パート情報から、16:9インフォグラフィック1枚分の「スライド仕様書」を作成してください。
+入力の記事情報と対象パート情報から、1枚分の「スライド仕様書」を作成してください。
 出力は日本語のみ。前置き・説明文・Markdownは禁止。指定フォーマットのみ出力してください。
 
 制約:

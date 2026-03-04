@@ -2,7 +2,7 @@ import { ipcMain, app, safeStorage } from 'electron';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { GoogleGenerativeAI } from '@google/generative-ai';
+import { GoogleGenAI } from '@google/genai';
 import {
   DEFAULT_IMAGE_MODEL,
   DEFAULT_IMAGE_RESOLUTION,
@@ -125,7 +125,7 @@ type StylePresetConfig = {
 
 const INFOGRAPHIC_STYLE_PRESET: StylePresetConfig = {
   id: FIXED_IMAGE_STYLE_PRESET,
-  baseStyle: '16:9の報道向けインフォグラフィック、フラットなベクター調、非写実',
+  baseStyle: 'フラットなベクター調、非写実、情報整理しやすい明瞭な図解表現',
   colorPalette: '白と淡いグレーを基調、濃紺で構造化、彩度を抑えたティールを1色アクセント',
   lighting: 'フラットでマットな質感',
   background: '余白を十分に取った明るい無地背景',
@@ -144,12 +144,12 @@ function getStylePreset(): StylePresetConfig {
   return INFOGRAPHIC_STYLE_PRESET;
 }
 
-const IMAGE_SYSTEM_PROMPT_CORE = `16:9のインフォグラフィック画像を1枚だけ生成してください。
-「指示」ブロックは、何をどこに置くかの直接的な配置指示として扱ってください。
-スタイルはフラットなインフォグラフィック（ベクター調）で、形状は明瞭、余白は十分に確保してください。
-写実表現は禁止。人物・顔・ロゴ・透かしは禁止。
-文字を入れる場合は短いラベルまたは数値のみ。長文は禁止。
-「指示」にないオブジェクト・タイトル・キャプションを追加しないでください。`;
+const IMAGE_SYSTEM_POLICY_CORE = `あなたは画像生成モデルです。以下を厳守してください。
+- 出力は画像のみ。説明文や前置きは返さない。
+- 「指示」ブロックを最優先の描画仕様として扱う。
+- 「指示」にない要素・見出し・数値・キャプションを追加しない。
+- 文字を配置する場合は短いラベルまたは数値のみ。長文を配置しない。
+- 写実表現は禁止。`;
 
 const MAX_USER_PROMPT_CHARS = 900;
 const MAX_NEGATIVE_PROMPT_CHARS = 500;
@@ -180,31 +180,19 @@ function normalizeNegativePrompt(value: string): string {
   return deduped.join(', ');
 }
 
-function getAspectRatioLabel(aspectRatio: ImagePrompt['aspectRatio']): string {
-  switch (aspectRatio) {
-    case '1:1':
-      return '正方形';
-    case '9:16':
-      return '縦長';
-    default:
-      return '横長';
-  }
-}
-
-function getImageResolutionLabel(imageResolution: ImageResolution): string {
+function getImageSize(imageResolution: ImageResolution): '1K' | '2K' | '4K' {
   switch (imageResolution) {
     case '2k':
       return '2K';
     case '4k':
       return '4K';
     default:
-      return 'フルHD';
+      return '1K';
   }
 }
 
-function buildImagePromptText(prompt: ImagePrompt, imageResolution: ImageResolution): string {
+function buildImageSystemInstruction(prompt: ImagePrompt): string {
   const styleConfig = getStylePreset();
-  const dimensions = getDimensions(prompt.aspectRatio, imageResolution);
   const styleLines = [
     styleConfig.baseStyle,
     `- 配色: ${styleConfig.colorPalette}`,
@@ -212,22 +200,28 @@ function buildImagePromptText(prompt: ImagePrompt, imageResolution: ImageResolut
     `- 背景: ${styleConfig.background}`,
     `- 情報密度: ${styleConfig.density}`,
   ].join('\n');
-  const constraintsLine = `アスペクト比: ${prompt.aspectRatio}（${getAspectRatioLabel(
-    prompt.aspectRatio
-  )}）。目標解像度: ${dimensions.width}x${dimensions.height}（${getImageResolutionLabel(imageResolution)}）。この比率を厳守。`;
   const negativeRaw = truncateTextByChars(
     normalizeNegativePrompt(prompt.negativePrompt || styleConfig.negative),
     MAX_NEGATIVE_PROMPT_CHARS
   );
-  const strictlyAvoidLine = negativeRaw ? `禁止: ${negativeRaw}` : '';
-  const userPromptText = truncateTextByChars(prompt.prompt, MAX_USER_PROMPT_CHARS);
+  const strictAvoidSection = negativeRaw ? `禁止:\n${negativeRaw}` : '';
 
-  const composedPrompt = [
-    `システム:\n${IMAGE_SYSTEM_PROMPT_CORE}`,
+  const systemInstruction = [
+    IMAGE_SYSTEM_POLICY_CORE,
+    'スタイル方針:\n指示内のスタイル指定を最優先とし、下記ガイドに矛盾しないこと。',
     `スタイル:\n${styleLines}`,
-    `制約:\n${constraintsLine}`,
-    strictlyAvoidLine,
-    `指示:\n${userPromptText}`,
+    strictAvoidSection,
+  ]
+    .filter((part) => part && part.length > 0)
+    .join('\n\n');
+  return truncateTextByChars(systemInstruction, MAX_MODEL_INPUT_PROMPT_CHARS);
+}
+
+function buildImagePromptText(prompt: ImagePrompt): string {
+  const userPromptText = truncateTextByChars(prompt.prompt, MAX_USER_PROMPT_CHARS);
+  const composedPrompt = [
+    '指示:',
+    userPromptText,
   ]
     .filter((part) => part && part.length > 0)
     .join('\n\n');
@@ -342,40 +336,43 @@ ipcMain.handle(
       aspectRatio: prompt.aspectRatio,
     });
 
-    const genAI = new GoogleGenerativeAI(apiKey);
+    const genAI = new GoogleGenAI({ apiKey });
     const { imageModel, imageResolution } = await readImageGenerationSettings();
-
-    // 設定で選択された画像生成モデルを使用
-    const model = genAI.getGenerativeModel({
-      model: imageModel,
-    });
-
-    const enhancedPrompt = buildImagePromptText(prompt, imageResolution);
+    const enhancedPrompt = buildImagePromptText(prompt);
+    const systemInstruction = buildImageSystemInstruction(prompt);
+    const imageSize = getImageSize(imageResolution);
 
     const imageId = randomUUID();
     const dimensions = getDimensions(prompt.aspectRatio, imageResolution);
     logger.debug('[image:generate] Request prepared', {
       promptChars: enhancedPrompt.length,
+      systemInstructionChars: systemInstruction.length,
       imageModel,
       imageResolution,
+      imageSize,
     });
 
     const response = await withRetry(async () => {
-      return model.generateContent({
-        contents: [{
-          role: 'user',
-          parts: [{ text: enhancedPrompt }],
-        }],
+      return genAI.models.generateContent({
+        model: imageModel,
+        contents: enhancedPrompt,
+        config: {
+          systemInstruction,
+          responseModalities: ['IMAGE'],
+          imageConfig: {
+            aspectRatio: prompt.aspectRatio,
+            imageSize,
+          },
+        },
       });
     });
 
     // レスポンスから画像データを抽出
-    const result = response.response;
-    const parts = result.candidates?.[0]?.content?.parts;
+    const parts = response.candidates?.[0]?.content?.parts;
     logger.debug('[image:generate] Response received', {
-      candidates: result.candidates?.length ?? 0,
+      candidates: response.candidates?.length ?? 0,
       parts: parts?.length ?? 0,
-      hasImagePart: Boolean(parts?.some((p) => p.inlineData?.mimeType?.startsWith('image/'))),
+      hasImagePart: Boolean(parts?.some((p) => p.inlineData?.data)),
     });
 
     if (!parts || parts.length === 0) {
@@ -383,14 +380,14 @@ ipcMain.handle(
     }
 
     // 画像パートを探す
-    const imagePart = parts.find(part => part.inlineData?.mimeType?.startsWith('image/'));
+    const imagePart = parts.find((part) => part.inlineData?.data);
+    const base64Data = imagePart?.inlineData?.data || response.data;
 
-    if (!imagePart?.inlineData) {
+    if (!base64Data) {
       throw new Error('画像生成に失敗しました: 画像データが見つかりません');
     }
 
-    const base64Data = imagePart.inlineData.data;
-    const mimeType = imagePart.inlineData.mimeType || 'image/png';
+    const mimeType = imagePart?.inlineData?.mimeType || 'image/png';
 
     // 画像をファイルに保存
     const filePath = await saveImageToFile(base64Data, projectPath, imageId, mimeType);
@@ -434,65 +431,67 @@ ipcMain.handle(
     // プロジェクトパスを取得
     const projectPath = await getProjectPath(projectId);
 
-    const genAI = new GoogleGenerativeAI(apiKey);
+    const genAI = new GoogleGenAI({ apiKey });
     const { imageModel, imageResolution } = await readImageGenerationSettings();
-
-    // 設定で選択された画像生成モデルを使用
-    const model = genAI.getGenerativeModel({
-      model: imageModel,
-    });
 
     logger.info('[image:generateBatch] Start', { projectId, count: prompts.length });
 
     const settled = await Promise.all(
       prompts.map(async (prompt, index) => {
         try {
-          const enhancedPrompt = buildImagePromptText(prompt, imageResolution);
+          const enhancedPrompt = buildImagePromptText(prompt);
+          const systemInstruction = buildImageSystemInstruction(prompt);
+          const imageSize = getImageSize(imageResolution);
 
           logger.debug('[image:generateBatch] Request prepared', {
             index: index + 1,
             total: prompts.length,
             promptId: prompt.id,
             promptChars: enhancedPrompt.length,
+            systemInstructionChars: systemInstruction.length,
             imageModel,
             imageResolution,
+            imageSize,
           });
 
           const imageId = randomUUID();
           const dimensions = getDimensions(prompt.aspectRatio, imageResolution);
 
           const response = await withRetry(async () => {
-            return model.generateContent({
-              contents: [
-                {
-                  role: 'user',
-                  parts: [{ text: enhancedPrompt }],
+            return genAI.models.generateContent({
+              model: imageModel,
+              contents: enhancedPrompt,
+              config: {
+                systemInstruction,
+                responseModalities: ['IMAGE'],
+                imageConfig: {
+                  aspectRatio: prompt.aspectRatio,
+                  imageSize,
                 },
-              ],
+              },
             });
           });
 
-          const result = response.response;
-          const parts = result.candidates?.[0]?.content?.parts;
+          const parts = response.candidates?.[0]?.content?.parts;
           logger.debug('[image:generateBatch] Response received', {
             index: index + 1,
-            candidates: result.candidates?.length ?? 0,
+            candidates: response.candidates?.length ?? 0,
             parts: parts?.length ?? 0,
-            hasImagePart: Boolean(parts?.some((p) => p.inlineData?.mimeType?.startsWith('image/'))),
+            hasImagePart: Boolean(parts?.some((p) => p.inlineData?.data)),
           });
 
           if (!parts || parts.length === 0) {
             throw new Error('レスポンスが空です');
           }
 
-          const imagePart = parts.find((part) => part.inlineData?.mimeType?.startsWith('image/'));
+          const imagePart = parts.find((part) => part.inlineData?.data);
+          const base64Data = imagePart?.inlineData?.data || response.data;
 
-          if (!imagePart?.inlineData) {
+          if (!base64Data) {
             throw new Error('画像データが見つかりません');
           }
 
-          const base64Data = imagePart.inlineData.data;
-          const mimeType = imagePart.inlineData.mimeType || 'image/png';
+          const mimeType = imagePart?.inlineData?.mimeType || 'image/png';
 
           const filePath = await saveImageToFile(base64Data, projectPath, imageId, mimeType);
           const stats = await fs.stat(filePath);
