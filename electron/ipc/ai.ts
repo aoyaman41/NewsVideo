@@ -2,7 +2,6 @@ import { ipcMain, app, safeStorage } from 'electron';
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import OpenAI from 'openai';
-import { zodResponseFormat } from 'openai/helpers/zod';
 import { z } from 'zod/v3';
 import {
   DEFAULT_IMAGE_PROMPT_TEXT_MODEL,
@@ -313,6 +312,25 @@ function tryParseJsonResponse<T>(text: string): T | null {
   } catch {
     return null;
   }
+}
+
+function normalizeSlideSpecText(value: unknown): string {
+  if (typeof value !== 'string') return '';
+
+  let text = value.trim();
+  if (!text) return '';
+
+  if (text.startsWith('```')) {
+    text = text.replace(/^```[a-zA-Z0-9_-]*\s*/, '');
+    text = text.replace(/\s*```$/, '');
+  }
+
+  const anchor = text.indexOf('スライド仕様:');
+  if (anchor >= 0) {
+    text = text.slice(anchor);
+  }
+
+  return text.trim();
 }
 
 // 記事データの型
@@ -1071,6 +1089,14 @@ function buildImagePromptText(
   const p = candidate ?? {};
   const sourceText = context.articleText;
 
+  const directSlideSpec = normalizeSlideSpecText(
+    (p as { slideSpec?: unknown; compositionNote?: unknown }).slideSpec ??
+      (p as { compositionNote?: unknown }).compositionNote
+  );
+  if (directSlideSpec) {
+    return truncateTextByChars(directSlideSpec, MAX_IMAGE_PROMPT_CHARS);
+  }
+
   const rawTopic = normalizeString(
     (p as { topic?: unknown; subject?: unknown }).topic ?? (p as { subject?: unknown }).subject
   );
@@ -1182,91 +1208,126 @@ function createSinglePartExtractionPrompts(articleContext: string, partContext: 
   userPrompt: string;
 } {
   const systemPrompt = `タスク:
-入力された「記事情報」と「対象パート情報」を使い、画像生成に必要な抽出情報をJSONで作成してください。
-出力は指定スキーマの JSON オブジェクトのみです（説明文・Markdown・前置き禁止）。
+入力の記事情報と対象パート情報から、16:9インフォグラフィック1枚分の「スライド仕様書」を作成してください。
+出力は日本語のみ。前置き・説明文・Markdownは禁止。指定フォーマットのみ出力してください。
 
-目的:
-- 指定パートごとに、本文に書かれた事実にもとづき topic / entities / locations / quantFacts / visualSlots を作成し、
-  さらに主ビジュアルの要素（heroSubject/heroSetting）と構図メモ（compositionNote）を短く作成する。
+制約:
+- 目的は「このパートを1枚で正確に伝える」こと。
+- 配置指示は解釈余地が出ないように書く（何を/どこに/どの大きさ/どの順に見るか）。
+- 要素ごとにサイズ比（例: 左60%、右上20%、右下20%）または大中小を必ず示す。
+- 視線誘導（最初に何を見せ、次に何を読ませるか）を必ず示す。
+- 配色とトーン（背景色、主色、アクセント色、線の太さ、情報密度）を必ず示す。
+- 画面内テキストは短ラベルのみ（1ラベル8文字以内、最大6個）。
+- 人物・顔・手・ロゴ・透かし・番組名・QRコードは禁止。
+- 推測で新事実を追加しない。入力にない事実は書かない。
+- 冗長表現を避け、全体900文字以内。
 
-厳守ルール（本文由来フィールド）:
-1) 推測・補完・一般知識の追加は禁止。本文に書かれていない内容は出力しない。
-2) 次のフィールドに入れる文字列は、必ず「記事本文に含まれる表現」をそのまま抜き出す（言い換え禁止）。
-   - topic
-   - entities の各要素
-   - locations の各要素
-   - quantFacts の各要素：metric / value / unit / timeframe
-   - visualSlots の各要素：source
-   - heroSubject
-   - heroSetting
-   ※抜き出しできない場合は "" または [] にする。
-3) 次のフィールドは制御用の固定値なので、本文に存在しなくても出力してよい（候補以外は出さない）。
-   - quantFacts.direction（increase|decrease|stable|comparison|unknown）
-   - visualSlots.elementType（指定候補のみ）
-   - visualSlots.slot（指定候補のみ）
-   - JSONのキー名
-4) 番組・放送に関する名称（番組名、局名、番組タイトル等）に該当する語は出力しない（本文にあっても除外）。
-5) 人物・顔・キャスター・記者・インタビューを想起させる要素は出力しない（entities にも入れない）。
-6) 入力に混入し得るノイズ（ファイルパス、URL、コード断片、ログ、設定文、署名、UI文言など）は本文事実ではないため無視し、
-   topic/entities/locations/source/heroSubject/heroSetting に絶対に含めない。
-7) 禁止要素の最終指定は後段で共通適用するため、禁止語の列挙自体を topic/entities/compositionNote に書かない。
+出力フォーマット:
+スライド仕様:
+主題:
+伝える1文:
+背景要約:
+意図:
+視覚トーン:
+情報の優先順位:
+- 第1:
+- 第2:
+- 第3:
+主ビジュアル:
+レイアウト方針:
+視線誘導:
+配置:
+- 左(サイズ/内容):
+- 中央(サイズ/内容):
+- 右上(サイズ/内容):
+- 右下(サイズ/内容):
+要素:
+- データ要素:
+- 地理要素:
+- 補助要素:
+画面テキスト:
+- 1:
+- 2:
+- 3:
+- 4:
+- 5:
+- 6:
+禁止:
+- 
 
-compositionNote（構図メモ）の制約:
-- compositionNote は 1〜2文の短文（120文字以内）。
-- 「どこに何を置くか」が分かる配置指示を含める（例: 左60%に主題、右上に地図、右下に棒グラフ）。
-- 新しい事実・固有名詞・数字は追加しない。内容を指す場合は本文からの語句を引用して示す。
+出力例1:
+スライド仕様:
+主題: 原油価格の上昇
+伝える1文: 供給懸念で原油先物が上昇した
+背景要約: 産油地域の不安定化と需給懸念
+意図: 価格上昇の理由と規模を一目で理解させる
+視覚トーン: 明るい灰背景、濃紺を主線、ティールを強調、線は中太、情報密度は低め
+情報の優先順位:
+- 第1: 原油価格が上昇した事実
+- 第2: 上昇幅の数値
+- 第3: 地理的な背景要因
+主ビジュアル: 原油ドラム缶と上向き矢印
+レイアウト方針: 左60%に主題、右40%を上下2段で根拠を配置
+視線誘導: 左中央の矢印 → 右下の数値グラフ → 右上の地図
+配置:
+- 左(サイズ/内容): 60% / 原油ドラム缶群と上昇矢印
+- 中央(サイズ/内容): 0% / 未使用
+- 右上(サイズ/内容): 20% / 産油地域の簡易地図
+- 右下(サイズ/内容): 20% / 価格推移の折れ線グラフ
+要素:
+- データ要素: 直近高値、前日比
+- 地理要素: 中東の産油地域
+- 補助要素: 注意アイコンを1つ
+画面テキスト:
+- 1: 原油先物
+- 2: 前日比
+- 3: +5%
+- 4:
+- 5:
+- 6:
+禁止:
+- 人物、顔、ロゴ
 
-抽出の目安:
-- entities は最大5件、locations は最大3件、quantFacts は最大3件。
-- topic/entities/locations/quantFacts(metric,value,unit,timeframe)/heroSubject/heroSetting は各60文字以内。
-- visualSlots は0〜3件。source は本文からの短い抜き出し（40文字以内・長文禁止）。
+出力例2:
+スライド仕様:
+主題: 訪日客数の回復
+伝える1文: 訪日客数が前年同月比で回復した
+背景要約: 入国規制緩和後の需要回復
+意図: 回復傾向を数値と内訳で短時間に把握させる
+視覚トーン: 白背景、濃紺の骨格、緑を増加色、線は細中、情報密度は中
+情報の優先順位:
+- 第1: 訪日客数が回復した事実
+- 第2: 前年同月比の伸び
+- 第3: 国別の内訳
+主ビジュアル: 空港到着ゲートと増加アイコン
+レイアウト方針: 左55%を主ビジュアル、右45%を上下に分割
+視線誘導: 左の主ビジュアル → 右下の棒グラフ → 右上の円グラフ
+配置:
+- 左(サイズ/内容): 55% / 到着ゲート図解と増加アイコン
+- 中央(サイズ/内容): 0% / 未使用
+- 右上(サイズ/内容): 20% / 国別比率の円グラフ
+- 右下(サイズ/内容): 25% / 月次推移の棒グラフ
+要素:
+- データ要素: 前年同月比、月次推移
+- 地理要素: 主要3市場
+- 補助要素: 飛行機アイコン
+画面テキスト:
+- 1: 訪日客数
+- 2: 前年比
+- 3: 国別比率
+- 4:
+- 5:
+- 6:
+禁止:
+- 人物の顔アップ、透かし、番組名`;
 
-配列順:
-- prompts 配列は対象パート1件のみ。
-
-最終チェック:
-- topic/entities/locations/metric/value/unit/timeframe/source/heroSubject/heroSetting が本文中に存在しない場合は削除または空にする。
-- JSON以外を絶対に出力しない。`;
-
-  const userPrompt = `以下の「記事情報」「対象パート情報」を基に、画像生成に必要な抽出情報を JSON で出力してください。
-本文由来フィールドは必ず本文からの抜き出しにしてください。本文に無い情報は空にしてください。
-入力にノイズ（ファイルパス、URL、コード断片、ログ等）が混ざる場合は無視してください。
-
-## 記事情報
+  const userPrompt = `記事情報:
 ${articleContext}
 
-## 対象パート情報
+対象パート:
 ${partContext}
 
-## 要件
-- topic/entities/locations/quantFacts(metric,value,unit,timeframe)/visualSlots.source/heroSubject/heroSetting は本文からの抜き出しのみ
-- direction/elementType/slot は固定候補から選ぶ
-- compositionNote は1〜2文（120文字以内）で、配置（どこに何を置くか）を具体的に書く（新しい事実は追加しない）
-- topic/entities/locations/quantFacts(metric,value,unit,timeframe)/heroSubject/heroSetting は各60文字以内
-- visualSlots.source は40文字以内
-- prompts 配列は対象パート1件のみ
-
-## 出力形式（JSONのみ）
-{
-  "prompts": [
-    {
-      "topic": "",
-      "entities": [],
-      "locations": [],
-      "quantFacts": [
-        { "metric": "", "direction": "unknown", "value": "", "unit": "", "timeframe": "" }
-      ],
-      "visualSlots": [
-        { "slot": "left", "elementType": "diagram", "source": "" }
-      ],
-      "heroSubject": "",
-      "heroSetting": "",
-      "compositionNote": ""
-    }
-  ]
-}
-
-JSONのみを出力してください。`;
+この対象パートを伝えるための「スライド仕様」を作成してください。`;
 
   return { systemPrompt, userPrompt };
 }
@@ -1298,7 +1359,6 @@ async function extractSinglePartPromptCandidate(params: {
           { role: 'system', content: systemPrompt },
           { role: 'user', content: userPrompt },
         ],
-        response_format: zodResponseFormat(ImagePromptExtractionSchema, 'image_prompt_extraction'),
         temperature: 0.3,
       });
     });
@@ -1311,10 +1371,27 @@ async function extractSinglePartPromptCandidate(params: {
       throw new Error(`AIが拒否しました: ${message.refusal}`);
     }
 
-    const parsed: unknown = (message as { parsed?: unknown }).parsed ?? null;
-    const fallbackParsed =
-      !parsed && message.content ? tryParseJsonResponse<unknown>(message.content) : null;
-    resolvedParsed = coerceImagePromptExtraction(parsed ?? fallbackParsed ?? {});
+    const textContent = normalizeString(message.content);
+    const parsed = textContent ? tryParseJsonResponse<unknown>(textContent) : null;
+    if (parsed) {
+      resolvedParsed = coerceImagePromptExtraction(parsed);
+    } else {
+      const slideSpec = normalizeSlideSpecText(textContent);
+      resolvedParsed = {
+        prompts: [
+          {
+            topic: '',
+            entities: [],
+            locations: [],
+            quantFacts: [],
+            visualSlots: [],
+            heroSubject: '',
+            heroSetting: '',
+            compositionNote: slideSpec,
+          },
+        ],
+      };
+    }
     usage = mapOpenAIUsage(response.usage, response.model);
   } else {
     const apiModel = resolveGeminiApiModel(params.selectedModel);
@@ -1323,10 +1400,27 @@ async function extractSinglePartPromptCandidate(params: {
       systemPrompt,
       userPrompt,
       temperature: 0.3,
-      responseMimeType: 'application/json',
     });
     const parsed = tryParseJsonResponse<unknown>(geminiResult.text);
-    resolvedParsed = coerceImagePromptExtraction(parsed ?? {});
+    if (parsed) {
+      resolvedParsed = coerceImagePromptExtraction(parsed);
+    } else {
+      const slideSpec = normalizeSlideSpecText(geminiResult.text);
+      resolvedParsed = {
+        prompts: [
+          {
+            topic: '',
+            entities: [],
+            locations: [],
+            quantFacts: [],
+            visualSlots: [],
+            heroSubject: '',
+            heroSetting: '',
+            compositionNote: slideSpec,
+          },
+        ],
+      };
+    }
     usage = geminiResult.usage;
   }
 
