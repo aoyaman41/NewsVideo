@@ -441,176 +441,249 @@ export function ArticleInputPage() {
         await ensureNotCancelled();
       }
 
-      if (!steps.prompts) {
-        const partIdSet = new Set(project.parts.map((part) => part.id));
-        const promptsByPart = new Set(
-          project.prompts.filter((prompt) => partIdSet.has(prompt.partId)).map((p) => p.partId)
-        );
-        const missingParts = project.parts.filter((part) => !promptsByPart.has(part.id));
+      const needsImagePipeline = !steps.prompts || !steps.images;
+      const needsAudioPipeline = !steps.audio;
 
+      type ImagePipelineResult = {
+        promptsAdded: Project['prompts'];
+        imagesAdded: ImageAsset[];
+        partImageById: Map<string, string>;
+        usageRecords: Project['usage'];
+      };
+
+      type AudioPipelineResult = {
+        audioAdded: Project['audio'];
+        partAudioById: Map<string, Project['parts'][number]['audio']>;
+        usageRecords: Project['usage'];
+        errors: string[];
+      };
+
+      const runImagePipeline = async (baseProject: Project): Promise<ImagePipelineResult> => {
+        const usageRecords: Project['usage'] = [];
+        const partById = new Map(baseProject.parts.map((part) => [part.id, part]));
+        const existingPrompts = baseProject.prompts.filter((prompt) => partById.has(prompt.partId));
+        const promptsByPart = new Set(existingPrompts.map((prompt) => prompt.partId));
+        const missingParts = baseProject.parts.filter((part) => !promptsByPart.has(part.id));
+
+        let promptsAdded: Project['prompts'] = [];
         if (missingParts.length > 0) {
-          await updateAutoStatus(project, { running: true, step: '画像プロンプトを生成中...' });
           const promptResult = await window.electronAPI.ai.generateImagePrompts(
             missingParts,
-            project.article
+            baseProject.article
           );
           await ensureNotCancelled();
+          promptsAdded = promptResult.prompts;
           const promptUsage = createOpenAIUsageRecord('image_prompt_generate', promptResult.usage);
-          project.prompts = [...project.prompts, ...promptResult.prompts];
-          if (promptUsage) {
-            project.usage = [...(project.usage ?? []), promptUsage];
+          if (promptUsage) usageRecords.push(promptUsage);
+        }
+
+        const partImageById = new Map<string, string>();
+        let imagesAdded: ImageAsset[] = [];
+        if (!steps.images) {
+          const allPrompts = [...existingPrompts, ...promptsAdded];
+          const latestPromptByPart = new Map<string, (typeof allPrompts)[number]>();
+          for (const prompt of allPrompts) {
+            const current = latestPromptByPart.get(prompt.partId);
+            if (!current || prompt.createdAt >= current.createdAt) {
+              latestPromptByPart.set(prompt.partId, prompt);
+            }
           }
-          project.updatedAt = new Date().toISOString();
-          await window.electronAPI.project.save(project);
-          setProjectSafe(project);
-        }
-        steps = computeStepState(project);
-        await updateAutoStatus(project, {
-          running: true,
-          step: '画像プロンプト完了',
-          steps: { prompts: true },
-        });
-        await ensureNotCancelled();
-      }
 
-      if (!steps.images) {
-        await updateAutoStatus(project, { running: true, step: '画像を生成中...' });
-        const partById = new Map(project.parts.map((p) => [p.id, p]));
-        const latestPromptByPart = new Map<string, (typeof project.prompts)[number]>();
-        for (const prompt of project.prompts) {
-          if (!partById.has(prompt.partId)) continue;
-          const current = latestPromptByPart.get(prompt.partId);
-          if (!current || prompt.createdAt >= current.createdAt) {
-            latestPromptByPart.set(prompt.partId, prompt);
+          const imagesByPrompt = new Map<string, ImageAsset>();
+          for (const image of baseProject.images) {
+            if (image.metadata.promptId && !imagesByPrompt.has(image.metadata.promptId)) {
+              imagesByPrompt.set(image.metadata.promptId, image);
+            }
+          }
+
+          const promptsToGenerate: Project['prompts'] = [];
+          for (const part of baseProject.parts) {
+            if ((part.panelImages?.length ?? 0) > 0) continue;
+            const prompt = latestPromptByPart.get(part.id);
+            if (!prompt) continue;
+            const existingImage = imagesByPrompt.get(prompt.id);
+            if (existingImage) {
+              partImageById.set(part.id, existingImage.id);
+            } else {
+              promptsToGenerate.push(prompt);
+            }
+          }
+
+          if (promptsToGenerate.length > 0) {
+            if (!projectId) {
+              throw new Error('projectId が指定されていません');
+            }
+            imagesAdded = await window.electronAPI.image.generateBatch(promptsToGenerate, projectId);
+            await ensureNotCancelled();
+          }
+
+          const imageModel = await getImageModelFromSettings();
+          const imageUsage = createGeminiImageUsageRecord(
+            imagesAdded.length,
+            'image_generate_batch',
+            imageModel
+          );
+          if (imageUsage) usageRecords.push(imageUsage);
+
+          const promptById = new Map(promptsToGenerate.map((prompt) => [prompt.id, prompt]));
+          for (const imageAsset of imagesAdded) {
+            const promptId = imageAsset.metadata.promptId;
+            if (!promptId) continue;
+            const generatedPrompt = promptById.get(promptId);
+            if (!generatedPrompt) continue;
+            partImageById.set(generatedPrompt.partId, imageAsset.id);
           }
         }
 
-        const imagesByPrompt = new Map<string, ImageAsset>();
-        for (const image of project.images) {
-          if (image.metadata.promptId && !imagesByPrompt.has(image.metadata.promptId)) {
-            imagesByPrompt.set(image.metadata.promptId, image);
-          }
-        }
+        return {
+          promptsAdded,
+          imagesAdded,
+          partImageById,
+          usageRecords,
+        };
+      };
 
-        const now = new Date().toISOString();
-        const nextPartsById = new Map(project.parts.map((p) => [p.id, p]));
-        const promptsToGenerate: typeof project.prompts = [];
-
-        for (const part of project.parts) {
-          if ((part.panelImages?.length ?? 0) > 0) continue;
-          const prompt = latestPromptByPart.get(part.id);
-          if (!prompt) continue;
-          const existingImage = imagesByPrompt.get(prompt.id);
-          if (existingImage) {
-            nextPartsById.set(part.id, {
-              ...part,
-              panelImages: [{ imageId: existingImage.id }],
-              updatedAt: now,
-            });
-          } else {
-            promptsToGenerate.push(prompt);
-          }
-        }
-
-        let imageAssets: ImageAsset[] = [];
-        if (promptsToGenerate.length > 0) {
-          imageAssets = await window.electronAPI.image.generateBatch(promptsToGenerate, projectId);
-          await ensureNotCancelled();
-        }
-
-        const imageModel = await getImageModelFromSettings();
-        const imageUsage = createGeminiImageUsageRecord(
-          imageAssets.length,
-          'image_generate_batch',
-          imageModel
-        );
-
-        const promptById = new Map(promptsToGenerate.map((p) => [p.id, p]));
-        for (const imageAsset of imageAssets) {
-          const promptId = imageAsset.metadata.promptId;
-          if (!promptId) continue;
-          const p = promptById.get(promptId);
-          if (!p) continue;
-          const part = nextPartsById.get(p.partId);
-          if (!part) continue;
-          if ((part.panelImages?.length ?? 0) > 0) continue;
-          nextPartsById.set(p.partId, {
-            ...part,
-            panelImages: [{ imageId: imageAsset.id }],
-            updatedAt: now,
-          });
-        }
-
-        project.parts = project.parts.map((p) => nextPartsById.get(p.id) ?? p);
-        project.images = [...project.images, ...imageAssets];
-        if (imageUsage) {
-          project.usage = [...(project.usage ?? []), imageUsage];
-        }
-        project.updatedAt = now;
-        await window.electronAPI.project.save(project);
-        setProjectSafe(project);
-        steps = computeStepState(project);
-        await updateAutoStatus(project, {
-          running: true,
-          step: '画像生成完了',
-          steps: { images: true },
-        });
-        await ensureNotCancelled();
-      }
-
-      if (!steps.audio) {
-        await updateAutoStatus(project, { running: true, step: '音声を生成中...' });
+      const runAudioPipeline = async (baseProject: Project): Promise<AudioPipelineResult> => {
         const settings = await window.electronAPI.settings.get();
         await ensureNotCancelled();
         const ttsOptions = buildTtsOptions(settings);
-        const nextAudioAssets = [...project.audio];
-        const nextParts = project.parts.map((p) => ({ ...p }));
-        const audioUsageRecords = [];
-        const audioErrors: string[] = [];
-        const totalTargets = nextParts.filter((p) => !p.audio).length;
-        let completedTargets = 0;
+        const usageRecords: Project['usage'] = [];
+        const partAudioById = new Map<string, Project['parts'][number]['audio']>();
+        const audioAdded: Project['audio'] = [];
+        const errors: string[] = [];
+        const targets = baseProject.parts.filter((part) => !part.audio);
 
-        for (const part of nextParts) {
+        for (const part of targets) {
           await ensureNotCancelled();
-          if (part.audio) continue;
-          await updateAutoStatus(project, {
-            running: true,
-            step: `音声を生成中... (${completedTargets + 1}/${Math.max(1, totalTargets)})`,
-          });
           try {
             const scriptText = part.scriptText?.trim() ?? '';
             if (!scriptText) {
               throw new Error('スクリプトが空です');
             }
+            if (!projectId) {
+              throw new Error('projectId が指定されていません');
+            }
             const result = await window.electronAPI.tts.generate(scriptText, ttsOptions, projectId);
             await ensureNotCancelled();
             const usageRecord = createGeminiTtsUsageRecord('tts_generate', result.usage);
-            if (usageRecord) audioUsageRecords.push(usageRecord);
-            part.audio = result.audio;
-            part.updatedAt = new Date().toISOString();
-            nextAudioAssets.push(result.audio);
+            if (usageRecord) usageRecords.push(usageRecord);
+            partAudioById.set(part.id, result.audio);
+            audioAdded.push(result.audio);
           } catch (error) {
-            audioErrors.push(
-              `パート${part.index + 1}: ${error instanceof Error ? error.message : String(error)}`
-            );
-          } finally {
-            completedTargets += 1;
+            errors.push(`パート${part.index + 1}: ${error instanceof Error ? error.message : String(error)}`);
           }
         }
 
-        if (audioUsageRecords.length > 0) {
-          project.usage = [...(project.usage ?? []), ...audioUsageRecords];
+        return {
+          audioAdded,
+          partAudioById,
+          usageRecords,
+          errors,
+        };
+      };
+
+      if (needsImagePipeline || needsAudioPipeline) {
+        const runningStepLabel =
+          needsImagePipeline && needsAudioPipeline
+            ? '画像と音声を生成中...'
+            : needsImagePipeline
+              ? '画像を生成中...'
+              : '音声を生成中...';
+        await updateAutoStatus(project, { running: true, step: runningStepLabel });
+        await ensureNotCancelled();
+
+        const [imageSettled, audioSettled] = await Promise.allSettled([
+          needsImagePipeline ? runImagePipeline(project) : Promise.resolve(null),
+          needsAudioPipeline ? runAudioPipeline(project) : Promise.resolve(null),
+        ]);
+        await ensureNotCancelled();
+
+        const pipelineErrors: string[] = [];
+        const audioErrors: string[] = [];
+        const now = new Date().toISOString();
+
+        if (imageSettled.status === 'fulfilled' && imageSettled.value) {
+          const imageResult = imageSettled.value;
+          if (imageResult.promptsAdded.length > 0) {
+            project.prompts = [...project.prompts, ...imageResult.promptsAdded];
+          }
+          if (imageResult.imagesAdded.length > 0) {
+            project.images = [...project.images, ...imageResult.imagesAdded];
+          }
+          if (imageResult.usageRecords.length > 0) {
+            project.usage = [...project.usage, ...imageResult.usageRecords];
+          }
+          if (imageResult.partImageById.size > 0) {
+            project.parts = project.parts.map((part) => {
+              const imageId = imageResult.partImageById.get(part.id);
+              if (!imageId) return part;
+              if ((part.panelImages?.length ?? 0) > 0) return part;
+              return {
+                ...part,
+                panelImages: [{ imageId }],
+                updatedAt: now,
+              };
+            });
+          }
+        } else if (imageSettled.status === 'rejected') {
+          pipelineErrors.push(
+            `画像生成に失敗しました: ${
+              imageSettled.reason instanceof Error
+                ? imageSettled.reason.message
+                : String(imageSettled.reason)
+            }`
+          );
         }
-        project.audio = nextAudioAssets;
-        project.parts = nextParts;
-        project.updatedAt = new Date().toISOString();
+
+        if (audioSettled.status === 'fulfilled' && audioSettled.value) {
+          const audioResult = audioSettled.value;
+          audioErrors.push(...audioResult.errors);
+          if (audioResult.audioAdded.length > 0) {
+            project.audio = [...project.audio, ...audioResult.audioAdded];
+          }
+          if (audioResult.usageRecords.length > 0) {
+            project.usage = [...project.usage, ...audioResult.usageRecords];
+          }
+          if (audioResult.partAudioById.size > 0) {
+            project.parts = project.parts.map((part) => {
+              const audio = audioResult.partAudioById.get(part.id);
+              if (!audio) return part;
+              return {
+                ...part,
+                audio,
+                updatedAt: now,
+              };
+            });
+          }
+        } else if (audioSettled.status === 'rejected') {
+          pipelineErrors.push(
+            `音声生成に失敗しました: ${
+              audioSettled.reason instanceof Error
+                ? audioSettled.reason.message
+                : String(audioSettled.reason)
+            }`
+          );
+        }
+
+        project.updatedAt = now;
         await window.electronAPI.project.save(project);
         setProjectSafe(project);
+
         steps = computeStepState(project);
+        const finishedStepLabel =
+          needsImagePipeline && needsAudioPipeline
+            ? '画像・音声生成完了'
+            : needsImagePipeline
+              ? '画像生成完了'
+              : '音声生成完了';
         await updateAutoStatus(project, {
           running: true,
-          step: '音声生成完了',
-          steps: { audio: true },
+          step: finishedStepLabel,
+          steps: {
+            prompts: steps.prompts,
+            images: steps.images,
+            audio: steps.audio,
+          },
         });
         await ensureNotCancelled();
 
@@ -618,6 +691,10 @@ export function ArticleInputPage() {
           const head = audioErrors.slice(0, 3).join(' / ');
           const tail = audioErrors.length > 3 ? `（他${audioErrors.length - 3}件）` : '';
           throw new Error(`音声生成の一部に失敗しました: ${head}${tail}`);
+        }
+
+        if (pipelineErrors.length > 0) {
+          throw new Error(pipelineErrors.join(' / '));
         }
       }
 
