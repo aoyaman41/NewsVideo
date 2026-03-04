@@ -11,7 +11,7 @@ interface PromptEditorProps {
   isRegenerating?: boolean;
 }
 
-const FIXED_STYLE_PRESET = 'news_broadcast';
+const FIXED_STYLE_PRESET = 'infographic';
 
 function formatPromptForReadability(value: string): string {
   return value

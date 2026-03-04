@@ -454,7 +454,7 @@ export function ArticleInputPage() {
           const promptResult = await window.electronAPI.ai.generateImagePrompts(
             missingParts,
             project.article,
-            'news_broadcast'
+            'infographic'
           );
           await ensureNotCancelled();
           const promptUsage = createOpenAIUsageRecord('image_prompt_generate', promptResult.usage);
