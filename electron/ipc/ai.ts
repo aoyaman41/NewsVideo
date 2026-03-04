@@ -1148,33 +1148,52 @@ function buildImagePromptText(
     detailLines.push(`- 補助要素: ${entities.join('、')}`);
   }
 
+  const backgroundFragments: string[] = [];
+  if (topic) {
+    backgroundFragments.push(topic);
+  }
+  if (quantFacts.length > 0) {
+    backgroundFragments.push(`数値 ${describeQuantFactsJa(quantFacts)}`);
+  }
+  if (locations.length > 0) {
+    backgroundFragments.push(`地理 ${locations.join('、')}`);
+  }
+  const backgroundSummary = backgroundFragments.join(' / ') || '対象パートの背景情報';
+  const intentSummary =
+    hasData || hasLocation
+      ? '主題と根拠情報を一目で理解できるよう、主ビジュアルと補助パネルで整理する'
+      : '主題の要点を一目で理解できるよう、要素を簡潔に整理する';
+
   const promptLines = [
-    'インフォグラフィック仕様（16:9）',
-    `主題: ${topic || 'このパートの要点を1枚で説明'}`,
-    `主ビジュアル: ${mainVisual}（人物なし）`,
-    `レイアウト: ${layoutInstruction}`,
-    slotInstructions.length > 0 ? '配置:' : '配置: 右側パネルに補助情報を配置',
+    'スライド仕様（16:9）',
+    `背景: ${backgroundSummary}`,
+    `意図: ${intentSummary}`,
+    '指示:',
+    `- 主題: ${topic || 'このパートの要点を1枚で説明'}`,
+    `- 主ビジュアル: ${mainVisual}（人物なし）`,
+    `- レイアウト: ${layoutInstruction}`,
+    slotInstructions.length > 0 ? '- 配置:' : '- 配置: 右側パネルに補助情報を配置',
     ...slotInstructions.map((line) => `- ${line}`),
-    detailLines.length > 0 ? '要素:' : '',
+    detailLines.length > 0 ? '補助情報:' : '',
     ...detailLines,
-    '表現: フラットなベクター調、写真・実写なし',
-    'テキスト: 見出し・ラベル・数値のみ。長文禁止',
-    '禁止: 人物、顔、ロゴ、透かし、番組名',
+    '表現指示: フラットなベクター調、写真・実写なし',
+    'テキスト指示: 見出し・ラベル・数値のみ。長文禁止',
   ].filter((line) => line.length > 0);
 
   const promptText = promptLines.join('\n');
   return truncateTextByChars(promptText, MAX_IMAGE_PROMPT_CHARS);
 }
 
-function createSinglePartExtractionPrompts(articleContext: string, partDescription: string): {
+function createSinglePartExtractionPrompts(articleContext: string, partContext: string): {
   systemPrompt: string;
   userPrompt: string;
 } {
-  const systemPrompt = `あなたは「記事本文から、画像生成に必要な情報だけを抽出して仕様化する」担当です。
-入力は「記事全文」と「パート見出し」です。出力は指定スキーマの JSON オブジェクトのみです（説明文・Markdown・前置き禁止）。
+  const systemPrompt = `タスク:
+入力された「記事情報」と「対象パート情報」を使い、16:9インフォグラフィック1枚の仕様を作るための抽出JSONを作成してください。
+出力は指定スキーマの JSON オブジェクトのみ（説明文・Markdown・前置き禁止）です。
 
 目的:
-- 指定パートごとに、本文に書かれた事実にもとづき topic / entities / locations / quantFacts / visualSlots を作成し、
+- 対象パートごとに、本文に書かれた事実にもとづき topic / entities / locations / quantFacts / visualSlots を作成し、
   さらに主ビジュアルの要素（heroSubject/heroSetting）と構図メモ（compositionNote）を短く作成する。
 
 厳守ルール（本文由来フィールド）:
@@ -1197,10 +1216,12 @@ function createSinglePartExtractionPrompts(articleContext: string, partDescripti
 5) 人物・顔・キャスター・記者・インタビューを想起させる要素は出力しない（entities にも入れない）。
 6) 入力に混入し得るノイズ（ファイルパス、URL、コード断片、ログ、設定文、署名、UI文言など）は本文事実ではないため無視し、
    topic/entities/locations/source/heroSubject/heroSetting に絶対に含めない。
+7) 禁止要素は後段で共通適用するため、禁止事項の列挙を topic/entities/compositionNote に書かない。
 
 compositionNote（構図メモ）の制約:
 - compositionNote は 1〜2文の短文（120文字以内）。
 - 「どこに何を置くか」が分かる配置指示を含める（例: 左60%に主題、右上に地図、右下に棒グラフ）。
+- 視聴者に何を伝えるか（背景・意図）が伝わる構成にする。
 - 新しい事実・固有名詞・数字は追加しない。内容を指す場合は本文からの語句を引用して示す。
 
 抽出の目安:
@@ -1209,21 +1230,21 @@ compositionNote（構図メモ）の制約:
 - visualSlots は0〜3件。source は本文からの短い抜き出し（40文字以内・長文禁止）。
 
 配列順:
-- prompts 配列は指定パート1件のみ。
+- prompts 配列は対象パート1件のみ。
 
 最終チェック:
 - topic/entities/locations/metric/value/unit/timeframe/source/heroSubject/heroSetting が本文中に存在しない場合は削除または空にする。
 - JSON以外を絶対に出力しない。`;
 
-  const userPrompt = `以下の「記事全文」「パート見出し」を基に、画像生成に必要な抽出情報を JSON で出力してください。
+  const userPrompt = `以下の「記事情報」「対象パート情報」を基に、画像生成に必要な抽出情報を JSON で出力してください。
 本文由来フィールドは必ず本文からの抜き出しにしてください。本文に無い情報は空にしてください。
 入力にノイズ（ファイルパス、URL、コード断片、ログ等）が混ざる場合は無視してください。
 
-## 記事全文
+## 記事情報
 ${articleContext}
 
-## パート見出し
-${partDescription}
+## 対象パート情報
+${partContext}
 
 ## 要件
 - topic/entities/locations/quantFacts(metric,value,unit,timeframe)/visualSlots.source/heroSubject/heroSetting は本文からの抜き出しのみ
@@ -1231,7 +1252,7 @@ ${partDescription}
 - compositionNote は1〜2文（120文字以内）で、配置（どこに何を置くか）を具体的に書く（新しい事実は追加しない）
 - topic/entities/locations/quantFacts(metric,value,unit,timeframe)/heroSubject/heroSetting は各60文字以内
 - visualSlots.source は40文字以内
-- prompts 配列は指定パート1件のみ
+- prompts 配列は対象パート1件のみ
 
 ## 出力形式（JSONのみ）
 {
@@ -1260,12 +1281,12 @@ JSONのみを出力してください。`;
 
 async function extractSinglePartPromptCandidate(params: {
   articleContext: string;
-  partDescription: string;
+  partContext: string;
   selectedModel: TextCompletionModel;
 }): Promise<{ candidate: Record<string, unknown> | undefined; usage: OpenAIUsageSummary | null }> {
   const { systemPrompt, userPrompt } = createSinglePartExtractionPrompts(
     params.articleContext,
-    params.partDescription
+    params.partContext
   );
 
   let resolvedParsed: ImagePromptExtraction | null = null;
@@ -1360,9 +1381,15 @@ ipcMain.handle(
         part,
         index
       ): Promise<{ candidate: Record<string, unknown> | undefined; usage: OpenAIUsageSummary | null }> => {
+        const partContext = [
+          `パート番号: ${index + 1}`,
+          `タイトル: ${part.title || ''}`,
+          `要約: ${part.summary || ''}`,
+          `ナレーション: ${part.scriptText || ''}`,
+        ].join('\n');
         return extractSinglePartPromptCandidate({
           articleContext,
-          partDescription: `パート${index + 1}: ${part.title}`,
+          partContext,
           selectedModel,
         });
       }
@@ -1413,11 +1440,16 @@ ipcMain.handle(
       throw new Error('対象パートが見つかりませんでした。');
     }
 
-    const partDescription = `パート1: ${targetPart.title}`;
+    const partContext = [
+      `パート番号: ${targetPart.index + 1}`,
+      `タイトル: ${targetPart.title || ''}`,
+      `要約: ${targetPart.summary || ''}`,
+      `ナレーション: ${targetPart.scriptText || ''}`,
+    ].join('\n');
     const selectedModel = await readTextCompletionModel('image_prompt');
     const { candidate, usage } = await extractSinglePartPromptCandidate({
       articleContext,
-      partDescription,
+      partContext,
       selectedModel,
     });
     const promptText = buildImagePromptText(candidate, { articleText, styleConfig });
