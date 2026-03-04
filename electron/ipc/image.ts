@@ -1,6 +1,7 @@
 import { ipcMain, app, safeStorage } from 'electron';
-import * as fs from 'fs/promises';
-import * as path from 'path';
+import * as fs from 'node:fs/promises';
+import * as path from 'node:path';
+import { randomUUID } from 'node:crypto';
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import {
   DEFAULT_IMAGE_MODEL,
@@ -11,6 +12,7 @@ import {
   type ImageModel,
   type ImageResolution,
 } from '../../shared/constants/models';
+import { logger } from '../utils/logger';
 
 // シークレットファイルのパス
 const getSecretsPath = () => path.join(app.getPath('userData'), 'secrets.enc');
@@ -334,7 +336,11 @@ ipcMain.handle(
 
     // プロジェクトパスを取得
     const projectPath = await getProjectPath(projectId);
-    console.log('[image:generate] Project path:', projectPath);
+    logger.debug('[image:generate] Start', {
+      projectId,
+      promptId: prompt.id,
+      aspectRatio: prompt.aspectRatio,
+    });
 
     const genAI = new GoogleGenerativeAI(apiKey);
     const { imageModel, imageResolution } = await readImageGenerationSettings();
@@ -346,10 +352,13 @@ ipcMain.handle(
 
     const enhancedPrompt = buildImagePromptText(prompt, imageResolution);
 
-    const imageId = crypto.randomUUID();
+    const imageId = randomUUID();
     const dimensions = getDimensions(prompt.aspectRatio, imageResolution);
-
-    console.log('[image:generate] Starting image generation with prompt:', enhancedPrompt);
+    logger.debug('[image:generate] Request prepared', {
+      promptChars: enhancedPrompt.length,
+      imageModel,
+      imageResolution,
+    });
 
     const response = await withRetry(async () => {
       return model.generateContent({
@@ -360,13 +369,14 @@ ipcMain.handle(
       });
     });
 
-    console.log('[image:generate] Response received');
-
     // レスポンスから画像データを抽出
     const result = response.response;
-    console.log('[image:generate] Candidates:', JSON.stringify(result.candidates?.length));
     const parts = result.candidates?.[0]?.content?.parts;
-    console.log('[image:generate] Parts:', JSON.stringify(parts?.map(p => ({ hasInlineData: !!p.inlineData, text: p.text?.substring(0, 50) }))));
+    logger.debug('[image:generate] Response received', {
+      candidates: result.candidates?.length ?? 0,
+      parts: parts?.length ?? 0,
+      hasImagePart: Boolean(parts?.some((p) => p.inlineData?.mimeType?.startsWith('image/'))),
+    });
 
     if (!parts || parts.length === 0) {
       throw new Error('画像生成に失敗しました: レスポンスが空です');
@@ -423,7 +433,6 @@ ipcMain.handle(
 
     // プロジェクトパスを取得
     const projectPath = await getProjectPath(projectId);
-    console.log('[image:generateBatch] Project path:', projectPath);
 
     const genAI = new GoogleGenerativeAI(apiKey);
     const { imageModel, imageResolution } = await readImageGenerationSettings();
@@ -433,19 +442,23 @@ ipcMain.handle(
       model: imageModel,
     });
 
-    console.log('[image:generateBatch] Starting batch generation for', prompts.length, 'prompts');
+    logger.info('[image:generateBatch] Start', { projectId, count: prompts.length });
 
     const settled = await Promise.all(
       prompts.map(async (prompt, index) => {
         try {
           const enhancedPrompt = buildImagePromptText(prompt, imageResolution);
 
-          console.log(
-            `[image:generateBatch] Generating image ${index + 1}/${prompts.length}:`,
-            enhancedPrompt.substring(0, 100)
-          );
+          logger.debug('[image:generateBatch] Request prepared', {
+            index: index + 1,
+            total: prompts.length,
+            promptId: prompt.id,
+            promptChars: enhancedPrompt.length,
+            imageModel,
+            imageResolution,
+          });
 
-          const imageId = crypto.randomUUID();
+          const imageId = randomUUID();
           const dimensions = getDimensions(prompt.aspectRatio, imageResolution);
 
           const response = await withRetry(async () => {
@@ -459,14 +472,14 @@ ipcMain.handle(
             });
           });
 
-          console.log(`[image:generateBatch] Response received for image ${index + 1}`);
-
           const result = response.response;
           const parts = result.candidates?.[0]?.content?.parts;
-          console.log(
-            `[image:generateBatch] Parts for image ${index + 1}:`,
-            JSON.stringify(parts?.map((p) => ({ hasInlineData: !!p.inlineData })))
-          );
+          logger.debug('[image:generateBatch] Response received', {
+            index: index + 1,
+            candidates: result.candidates?.length ?? 0,
+            parts: parts?.length ?? 0,
+            hasImagePart: Boolean(parts?.some((p) => p.inlineData?.mimeType?.startsWith('image/'))),
+          });
 
           if (!parts || parts.length === 0) {
             throw new Error('レスポンスが空です');
@@ -521,6 +534,13 @@ ipcMain.handle(
       }
     }
 
+    if (errors.length > 0) {
+      logger.warn('[image:generateBatch] Partial failure', {
+        successCount: results.length,
+        errorCount: errors.length,
+      });
+    }
+
     if (errors.length > 0 && results.length === 0) {
       throw new Error(`全ての画像生成に失敗しました: ${errors.map(e => e.error).join(', ')}`);
     }
@@ -537,7 +557,7 @@ ipcMain.handle(
       await fs.unlink(filePath);
       return { success: true };
     } catch (error) {
-      console.error('Failed to delete image:', error);
+      logger.error('Failed to delete image', error);
       return { success: false };
     }
   }
@@ -554,7 +574,7 @@ ipcMain.handle(
     // プロジェクトパスを取得
     const projectPath = await getProjectPath(projectId);
 
-    const imageId = crypto.randomUUID();
+    const imageId = randomUUID();
     const ext = path.extname(sourcePath).toLowerCase();
 
     // プロジェクトの画像ディレクトリを作成

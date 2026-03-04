@@ -7,6 +7,7 @@ import {
   parseSettingsUpdate,
   type AppSettings,
 } from '../../shared/settings/appSettings';
+import { logger } from '../utils/logger';
 
 // 設定ファイルのパス
 const getSettingsPath = () => path.join(app.getPath('userData'), 'settings.json');
@@ -33,7 +34,7 @@ async function readSettings(): Promise<Settings> {
 
 async function readApiKey(service: ApiKeyService): Promise<string | null> {
   if (!safeStorage.isEncryptionAvailable()) {
-    console.warn('Encryption is not available');
+    logger.warn('Encryption is not available');
     return null;
   }
 

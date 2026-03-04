@@ -26,7 +26,7 @@ vi.mock('electron', () => ({
   },
 }));
 
-vi.mock('fs/promises', () => ({
+vi.mock('node:fs/promises', () => ({
   readFile: readFileMock,
   writeFile: writeFileMock,
   access: accessMock,

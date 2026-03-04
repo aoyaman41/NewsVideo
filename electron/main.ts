@@ -11,6 +11,7 @@ const __dirname = path.dirname(__filename);
 
 // 開発環境かどうか
 const isDev = !app.isPackaged;
+const shouldOpenDevTools = isDev && process.env.NEWSVIDEO_OPEN_DEVTOOLS === '1';
 
 // カスタムプロトコル 'local-file' を登録
 protocol.registerSchemesAsPrivileged([
@@ -105,7 +106,9 @@ function createWindow(): void {
   if (isDev) {
     const port = process.env.VITE_DEV_SERVER_URL || 'http://localhost:5173';
     mainWindow.loadURL(port);
-    mainWindow.webContents.openDevTools();
+    if (shouldOpenDevTools) {
+      mainWindow.webContents.openDevTools();
+    }
   } else {
     mainWindow.loadFile(path.join(__dirname, '../dist/index.html'));
   }

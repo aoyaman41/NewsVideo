@@ -1,7 +1,8 @@
 import { ipcMain, app } from 'electron';
-import * as fs from 'fs/promises';
-import * as path from 'path';
-import { randomUUID } from 'crypto';
+import * as fs from 'node:fs/promises';
+import * as path from 'node:path';
+import { randomUUID } from 'node:crypto';
+import { logger } from '../utils/logger';
 
 // プロジェクトの保存先ディレクトリ
 const getProjectsDir = () => path.join(app.getPath('userData'), 'projects');
@@ -165,7 +166,7 @@ ipcMain.handle('project:list', async (): Promise<ProjectListItem[]> => {
 
     return projects;
   } catch (error) {
-    console.error('Failed to list projects:', error);
+    logger.error('Failed to list projects', error);
     return [];
   }
 });
@@ -173,9 +174,9 @@ ipcMain.handle('project:list', async (): Promise<ProjectListItem[]> => {
 // プロジェクト作成
 ipcMain.handle('project:create', async (_, name: string): Promise<ProjectMeta> => {
   try {
-    console.log('[project:create] Creating project:', name);
+    logger.debug('[project:create] Creating project', { nameLength: name.length });
     const projectsDir = getProjectsDir();
-    console.log('[project:create] Projects dir:', projectsDir);
+    logger.debug('[project:create] Projects directory resolved');
     await fs.mkdir(projectsDir, { recursive: true });
 
     const id = randomUUID();
@@ -218,7 +219,7 @@ ipcMain.handle('project:create', async (_, name: string): Promise<ProjectMeta> =
     await fs.writeFile(path.join(projectPath, 'audio.json'), JSON.stringify([], null, 2));
     await fs.writeFile(path.join(projectPath, 'usage.json'), JSON.stringify([], null, 2));
 
-    console.log('[project:create] Project created successfully:', id);
+    logger.info('[project:create] Project created', { id });
     return {
       id,
       name,
@@ -227,7 +228,7 @@ ipcMain.handle('project:create', async (_, name: string): Promise<ProjectMeta> =
       path: projectPath,
     };
   } catch (error) {
-    console.error('[project:create] Error:', error);
+    logger.error('[project:create] Error', error);
     throw error;
   }
 });
