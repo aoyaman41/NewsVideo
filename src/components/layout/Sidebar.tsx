@@ -69,8 +69,6 @@ export function Sidebar() {
 
   useEffect(() => {
     if (!projectId) {
-      setProjectSummary(null);
-      setProjectName('');
       return;
     }
 
@@ -152,7 +150,7 @@ export function Sidebar() {
           ))}
         </ul>
 
-        {projectSummary && (
+        {projectId && projectSummary && (
           <div className="mt-5 rounded-[12px] border border-white/15 bg-white/10 p-3 text-blue-50">
             <div className="mb-2 flex items-center justify-between gap-2">
               <p className="truncate text-sm font-semibold">{projectName}</p>

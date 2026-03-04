@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import type { ImagePrompt } from '../../schemas';
 import { Badge, Button, StatusChip } from '../ui';
 
@@ -32,11 +32,6 @@ export function PromptEditor({
   const [editedPrompt, setEditedPrompt] = useState(prompt.prompt);
   const [editedNegativePrompt, setEditedNegativePrompt] = useState(prompt.negativePrompt || '');
   const [isAdvancedMode, setIsAdvancedMode] = useState(false);
-
-  useEffect(() => {
-    setEditedPrompt(prompt.prompt);
-    setEditedNegativePrompt(prompt.negativePrompt || '');
-  }, [prompt.id, prompt.prompt, prompt.negativePrompt, prompt.stylePreset]);
 
   const hasChanges = useMemo(() => {
     const baseNegative = prompt.negativePrompt || '';

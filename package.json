@@ -12,8 +12,8 @@
     "electron:dev": "vite",
     "prepare:ffmpeg:mac": "node scripts/prepare-ffmpeg.mjs",
     "prebuild": "node scripts/prepare-ffmpeg.mjs",
-    "lint": "eslint . --ext .ts,.tsx",
-    "lint:fix": "eslint . --ext .ts,.tsx --fix",
+    "lint": "eslint \"src/**/*.{ts,tsx}\" \"electron/**/*.ts\" \"vite.config.ts\"",
+    "lint:fix": "eslint \"src/**/*.{ts,tsx}\" \"electron/**/*.ts\" \"vite.config.ts\" --fix",
     "format": "prettier --write \"src/**/*.{ts,tsx,css}\" \"electron/**/*.ts\"",
     "typecheck": "tsc --noEmit"
   },

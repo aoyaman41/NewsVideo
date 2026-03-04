@@ -246,7 +246,7 @@ export function VideoManagePage() {
     };
 
     load();
-  }, [projectId]);
+  }, [projectId, resolveExistingVideoPath]);
 
   useEffect(() => {
     if (!projectId) return;

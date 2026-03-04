@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
-import { useForm } from 'react-hook-form';
+import { useForm, useWatch } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { partEditSchema, type PartEdit, type Part } from '../../schemas';
 import { Badge, Button, Card, StatusChip } from '../ui';
@@ -42,7 +42,7 @@ export function ScriptEditor({
     handleSubmit,
     formState: { errors, isDirty },
     reset,
-    watch,
+    control,
     getValues,
   } = useForm<PartEdit>({
     resolver: zodResolver(partEditSchema),
@@ -69,15 +69,16 @@ export function ScriptEditor({
       });
     }
     prevPartIdRef.current = part.id;
-    setShowCommentInput(false);
-    setComment('');
   }, [part.id, part.title, part.summary, part.scriptText, reset, getValues]);
 
   useEffect(() => {
     if (!lastCommentAppliedAt) return;
-    setShowAppliedPulse(true);
-    const timer = window.setTimeout(() => setShowAppliedPulse(false), 1600);
-    return () => window.clearTimeout(timer);
+    const showTimer = window.setTimeout(() => setShowAppliedPulse(true), 0);
+    const hideTimer = window.setTimeout(() => setShowAppliedPulse(false), 1600);
+    return () => {
+      window.clearTimeout(showTimer);
+      window.clearTimeout(hideTimer);
+    };
   }, [lastCommentAppliedAt]);
 
   const onSubmit = (data: PartEdit) => {
@@ -95,9 +96,10 @@ export function ScriptEditor({
   const estimateCharCount = (text?: string) => text?.length ?? 0;
   const estimateDuration = (text?: string) => Math.round((text?.length ?? 0) / 4);
 
-  const watchedTitle = watch('title') ?? '';
-  const watchedSummary = watch('summary') ?? '';
-  const watchedScript = watch('scriptText') ?? '';
+  const [watchedTitle = '', watchedSummary = '', watchedScript = ''] = useWatch({
+    control,
+    name: ['title', 'summary', 'scriptText'],
+  });
 
   useEffect(() => {
     if (!isDirty || isProcessing) return;

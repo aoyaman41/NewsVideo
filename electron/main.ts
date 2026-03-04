@@ -29,6 +29,10 @@ protocol.registerSchemesAsPrivileged([
 
 let mainWindow: BrowserWindow | null = null;
 
+function toWebReadableStream(nodeStream: fs.ReadStream): ReadableStream<Uint8Array> {
+  return Readable.toWeb(nodeStream) as ReadableStream<Uint8Array>;
+}
+
 function parseLocalFileRequestUrl(requestUrl: string): string {
   // Electron/Chromium may canonicalize `local-file:///Users/...` into either:
   // - host=""  pathname="/Users/..."
@@ -191,7 +195,7 @@ app.whenReady().then(() => {
         }
 
         const nodeStream = fs.createReadStream(filePath, { start, end });
-        const stream = Readable.toWeb(nodeStream) as unknown as any;
+        const stream = toWebReadableStream(nodeStream);
         return new Response(stream, { status: 206, headers });
       }
 
@@ -201,7 +205,7 @@ app.whenReady().then(() => {
       }
 
       const nodeStream = fs.createReadStream(filePath);
-      const stream = Readable.toWeb(nodeStream) as unknown as any;
+      const stream = toWebReadableStream(nodeStream);
       return new Response(stream, { status: 200, headers: baseHeaders });
     } catch {
       return new Response('Not found', { status: 404 });

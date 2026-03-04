@@ -858,7 +858,9 @@ function normalizeElementType(value: unknown): AllowedElementType | null {
     flowarrows: 'flowArrows',
     timeline: 'timeline',
   };
-  return map[normalized] || null;
+  const mapped = map[normalized];
+  if (!mapped) return null;
+  return ALLOWED_ELEMENT_TYPES.includes(mapped) ? mapped : null;
 }
 
 function normalizeSlotName(value: unknown): VisualSlot['slot'] | null {

@@ -270,6 +270,7 @@ export function ScriptEditPage() {
         <div className="min-w-0 flex-1 overflow-auto rounded-[12px] border border-[var(--nv-color-border)] bg-[var(--nv-color-canvas)]">
           {selectedPart ? (
             <ScriptEditor
+              key={selectedPart.id}
               part={selectedPart}
               onSave={handleSavePart}
               onRegenerateWithComment={handleRegenerateWithComment}

@@ -353,16 +353,14 @@ export function ImageManagePage() {
   const selectedPartPrompt = selectedPartId ? latestPromptByPartId.get(selectedPartId) : undefined;
 
   // 選択中のパートの画像
-  const selectedPartImages =
-    project?.images.filter(
+  const candidateImagesForPart = useMemo(() => {
+    if (!project) return [];
+    return project.images.filter(
       (img) =>
         img.metadata.promptId &&
-        project.prompts.find((p) => p.id === img.metadata.promptId && p.partId === selectedPartId)
-    ) || [];
-
-  const candidateImagesForPart = useMemo(() => {
-    return selectedPartImages;
-  }, [selectedPartImages]);
+        project.prompts.some((p) => p.id === img.metadata.promptId && p.partId === selectedPartId)
+    );
+  }, [project, selectedPartId]);
   const summary = useMemo(() => (project ? summarizeProjectProgress(project) : null), [project]);
 
   // パートへの割り当て（panelImages）更新

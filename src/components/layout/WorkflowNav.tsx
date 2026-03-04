@@ -106,7 +106,7 @@ export function WorkflowNav({
     [displayProject, summary]
   );
 
-  const usageRecords = displayProject?.usage ?? [];
+  const usageRecords = useMemo(() => displayProject?.usage ?? [], [displayProject?.usage]);
   const totalCost = useMemo(
     () => sumUsageCostUsd(usageRecords, costRates),
     [usageRecords, costRates]
