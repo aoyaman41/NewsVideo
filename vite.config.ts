@@ -17,12 +17,17 @@ function getRendererManualChunk(id: string): string | undefined {
   if (!id.includes('node_modules')) return undefined;
 
   if (
-    id.includes('/mammoth/') ||
     id.includes('/jszip/') ||
     id.includes('/underscore/') ||
     id.includes('/lop/') ||
-    id.includes('/xmlbuilder/')
+    id.includes('/xmlbuilder/') ||
+    id.includes('/dingbat-to-unicode/') ||
+    id.includes('/@xmldom/xmldom/')
   ) {
+    return 'vendor-docx-utils';
+  }
+
+  if (id.includes('/mammoth/')) {
     return 'vendor-mammoth';
   }
 
@@ -30,7 +35,12 @@ function getRendererManualChunk(id: string): string | undefined {
     return 'vendor-router';
   }
 
-  if (id.includes('/react/') || id.includes('/react-dom/')) {
+  if (
+    id.includes('/react/') ||
+    id.includes('/react-dom/') ||
+    id.includes('/scheduler/') ||
+    id.includes('/react-is/')
+  ) {
     return 'vendor-react';
   }
 
@@ -38,7 +48,7 @@ function getRendererManualChunk(id: string): string | undefined {
     return 'vendor-dnd';
   }
 
-  return 'vendor-misc';
+  return undefined;
 }
 
 function compilePreload(): void {
