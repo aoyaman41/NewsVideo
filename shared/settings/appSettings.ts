@@ -45,7 +45,6 @@ export type AppSettings = {
   videoPartLeadInSec: number;
   openingVideoPath: string;
   endingVideoPath: string;
-  autoSaveInterval: number;
   defaultProjectDir: string;
   cost?: unknown;
 };
@@ -69,7 +68,6 @@ export const DEFAULT_SETTINGS: AppSettings = {
   videoPartLeadInSec: 0.3,
   openingVideoPath: '',
   endingVideoPath: '',
-  autoSaveInterval: 60,
   defaultProjectDir: '',
 };
 
@@ -93,7 +91,6 @@ export const settingsUpdateSchema = z
     videoPartLeadInSec: z.number().finite().optional(),
     openingVideoPath: z.string().optional(),
     endingVideoPath: z.string().optional(),
-    autoSaveInterval: z.number().finite().optional(),
     defaultProjectDir: z.string().optional(),
     cost: z.unknown().optional(),
   })

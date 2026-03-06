@@ -282,7 +282,6 @@ interface Settings {
   videoPartLeadInSec: number;
   openingVideoPath: string;
   endingVideoPath: string;
-  autoSaveInterval: number;
   defaultProjectDir: string;
   cost?: CostRates;
 }

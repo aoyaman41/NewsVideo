@@ -52,7 +52,6 @@ interface Settings {
   videoPartLeadInSec: number;
   openingVideoPath: string;
   endingVideoPath: string;
-  autoSaveInterval: number;
   defaultProjectDir: string;
 }
 
@@ -75,7 +74,6 @@ const defaultSettings: Settings = {
   videoPartLeadInSec: 0.3,
   openingVideoPath: '',
   endingVideoPath: '',
-  autoSaveInterval: 60,
   defaultProjectDir: '',
 };
 
@@ -136,9 +134,7 @@ export function SettingsPage() {
   const [settings, setSettings] = useState<Settings>(defaultSettings);
   const [hasLoadedSettings, setHasLoadedSettings] = useState(false);
   const [settingsSaveError, setSettingsSaveError] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<'api' | 'video' | 'audio' | 'image' | 'other'>(
-    'api'
-  );
+  const [activeTab, setActiveTab] = useState<'api' | 'video' | 'audio' | 'image'>('api');
 
   useEffect(() => {
     loadApiKeys();
@@ -355,7 +351,6 @@ export function SettingsPage() {
               { key: 'video', label: '動画' },
               { key: 'audio', label: '音声' },
               { key: 'image', label: '画像' },
-              { key: 'other', label: 'その他' },
             ].map((tab) => (
               <button
                 key={tab.key}
@@ -865,27 +860,6 @@ export function SettingsPage() {
             </>
           )}
 
-          {activeTab === 'other' && (
-            <Card title="その他" subtitle="運用系の設定">
-              <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-                <div>
-                  <label className="mb-1 block text-xs font-semibold text-slate-600">
-                    自動保存間隔（秒）
-                  </label>
-                  <input
-                    type="number"
-                    min="10"
-                    max="300"
-                    value={settings.autoSaveInterval}
-                    onChange={(e) =>
-                      setSettings((prev) => ({ ...prev, autoSaveInterval: Number(e.target.value) }))
-                    }
-                    className="nv-input"
-                  />
-                </div>
-              </div>
-            </Card>
-          )}
           {settingsSaveError && (
             <div className="rounded-[12px] border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
               設定の自動保存に失敗しました。変更内容は画面上に残っています。詳細: {settingsSaveError}
