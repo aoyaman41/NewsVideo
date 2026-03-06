@@ -33,6 +33,11 @@ type VideoProgress = {
   error?: string;
 };
 
+type ResolvedVideoAsset = {
+  path: string;
+  mtimeMs: number | null;
+};
+
 export function VideoManagePage() {
   const { projectId } = useParams<{ projectId: string }>();
   const navigate = useNavigate();
@@ -52,6 +57,7 @@ export function VideoManagePage() {
   const [outputPath, setOutputPath] = useState('');
 
   const [videoPath, setVideoPath] = useState<string | null>(null);
+  const [videoSrcVersion, setVideoSrcVersion] = useState(0);
   const [mediaError, setMediaError] = useState<string | null>(null);
   const [mediaDebug, setMediaDebug] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -64,17 +70,47 @@ export function VideoManagePage() {
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const lastVideoPathRef = useRef<string | null>(null);
+  const lastVideoIdentityRef = useRef<string | null>(null);
 
-  const resolveExistingVideoPath = useCallback(async (project: Project) => {
-    const lastPath = project.autoGenerationStatus?.lastVideoPath;
-    if (lastPath) {
-      try {
-        const exists = await window.electronAPI.file.exists(lastPath);
-        if (exists) return lastPath;
-      } catch {
-        return lastPath;
-      }
+  const syncVideoAsset = useCallback((path: string, identity: string) => {
+    const pathChanged = lastVideoPathRef.current !== path;
+    const identityChanged = lastVideoIdentityRef.current !== identity;
+
+    if (pathChanged) {
+      setVideoPath(path);
     }
+
+    if (pathChanged || identityChanged) {
+      setVideoSrcVersion((prev) => prev + 1);
+    }
+
+    lastVideoPathRef.current = path;
+    lastVideoIdentityRef.current = identity;
+  }, []);
+
+  const applyResolvedVideoAsset = useCallback(
+    (asset: ResolvedVideoAsset | null) => {
+      if (!asset) return;
+      syncVideoAsset(asset.path, `${asset.path}::${asset.mtimeMs ?? 'unknown'}`);
+    },
+    [syncVideoAsset]
+  );
+
+  const forceReloadVideoAsset = useCallback(
+    (path: string) => {
+      syncVideoAsset(path, `${path}::${Date.now()}`);
+    },
+    [syncVideoAsset]
+  );
+
+  const clearVideoAsset = useCallback(() => {
+    setVideoPath(null);
+    lastVideoPathRef.current = null;
+    lastVideoIdentityRef.current = null;
+  }, []);
+
+  const resolveExistingVideoPath = useCallback(async (project: Project): Promise<ResolvedVideoAsset | null> => {
+    const lastPath = project.autoGenerationStatus?.lastVideoPath;
 
     try {
       const outputDir = `${project.path}/output`;
@@ -82,13 +118,28 @@ export function VideoManagePage() {
       const candidates = entries
         .filter((entry) => entry.isFile && entry.name.toLowerCase().endsWith('.mp4'))
         .sort((a, b) => b.mtimeMs - a.mtimeMs);
-      const latest = candidates[0]?.path ?? null;
-      if (latest) return latest;
-      if (lastPath) return lastPath;
-      return null;
+      const lastMatch = lastPath ? candidates.find((entry) => entry.path === lastPath) ?? null : null;
+      if (lastMatch) {
+        return { path: lastMatch.path, mtimeMs: lastMatch.mtimeMs };
+      }
+      const latest = candidates[0] ?? null;
+      if (latest) {
+        return { path: latest.path, mtimeMs: latest.mtimeMs };
+      }
     } catch {
-      return lastPath ?? null;
+      // fallback below
     }
+
+    if (lastPath) {
+      try {
+        const exists = await window.electronAPI.file.exists(lastPath);
+        if (exists) return { path: lastPath, mtimeMs: null };
+      } catch {
+        return { path: lastPath, mtimeMs: null };
+      }
+    }
+
+    return null;
   }, []);
 
   const missingAudioCount = useMemo(() => {
@@ -106,7 +157,10 @@ export function VideoManagePage() {
     return project?.parts.find((p) => p.id === selectedPartId) ?? null;
   }, [project, selectedPartId]);
 
-  const videoSrc = useMemo(() => (videoPath ? toLocalFileUrl(videoPath) : null), [videoPath]);
+  const videoSrc = useMemo(() => {
+    if (!videoPath) return null;
+    return `${toLocalFileUrl(videoPath)}?v=${videoSrcVersion}`;
+  }, [videoPath, videoSrcVersion]);
 
   useEffect(() => {
     lastVideoPathRef.current = videoPath;
@@ -114,12 +168,16 @@ export function VideoManagePage() {
 
   // src が同一のまま更新されるケースに備えて明示的に load する
   useEffect(() => {
-    if (!videoPath) return;
+    if (!videoSrc) return;
     setMediaError(null);
     setMediaDebug(null);
     const el = videoRef.current;
+    el?.pause();
     el?.load();
-  }, [videoPath]);
+    if (el) {
+      el.currentTime = 0;
+    }
+  }, [videoSrc]);
 
   // 失敗時の切り分け用（レスポンスヘッダ/Range対応確認）
   useEffect(() => {
@@ -213,8 +271,8 @@ export function VideoManagePage() {
 
         const existingVideoPath = await resolveExistingVideoPath(loadedProject);
         if (existingVideoPath) {
-          setVideoPath(existingVideoPath);
-          if (existingVideoPath !== loadedProject.autoGenerationStatus?.lastVideoPath) {
+          applyResolvedVideoAsset(existingVideoPath);
+          if (existingVideoPath.path !== loadedProject.autoGenerationStatus?.lastVideoPath) {
             const now = new Date().toISOString();
             const current = loadedProject.autoGenerationStatus;
             const nextStatus: AutoGenerationStatus = {
@@ -226,7 +284,7 @@ export function VideoManagePage() {
               cancelRequested: current?.cancelRequested,
               error: current?.error,
               steps: { ...(current?.steps ?? {}), video: true },
-              lastVideoPath: existingVideoPath,
+              lastVideoPath: existingVideoPath.path,
             };
             const updatedProject: Project = {
               ...loadedProject,
@@ -236,6 +294,8 @@ export function VideoManagePage() {
             await window.electronAPI.project.save(updatedProject);
             setProject(updatedProject);
           }
+        } else {
+          clearVideoAsset();
         }
       } catch (err) {
         console.error('Failed to load project/settings:', err);
@@ -246,7 +306,7 @@ export function VideoManagePage() {
     };
 
     load();
-  }, [projectId, resolveExistingVideoPath]);
+  }, [applyResolvedVideoAsset, clearVideoAsset, projectId, resolveExistingVideoPath]);
 
   useEffect(() => {
     if (!projectId) return;
@@ -258,9 +318,7 @@ export function VideoManagePage() {
         if (cancelled) return;
         setProject(latest);
         const candidate = await resolveExistingVideoPath(latest);
-        if (candidate && candidate !== lastVideoPathRef.current) {
-          setVideoPath(candidate);
-        }
+        applyResolvedVideoAsset(candidate);
       } catch {
         // ignore
       }
@@ -270,7 +328,7 @@ export function VideoManagePage() {
       cancelled = true;
       clearInterval(interval);
     };
-  }, [projectId, resolveExistingVideoPath, isRendering, isPreviewing]);
+  }, [applyResolvedVideoAsset, projectId, resolveExistingVideoPath, isRendering, isPreviewing]);
 
   const handleSelectOutputDir = useCallback(async () => {
     if (!project) return;
@@ -291,7 +349,7 @@ export function VideoManagePage() {
       setIsPreviewing(true);
       setError(null);
       const res = await window.electronAPI.video.preview(selectedPartId);
-      setVideoPath(res.previewPath);
+      forceReloadVideoAsset(res.previewPath);
       // 先頭から再生できるように
       setTimeout(() => {
         if (videoRef.current) videoRef.current.currentTime = 0;
@@ -318,7 +376,7 @@ export function VideoManagePage() {
       setProgress({ stage: 'preparing', percent: 0, message: '準備中...' });
 
       const res = await window.electronAPI.video.render(project, renderOptions, outputPath.trim());
-      setVideoPath(res.outputPath);
+      forceReloadVideoAsset(res.outputPath);
       try {
         const now = new Date().toISOString();
         const current = project.autoGenerationStatus;
@@ -352,7 +410,7 @@ export function VideoManagePage() {
     } finally {
       setIsRendering(false);
     }
-  }, [outputPath, project, renderOptions]);
+  }, [forceReloadVideoAsset, outputPath, project, renderOptions]);
 
   const handleCancel = useCallback(async () => {
     try {
@@ -499,6 +557,7 @@ export function VideoManagePage() {
             <div className="aspect-video w-full overflow-hidden rounded-[12px] bg-black">
               {videoSrc ? (
                 <video
+                  key={videoSrc}
                   ref={videoRef}
                   src={videoSrc}
                   controls

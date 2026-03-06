@@ -141,6 +141,9 @@ app.whenReady().then(() => {
       const baseHeaders = new Headers();
       baseHeaders.set('Content-Type', contentType);
       baseHeaders.set('Accept-Ranges', 'bytes');
+      baseHeaders.set('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0');
+      baseHeaders.set('Pragma', 'no-cache');
+      baseHeaders.set('Expires', '0');
       // fetch()/Range を使う場合に備えて CORS を緩める（アプリ内のローカル用途）
       baseHeaders.set('Access-Control-Allow-Origin', '*');
       baseHeaders.set('Access-Control-Allow-Headers', 'Range, Content-Type, Origin, Accept');
