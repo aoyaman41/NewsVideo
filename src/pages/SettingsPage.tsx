@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useAutoSave } from '../hooks';
 import { Header } from '../components/layout';
-import { Badge, Button, Card, StatusChip } from '../components/ui';
+import { Badge, Button, Card, StatusChip, useToast } from '../components/ui';
 import {
   DEFAULT_IMAGE_MODEL,
   DEFAULT_IMAGE_PROMPT_TEXT_MODEL,
@@ -10,8 +10,10 @@ import {
   DEFAULT_SCRIPT_TEXT_MODEL,
   getDefaultGeminiThinkingLevel,
   getDefaultOpenAIReasoningEffort,
+  getImageModelLabel,
   getSupportedGeminiThinkingLevels,
   getSupportedOpenAIReasoningEfforts,
+  getTextCompletionModelLabel,
   IMAGE_MODELS,
   IMAGE_RESOLUTION_LABELS,
   IMAGE_RESOLUTIONS,
@@ -31,6 +33,13 @@ interface ConnectionStatus {
   success: boolean;
   message: string;
   latencyMs?: number;
+}
+
+interface VoiceInfo {
+  name: string;
+  languageCodes: string[];
+  gender: 'MALE' | 'FEMALE' | 'NEUTRAL';
+  sampleRateHertz: number;
 }
 
 interface Settings {
@@ -101,6 +110,7 @@ function formatGeminiThinkingLabel(value: GeminiThinkingLevel): string {
 export function SettingsPage() {
   const navigate = useNavigate();
   const location = useLocation();
+  const toast = useToast();
 
   const returnTo = useMemo(() => {
     const state = location.state as { returnTo?: string } | null;
@@ -128,6 +138,8 @@ export function SettingsPage() {
     google_ai: false,
   });
   const [settings, setSettings] = useState<Settings>(defaultSettings);
+  const [ttsVoices, setTtsVoices] = useState<VoiceInfo[]>([]);
+  const [isLoadingTtsVoices, setIsLoadingTtsVoices] = useState(false);
   const [hasLoadedSettings, setHasLoadedSettings] = useState(false);
   const [settingsSaveError, setSettingsSaveError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<'api' | 'video' | 'audio' | 'image'>('api');
@@ -136,6 +148,37 @@ export function SettingsPage() {
     loadApiKeys();
     loadSettings();
   }, []);
+
+  useEffect(() => {
+    if (!hasLoadedSettings) return;
+
+    let cancelled = false;
+    const loadVoices = async () => {
+      setIsLoadingTtsVoices(true);
+      try {
+        const list = await window.electronAPI.tts.getVoices(settings.ttsEngine);
+        if (cancelled) return;
+        setTtsVoices(list);
+        setSettings((prev) => {
+          if (list.length === 0) return prev;
+          if (list.some((voice) => voice.name === prev.ttsVoice)) return prev;
+          return { ...prev, ttsVoice: list[0].name };
+        });
+      } catch (error) {
+        if (cancelled) return;
+        console.warn('Failed to load TTS voices:', error);
+        setTtsVoices([]);
+      } finally {
+        if (!cancelled) setIsLoadingTtsVoices(false);
+      }
+    };
+
+    void loadVoices();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [hasLoadedSettings, settings.ttsEngine]);
 
   const loadSettings = async () => {
     try {
@@ -169,15 +212,15 @@ export function SettingsPage() {
       return { label: '読込中', tone: 'neutral' as const };
     }
     if (settingsSaveError) {
-      return { label: '自動保存エラー', tone: 'danger' as const };
+      return { label: '保存エラー', tone: 'danger' as const };
     }
     if (settingsAutoSave.isSaving) {
-      return { label: '自動保存中', tone: 'info' as const };
+      return { label: '保存中', tone: 'info' as const };
     }
     if (settingsAutoSave.isDirty) {
       return { label: '変更あり', tone: 'warning' as const };
     }
-    return { label: '自動保存済み', tone: 'success' as const };
+    return { label: '保存済み', tone: 'success' as const };
   }, [hasLoadedSettings, settingsAutoSave.isDirty, settingsAutoSave.isSaving, settingsSaveError]);
 
   const loadApiKeys = async () => {
@@ -204,8 +247,14 @@ export function SettingsPage() {
     try {
       await window.electronAPI.settings.setApiKey(service, key);
       setApiKeys((prev) => ({ ...prev, [service]: '••••••••••••••••' }));
+      setConnectionStatus((prev) => ({ ...prev, [service]: null }));
+      toast.success(`${serviceLabels[service].name} のAPIキーを保存しました`);
     } catch (error) {
       console.error('Failed to save API key:', error);
+      toast.error(
+        error instanceof Error ? error.message : '不明なエラー',
+        `${serviceLabels[service].name} の保存に失敗しました`
+      );
     } finally {
       setIsSaving((prev) => ({ ...prev, [service]: false }));
     }
@@ -221,14 +270,21 @@ export function SettingsPage() {
       const keyToTest = currentKey && currentKey !== '••••••••••••••••' ? currentKey : undefined;
       const result = await window.electronAPI.settings.testConnection(service, keyToTest);
       setConnectionStatus((prev) => ({ ...prev, [service]: result }));
+      if (result.success) {
+        toast.success(result.message, `${serviceLabels[service].name} に接続できました`);
+      } else {
+        toast.error(result.message, `${serviceLabels[service].name} に接続できませんでした`);
+      }
     } catch (error) {
+      const nextStatus = {
+        success: false,
+        message: `エラー: ${error instanceof Error ? error.message : '不明'}`,
+      };
       setConnectionStatus((prev) => ({
         ...prev,
-        [service]: {
-          success: false,
-          message: `エラー: ${error instanceof Error ? error.message : '不明'}`,
-        },
+        [service]: nextStatus,
       }));
+      toast.error(nextStatus.message, `${serviceLabels[service].name} に接続できませんでした`);
     } finally {
       setIsTesting((prev) => ({ ...prev, [service]: false }));
     }
@@ -614,10 +670,13 @@ export function SettingsPage() {
                     >
                       {TEXT_COMPLETION_MODELS.map((model) => (
                         <option key={model} value={model}>
-                          {model}
+                          {getTextCompletionModelLabel(model)}
                         </option>
                       ))}
                     </select>
+                    <p className="mt-1 text-xs text-slate-500">
+                      モデルID: {settings.scriptTextModel}
+                    </p>
                   </div>
                   {isOpenAITextCompletionModel(settings.scriptTextModel) ? (
                     <div>
@@ -637,12 +696,12 @@ export function SettingsPage() {
                       >
                         {scriptOpenAIReasoningOptions.map((effort) => (
                           <option key={effort} value={effort}>
-                            {formatOpenAIReasoningLabel(effort)} ({effort})
+                            {formatOpenAIReasoningLabel(effort)}
                           </option>
                         ))}
                       </select>
                       <p className="mt-1 text-xs text-slate-500">
-                        選択中の {settings.scriptTextModel} で使える値だけを表示しています。
+                        選択中の {getTextCompletionModelLabel(settings.scriptTextModel)} で使える値だけを表示しています。
                       </p>
                     </div>
                   ) : (
@@ -662,12 +721,12 @@ export function SettingsPage() {
                       >
                         {scriptGeminiThinkingOptions.map((level) => (
                           <option key={level} value={level}>
-                            {formatGeminiThinkingLabel(level)} ({level})
+                            {formatGeminiThinkingLabel(level)}
                           </option>
                         ))}
                       </select>
                       <p className="mt-1 text-xs text-slate-500">
-                        選択中の {settings.scriptTextModel} で使える値だけを表示しています。
+                        選択中の {getTextCompletionModelLabel(settings.scriptTextModel)} で使える値だけを表示しています。
                       </p>
                     </div>
                   )}
@@ -675,47 +734,61 @@ export function SettingsPage() {
               </Card>
 
               <Card title="デフォルト音声設定" subtitle="Gemini TTS の初期設定">
-                <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
                   <div>
                     <label className="mb-1 block text-xs font-semibold text-slate-600">
-                      TTSエンジン
+                      ボイス
                     </label>
-                    <select
-                      value={settings.ttsEngine}
-                      onChange={(e) =>
-                        setSettings((prev) => ({
-                          ...prev,
-                          ttsEngine: e.target.value as Settings['ttsEngine'],
-                        }))
-                      }
-                      className="nv-input"
-                      disabled
-                    >
-                      <option value="gemini_tts">gemini-2.5-pro-preview-tts</option>
-                    </select>
-                  </div>
-                  <div>
-                    <label className="mb-1 block text-xs font-semibold text-slate-600">話速</label>
-                    <div className="flex items-center gap-2 rounded-[8px] border border-[var(--nv-color-border)] px-3 py-2">
-                      <input
-                        type="range"
-                        min="0.5"
-                        max="2.0"
-                        step="0.1"
-                        value={settings.ttsSpeakingRate}
+                    {ttsVoices.length > 0 ? (
+                      <select
+                        value={settings.ttsVoice}
                         onChange={(e) =>
-                          setSettings((prev) => ({
-                            ...prev,
-                            ttsSpeakingRate: Number(e.target.value),
-                          }))
+                          setSettings((prev) => ({ ...prev, ttsVoice: e.target.value }))
                         }
-                        className="flex-1"
-                        disabled
+                        className="nv-input"
+                        disabled={isLoadingTtsVoices}
+                      >
+                        {ttsVoices.slice(0, 200).map((voice) => (
+                          <option key={voice.name} value={voice.name}>
+                            {voice.name}
+                          </option>
+                        ))}
+                      </select>
+                    ) : (
+                      <input
+                        type="text"
+                        value={settings.ttsVoice}
+                        onChange={(e) =>
+                          setSettings((prev) => ({ ...prev, ttsVoice: e.target.value }))
+                        }
+                        className="nv-input"
+                        placeholder={isLoadingTtsVoices ? '読み込み中...' : 'Charon'}
                       />
-                      <span className="w-12 text-right text-xs text-slate-600">
-                        {settings.ttsSpeakingRate.toFixed(1)}x
+                    )}
+                    <p className="mt-1 text-xs text-slate-500">
+                      音声生成ページではここで設定した既定ボイスを使用します。
+                    </p>
+                  </div>
+                  <div className="rounded-[10px] border border-[var(--nv-color-border)] bg-slate-50 p-3">
+                    <p className="text-xs font-semibold text-slate-600">音声エンジン</p>
+                    <div className="mt-2 flex flex-wrap items-center gap-2">
+                      <Badge tone="info">Gemini TTS</Badge>
+                      <span className="text-sm font-semibold text-slate-900">
+                        gemini-2.5-pro-preview-tts
                       </span>
                     </div>
+                    <p className="mt-2 text-xs text-slate-500">
+                      現在のアプリは Gemini TTS を既定の音声エンジンとして使用します。
+                    </p>
+                  </div>
+                  <div className="rounded-[10px] border border-[var(--nv-color-border)] bg-slate-50 p-3">
+                    <p className="text-xs font-semibold text-slate-600">話速</p>
+                    <div className="mt-2 text-sm font-semibold text-slate-900">
+                      {settings.ttsSpeakingRate.toFixed(1)}x
+                    </div>
+                    <p className="mt-2 text-xs text-slate-500">
+                      Gemini TTS では話速の個別調整 UI をまだ提供していないため、この値を表示のみとしています。
+                    </p>
                   </div>
                 </div>
               </Card>
@@ -742,10 +815,13 @@ export function SettingsPage() {
                     >
                       {TEXT_COMPLETION_MODELS.map((model) => (
                         <option key={model} value={model}>
-                          {model}
+                          {getTextCompletionModelLabel(model)}
                         </option>
                       ))}
                     </select>
+                    <p className="mt-1 text-xs text-slate-500">
+                      モデルID: {settings.imagePromptTextModel}
+                    </p>
                   </div>
                   {isOpenAITextCompletionModel(settings.imagePromptTextModel) ? (
                     <div>
@@ -765,12 +841,12 @@ export function SettingsPage() {
                       >
                         {imageOpenAIReasoningOptions.map((effort) => (
                           <option key={effort} value={effort}>
-                            {formatOpenAIReasoningLabel(effort)} ({effort})
+                            {formatOpenAIReasoningLabel(effort)}
                           </option>
                         ))}
                       </select>
                       <p className="mt-1 text-xs text-slate-500">
-                        選択中の {settings.imagePromptTextModel} で使える値だけを表示しています。
+                        選択中の {getTextCompletionModelLabel(settings.imagePromptTextModel)} で使える値だけを表示しています。
                       </p>
                     </div>
                   ) : (
@@ -790,12 +866,12 @@ export function SettingsPage() {
                       >
                         {imageGeminiThinkingOptions.map((level) => (
                           <option key={level} value={level}>
-                            {formatGeminiThinkingLabel(level)} ({level})
+                            {formatGeminiThinkingLabel(level)}
                           </option>
                         ))}
                       </select>
                       <p className="mt-1 text-xs text-slate-500">
-                        選択中の {settings.imagePromptTextModel} で使える値だけを表示しています。
+                        選択中の {getTextCompletionModelLabel(settings.imagePromptTextModel)} で使える値だけを表示しています。
                       </p>
                     </div>
                   )}
@@ -820,10 +896,11 @@ export function SettingsPage() {
                     >
                       {IMAGE_MODELS.map((model) => (
                         <option key={model} value={model}>
-                          {model}
+                          {getImageModelLabel(model)}
                         </option>
                       ))}
                     </select>
+                    <p className="mt-1 text-xs text-slate-500">モデルID: {settings.imageModel}</p>
                   </div>
                   <div>
                     <label className="mb-1 block text-xs font-semibold text-slate-600">
@@ -854,11 +931,6 @@ export function SettingsPage() {
           {settingsSaveError && (
             <div className="rounded-[12px] border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
               設定の自動保存に失敗しました。変更内容は画面上に残っています。詳細: {settingsSaveError}
-            </div>
-          )}
-          {!settingsSaveError && settingsAutoSave.lastSavedAt && (
-            <div className="text-right text-xs text-slate-500">
-              最終保存: {settingsAutoSave.lastSavedAt.toLocaleTimeString('ja-JP')}
             </div>
           )}
         </div>

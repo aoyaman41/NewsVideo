@@ -7,3 +7,4 @@ export { EmptyState } from './EmptyState';
 export { Skeleton } from './Skeleton';
 export { Toast } from './Toast';
 export { ConfirmDialog } from './ConfirmDialog';
+export { FeedbackProvider, useToast, useConfirm } from './FeedbackProvider';

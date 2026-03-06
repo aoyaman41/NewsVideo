@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from 'react';
 import { NavLink, useLocation } from 'react-router-dom';
 import type { Project } from '../../schemas';
-import { stageLabel, summarizeProjectProgress } from '../../utils/projectHealth';
-import { Badge, ProgressBar } from '../ui';
+import pkg from '../../../package.json';
+import { nextActionLabel, stageLabel, summarizeProjectProgress } from '../../utils/projectHealth';
+import { Badge, ProgressBar, StatusChip } from '../ui';
 
 interface NavItem {
   path: string;
@@ -163,18 +164,20 @@ export function Sidebar() {
               max={projectSummary.totalSteps}
               tone={projectSummary.hasVideoOutput ? 'success' : 'accent'}
             />
-            <p className="mt-2 text-xs text-blue-100">次: {stageLabel(projectSummary.stage)}</p>
-            <div className="mt-2 grid grid-cols-3 gap-1 text-[11px] text-blue-100">
-              <div className="rounded bg-white/10 px-2 py-1">未プロンプト {projectSummary.missingPrompts}</div>
-              <div className="rounded bg-white/10 px-2 py-1">未画像 {projectSummary.missingImages}</div>
-              <div className="rounded bg-white/10 px-2 py-1">未音声 {projectSummary.missingAudio}</div>
+            <div className="mt-3 space-y-2 text-xs text-blue-100">
+              <StatusChip
+                tone={projectSummary.hasVideoOutput ? 'success' : 'info'}
+                label={projectSummary.hasVideoOutput ? '完成' : `次: ${stageLabel(projectSummary.stage)}`}
+                className="border-white/20 bg-white/10 text-blue-50"
+              />
+              <p>推奨アクション: {nextActionLabel(projectSummary)}</p>
             </div>
           </div>
         )}
       </nav>
 
       <div className="border-t border-white/10 px-4 py-3">
-        <p className="text-xs text-blue-200">v1.0.0</p>
+        <p className="text-xs text-blue-200">v{pkg.version}</p>
       </div>
     </aside>
   );

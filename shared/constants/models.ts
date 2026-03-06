@@ -38,6 +38,19 @@ export const DEFAULT_IMAGE_MODEL: ImageModel = 'gemini-3.1-flash-image-preview';
 export const IMAGE_RESOLUTIONS = ['fhd', '2k', '4k'] as const;
 export type ImageResolution = (typeof IMAGE_RESOLUTIONS)[number];
 export const DEFAULT_IMAGE_RESOLUTION: ImageResolution = 'fhd';
+export const IMAGE_SIZE_TIERS = ['1K', '2K', '4K'] as const;
+export type ImageSizeTier = (typeof IMAGE_SIZE_TIERS)[number];
+
+export const TEXT_COMPLETION_MODEL_LABELS: Record<TextCompletionModel, string> = {
+  'gpt-5.4': 'GPT-5.4',
+  'gpt-5.2': 'GPT-5.2',
+  'gemini-3.1-pro': 'Gemini 3.1 Pro',
+};
+
+export const IMAGE_MODEL_LABELS: Record<ImageModel, string> = {
+  'gemini-3.1-flash-image-preview': 'Gemini 3.1 Flash Image',
+  'gemini-3-pro-image-preview': 'Gemini 3 Pro Image',
+};
 
 export const IMAGE_RESOLUTION_LABELS: Record<ImageResolution, string> = {
   fhd: 'Full HD 相当 (16:9=1920x1080)',
@@ -58,6 +71,10 @@ const IMAGE_RESOLUTION_SET = new Set<string>(IMAGE_RESOLUTIONS);
 
 export function isTextCompletionModel(value: unknown): value is TextCompletionModel {
   return typeof value === 'string' && TEXT_COMPLETION_MODEL_SET.has(value);
+}
+
+export function getTextCompletionModelLabel(model: TextCompletionModel): string {
+  return TEXT_COMPLETION_MODEL_LABELS[model];
 }
 
 export function isOpenAITextCompletionModel(value: unknown): value is OpenAITextCompletionModel {
@@ -121,6 +138,10 @@ export function getDefaultGeminiThinkingLevel(
 
 export function isImageModel(value: unknown): value is ImageModel {
   return typeof value === 'string' && IMAGE_MODEL_SET.has(value);
+}
+
+export function getImageModelLabel(model: ImageModel): string {
+  return IMAGE_MODEL_LABELS[model];
 }
 
 export function isImageResolution(value: unknown): value is ImageResolution {

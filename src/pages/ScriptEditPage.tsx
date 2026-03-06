@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useParams } from 'react-router-dom';
 import { Header, WorkflowNav } from '../components/layout';
 import { PartList, ScriptEditor } from '../components/script';
@@ -7,7 +7,6 @@ import { useAutoSave } from '../hooks';
 import type { Project, PartEdit } from '../schemas';
 import { createNewPart } from '../schemas';
 import { createOpenAIUsageRecord } from '../utils/usage';
-import { summarizeProjectProgress } from '../utils/projectHealth';
 
 export function ScriptEditPage() {
   const { projectId } = useParams<{ projectId: string }>();
@@ -217,7 +216,6 @@ export function ScriptEditPage() {
   );
 
   const selectedPart = project?.parts.find((p) => p.id === selectedPartId) ?? null;
-  const summary = useMemo(() => (project ? summarizeProjectProgress(project) : null), [project]);
 
   if (isLoading) {
     return (
@@ -237,12 +235,7 @@ export function ScriptEditPage() {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-      <Header
-        title="スクリプト"
-        subtitle={project.name}
-        statusLabel={summary ? `未音声 ${summary.missingAudio}` : undefined}
-        statusTone={summary && summary.missingAudio > 0 ? 'warning' : 'success'}
-      />
+      <Header title="スクリプト" subtitle={project.name} />
 
       {projectId && <WorkflowNav projectId={projectId} current="script" project={project} />}
 

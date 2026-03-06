@@ -1,6 +1,7 @@
 import { Suspense, lazy } from 'react';
 import { HashRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { MainLayout } from './components/layout';
+import { FeedbackProvider } from './components/ui';
 
 const ProjectListPage = lazy(async () => ({
   default: (await import('./pages/ProjectListPage')).ProjectListPage,
@@ -27,20 +28,22 @@ const VideoManagePage = lazy(async () => ({
 function App() {
   return (
     <HashRouter>
-      <Suspense fallback={<div className="p-6 text-sm text-slate-500">ページを読み込み中...</div>}>
-        <Routes>
-          <Route path="/" element={<Navigate to="/projects" replace />} />
-          <Route element={<MainLayout />}>
-            <Route path="/projects" element={<ProjectListPage />} />
-            <Route path="/projects/:projectId/article" element={<ArticleInputPage />} />
-            <Route path="/projects/:projectId/script" element={<ScriptEditPage />} />
-            <Route path="/projects/:projectId/image" element={<ImageManagePage />} />
-            <Route path="/projects/:projectId/audio" element={<AudioManagePage />} />
-            <Route path="/projects/:projectId/video" element={<VideoManagePage />} />
-            <Route path="/settings" element={<SettingsPage />} />
-          </Route>
-        </Routes>
-      </Suspense>
+      <FeedbackProvider>
+        <Suspense fallback={<div className="p-6 text-sm text-slate-500">ページを読み込み中...</div>}>
+          <Routes>
+            <Route path="/" element={<Navigate to="/projects" replace />} />
+            <Route element={<MainLayout />}>
+              <Route path="/projects" element={<ProjectListPage />} />
+              <Route path="/projects/:projectId/article" element={<ArticleInputPage />} />
+              <Route path="/projects/:projectId/script" element={<ScriptEditPage />} />
+              <Route path="/projects/:projectId/image" element={<ImageManagePage />} />
+              <Route path="/projects/:projectId/audio" element={<AudioManagePage />} />
+              <Route path="/projects/:projectId/video" element={<VideoManagePage />} />
+              <Route path="/settings" element={<SettingsPage />} />
+            </Route>
+          </Routes>
+        </Suspense>
+      </FeedbackProvider>
     </HashRouter>
   );
 }

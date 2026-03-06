@@ -360,7 +360,7 @@ export function VideoManagePage() {
     } finally {
       setIsPreviewing(false);
     }
-  }, [selectedPartId]);
+  }, [forceReloadVideoAsset, selectedPartId]);
 
   const handleRender = useCallback(async () => {
     if (!project) return;
@@ -445,14 +445,7 @@ export function VideoManagePage() {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-      <Header
-        title="動画"
-        subtitle={project.name}
-        statusLabel={
-          summary ? `未音声 ${summary.missingAudio} / 未画像 ${summary.missingImages}` : undefined
-        }
-        statusTone={missingAudioCount + missingImagesCount > 0 ? 'warning' : 'success'}
-      />
+      <Header title="動画" subtitle={project.name} />
 
       {projectId && <WorkflowNav projectId={projectId} current="video" project={project} />}
 
@@ -598,80 +591,46 @@ export function VideoManagePage() {
         </Card>
 
         <div className="space-y-4 overflow-auto">
-          <Card title="出力設定" subtitle="品質と出力先を指定">
+          <Card
+            title="今回の書き出し設定"
+            subtitle="品質の既定値は設定画面で変更します"
+            actions={
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() =>
+                  navigate('/settings', {
+                    state: { returnTo: projectId ? `/projects/${projectId}/video` : '/projects' },
+                  })
+                }
+              >
+                設定を開く
+              </Button>
+            }
+          >
             <div className="grid grid-cols-1 gap-3">
-              <div>
-                <label className="mb-1 block text-xs font-semibold text-slate-600">解像度</label>
-                <select
-                  value={renderOptions.resolution}
-                  onChange={(e) =>
-                    setRenderOptions((prev) => ({
-                      ...prev,
-                      resolution: e.target.value as RenderOptions['resolution'],
-                    }))
-                  }
-                  className="nv-input"
-                  disabled={isRendering || isPreviewing}
-                >
-                  <option value="1920x1080">1920x1080 (Full HD)</option>
-                  <option value="1280x720">1280x720 (HD)</option>
-                  <option value="3840x2160">3840x2160 (4K)</option>
-                </select>
-              </div>
-
-              <div>
-                <label className="mb-1 block text-xs font-semibold text-slate-600">FPS</label>
-                <select
-                  value={renderOptions.fps}
-                  onChange={(e) =>
-                    setRenderOptions((prev) => ({
-                      ...prev,
-                      fps: Number(e.target.value),
-                    }))
-                  }
-                  className="nv-input"
-                  disabled={isRendering || isPreviewing}
-                >
-                  <option value={24}>24</option>
-                  <option value={30}>30</option>
-                  <option value={60}>60</option>
-                </select>
-              </div>
-
-              <div>
-                <label className="mb-1 block text-xs font-semibold text-slate-600">
-                  動画ビットレート
-                </label>
-                <input
-                  type="text"
-                  value={renderOptions.videoBitrate}
-                  onChange={(e) =>
-                    setRenderOptions((prev) => ({
-                      ...prev,
-                      videoBitrate: e.target.value,
-                    }))
-                  }
-                  className="nv-input"
-                  disabled={isRendering || isPreviewing}
-                />
-              </div>
-
-              <div>
-                <label className="mb-1 block text-xs font-semibold text-slate-600">
-                  音声ビットレート
-                </label>
-                <input
-                  type="text"
-                  value={renderOptions.audioBitrate}
-                  onChange={(e) =>
-                    setRenderOptions((prev) => ({
-                      ...prev,
-                      audioBitrate: e.target.value,
-                    }))
-                  }
-                  className="nv-input"
-                  disabled={isRendering || isPreviewing}
-                />
+              <div className="rounded-[10px] border border-[var(--nv-color-border)] bg-slate-50 p-3">
+                <div className="grid gap-2 sm:grid-cols-2 text-xs text-slate-600">
+                  <div>
+                    <div className="font-semibold text-slate-700">既定解像度</div>
+                    <div className="mt-1 text-sm text-slate-900">{renderOptions.resolution}</div>
+                  </div>
+                  <div>
+                    <div className="font-semibold text-slate-700">既定FPS</div>
+                    <div className="mt-1 text-sm text-slate-900">{renderOptions.fps}</div>
+                  </div>
+                  <div>
+                    <div className="font-semibold text-slate-700">既定動画ビットレート</div>
+                    <div className="mt-1 text-sm text-slate-900">{renderOptions.videoBitrate}</div>
+                  </div>
+                  <div>
+                    <div className="font-semibold text-slate-700">既定音声ビットレート</div>
+                    <div className="mt-1 text-sm text-slate-900">{renderOptions.audioBitrate}</div>
+                  </div>
+                </div>
+                <p className="mt-3 text-xs text-slate-500">
+                  これらは設定画面の既定値です。動画ページでは今回の出力先と付加動画だけを切り替えます。
+                </p>
               </div>
 
               <div className="flex flex-wrap items-center gap-4 text-sm text-slate-700">
@@ -706,30 +665,35 @@ export function VideoManagePage() {
               </div>
 
               <div>
-                <label className="mb-1 block text-xs font-semibold text-slate-600">出力先</label>
-                <div className="flex gap-2">
-                  <input
-                    type="text"
-                    value={outputPath}
-                    onChange={(e) => setOutputPath(e.target.value)}
-                    className="nv-input font-mono text-xs"
-                    disabled={isRendering || isPreviewing}
-                  />
-                  <Button
-                    variant="secondary"
-                    onClick={handleSelectOutputDir}
-                    disabled={isRendering || isPreviewing}
-                  >
-                    参照
-                  </Button>
-                  <Button
-                    variant="secondary"
-                    onClick={handleRevealOutput}
-                    disabled={!outputPath.trim()}
-                  >
-                    Finder
-                  </Button>
+                <label className="mb-1 block text-xs font-semibold text-slate-600">
+                  現在の保存先
+                </label>
+                <div className="space-y-2">
+                  <div className="rounded-[8px] border border-[var(--nv-color-border)] bg-slate-50 px-3 py-2 font-mono text-[11px] leading-5 text-slate-600 break-all">
+                    {outputPath.trim() || '未設定'}
+                  </div>
+                  <div className="flex flex-wrap justify-end gap-2">
+                    <Button
+                      variant="secondary"
+                      onClick={handleSelectOutputDir}
+                      disabled={isRendering || isPreviewing}
+                      className="whitespace-nowrap"
+                    >
+                      場所を選択
+                    </Button>
+                    <Button
+                      variant="secondary"
+                      onClick={handleRevealOutput}
+                      disabled={!outputPath.trim()}
+                      className="whitespace-nowrap"
+                    >
+                      Finderで表示
+                    </Button>
+                  </div>
                 </div>
+                <p className="mt-2 text-xs text-slate-500">
+                  出力ファイル名はプロジェクト名から自動で付与されます。
+                </p>
               </div>
             </div>
           </Card>

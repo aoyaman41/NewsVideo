@@ -2,10 +2,17 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { Waveform } from '../components/audio';
 import { Header, WorkflowNav } from '../components/layout';
-import { Badge, Button, Card, EmptyState, ProgressBar, StatusChip } from '../components/ui';
+import {
+  Badge,
+  Button,
+  Card,
+  EmptyState,
+  ProgressBar,
+  useConfirm,
+  useToast,
+} from '../components/ui';
 import type { AudioAsset, Project, UsageRecord } from '../schemas';
 import { toLocalFileUrl } from '../utils/toLocalFileUrl';
-import { summarizeProjectProgress } from '../utils/projectHealth';
 import { createGeminiTtsUsageRecord } from '../utils/usage';
 import {
   parseMarkIndex,
@@ -13,13 +20,6 @@ import {
 } from '../../shared/utils/ttsSegmentation';
 
 type TTSEngine = 'google_tts' | 'gemini_tts' | 'macos_tts';
-
-interface VoiceInfo {
-  name: string;
-  languageCodes: string[];
-  gender: 'MALE' | 'FEMALE' | 'NEUTRAL';
-  sampleRateHertz: number;
-}
 
 interface Settings {
   ttsEngine: TTSEngine;
@@ -40,15 +40,28 @@ function guessLanguageCode(voiceName: string): string {
   return match?.[1] || 'ja-JP';
 }
 
+function formatTtsEngineLabel(engine: string): string {
+  switch (engine) {
+    case 'gemini_tts':
+      return 'Gemini TTS';
+    case 'google_tts':
+      return 'Google TTS';
+    case 'macos_tts':
+      return 'macOS TTS';
+    default:
+      return engine;
+  }
+}
+
 export function AudioManagePage() {
   const { projectId } = useParams<{ projectId: string }>();
   const navigate = useNavigate();
+  const { confirm } = useConfirm();
+  const toast = useToast();
 
   const [project, setProject] = useState<Project | null>(null);
   const [settings, setSettings] = useState<Settings>(defaultSettings);
   const [selectedPartId, setSelectedPartId] = useState<string | null>(null);
-  const [voices, setVoices] = useState<VoiceInfo[]>([]);
-  const [isLoadingVoices, setIsLoadingVoices] = useState(false);
   const projectRef = useRef<Project | null>(null);
 
   const [isLoading, setIsLoading] = useState(true);
@@ -105,29 +118,6 @@ export function AudioManagePage() {
     load();
   }, [projectId]);
 
-  // 音声ボイス一覧の読み込み
-  useEffect(() => {
-    const loadVoices = async () => {
-      setIsLoadingVoices(true);
-      try {
-        const list = await window.electronAPI.tts.getVoices(settings.ttsEngine);
-        setVoices(list);
-        setSettings((prev) => {
-          if (list.length === 0) return prev;
-          if (list.some((v) => v.name === prev.ttsVoice)) return prev;
-          return { ...prev, ttsVoice: list[0].name };
-        });
-      } catch (err) {
-        console.warn('Failed to load voices:', err);
-        setVoices([]);
-      } finally {
-        setIsLoadingVoices(false);
-      }
-    };
-
-    loadVoices();
-  }, [settings.ttsEngine]);
-
   const selectedPart = useMemo(() => {
     return project?.parts.find((p) => p.id === selectedPartId) || null;
   }, [project, selectedPartId]);
@@ -141,7 +131,6 @@ export function AudioManagePage() {
     if (!project) return 0;
     return project.parts.filter((p) => !p.audio).length;
   }, [project]);
-  const summary = useMemo(() => (project ? summarizeProjectProgress(project) : null), [project]);
 
   const ttsOptions = useMemo(() => {
     return {
@@ -213,7 +202,13 @@ export function AudioManagePage() {
     if (!project || !selectedPart) return;
     if (!selectedPart.audio) return;
 
-    if (!confirm('このパートの音声の紐付けを解除しますか？（ファイルは削除しません）')) return;
+    const accepted = await confirm({
+      title: '音声の紐付けを解除しますか？',
+      description: '音声ファイル自体は削除せず、このパートからだけ解除します。',
+      confirmLabel: '解除',
+      confirmVariant: 'danger',
+    });
+    if (!accepted) return;
 
     try {
       const now = new Date().toISOString();
@@ -229,11 +224,12 @@ export function AudioManagePage() {
       };
 
       await saveProject(updatedProject);
+      toast.success('音声の紐付けを解除しました');
     } catch (err) {
       console.error('Failed to clear audio:', err);
       setError(err instanceof Error ? err.message : '音声の解除に失敗しました');
     }
-  }, [project, saveProject, selectedPart]);
+  }, [confirm, project, saveProject, selectedPart, toast]);
 
   const handleGenerateAll = useCallback(async () => {
     if (!projectId || !project) return;
@@ -423,12 +419,7 @@ export function AudioManagePage() {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-      <Header
-        title="音声"
-        subtitle={project.name}
-        statusLabel={summary ? `未生成 ${summary.missingAudio}` : undefined}
-        statusTone={summary && summary.missingAudio > 0 ? 'warning' : 'success'}
-      />
+      <Header title="音声" subtitle={project.name} />
 
       {projectId && <WorkflowNav projectId={projectId} current="audio" project={project} />}
 
@@ -483,11 +474,9 @@ export function AudioManagePage() {
             ) : (
               <p className="text-xs text-slate-500">生成待機中</p>
             )}
-            <div className="flex items-center gap-2 text-xs">
-              <Badge tone="warning">未音声 {summary?.missingAudio ?? 0}</Badge>
-              <Badge tone="warning">未画像 {summary?.missingImages ?? 0}</Badge>
-              <StatusChip tone="info" label={`パート ${project.parts.length}`} />
-            </div>
+            <p className="text-xs text-slate-500">
+              音声ページでは読み上げ生成と確認に集中します。全体進捗は上部の Workflow を見れば十分です。
+            </p>
           </div>
         </Card>
       </div>
@@ -519,7 +508,9 @@ export function AudioManagePage() {
                     <Badge tone={part.audio ? 'success' : 'warning'}>
                       {part.audio ? '生成済み' : '未生成'}
                     </Badge>
-                    {part.audio && <Badge tone="neutral">{part.audio.ttsEngine}</Badge>}
+                    {part.audio && (
+                      <Badge tone="neutral">{formatTtsEngineLabel(part.audio.ttsEngine)}</Badge>
+                    )}
                   </div>
                 </button>
               </li>
@@ -528,49 +519,42 @@ export function AudioManagePage() {
         </Card>
 
         <div className="space-y-4 overflow-auto">
-          <Card title="音声設定" subtitle="生成設定（TTS）">
+          <Card
+            title="既定の音声設定"
+            subtitle="変更は設定画面で行います"
+            actions={
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() =>
+                  navigate('/settings', {
+                    state: { returnTo: projectId ? `/projects/${projectId}/audio` : '/projects' },
+                  })
+                }
+              >
+                設定を開く
+              </Button>
+            }
+          >
             <div className="grid grid-cols-1 gap-3">
-              <div>
-                <label className="mb-1 block text-xs font-semibold text-slate-600">
-                  TTSエンジン
-                </label>
-                <select
-                  value={settings.ttsEngine}
-                  onChange={(e) =>
-                    setSettings((prev) => ({
-                      ...prev,
-                      ttsEngine: e.target.value as TTSEngine,
-                    }))
-                  }
-                  className="nv-input"
-                  disabled
-                >
-                  <option value="gemini_tts">gemini-2.5-pro-preview-tts</option>
-                </select>
+              <div className="rounded-[10px] border border-[var(--nv-color-border)] bg-slate-50 p-3">
+                <div className="flex flex-wrap items-center gap-2">
+                  <Badge tone="info">Gemini TTS</Badge>
+                  <span className="text-sm font-semibold text-slate-900">
+                    gemini-2.5-pro-preview-tts
+                  </span>
+                </div>
+                <p className="mt-2 text-xs text-slate-500">
+                  現在のアプリではこのエンジンを使用します。話速とピッチの UI 調整は未対応です。
+                </p>
               </div>
-              <div>
-                <label className="mb-1 block text-xs font-semibold text-slate-600">ボイス</label>
-                {voices.length > 0 ? (
-                  <select
-                    value={settings.ttsVoice}
-                    onChange={(e) => setSettings((prev) => ({ ...prev, ttsVoice: e.target.value }))}
-                    className="nv-input"
-                    disabled={isLoadingVoices}
-                  >
-                    {voices.slice(0, 200).map((v) => (
-                      <option key={v.name} value={v.name}>
-                        {v.name}
-                      </option>
-                    ))}
-                  </select>
-                ) : (
-                  <input
-                    value={settings.ttsVoice}
-                    onChange={(e) => setSettings((prev) => ({ ...prev, ttsVoice: e.target.value }))}
-                    placeholder={isLoadingVoices ? '読み込み中...' : 'ボイス名を入力'}
-                    className="nv-input"
-                  />
-                )}
+              <div className="rounded-[10px] border border-[var(--nv-color-border)] bg-slate-50 p-3 text-xs text-slate-600">
+                <div className="text-xs font-semibold text-slate-700">既定ボイス</div>
+                <div className="mt-2 text-sm font-semibold text-slate-900">{settings.ttsVoice}</div>
+                <div className="mt-2">既定話速: {settings.ttsSpeakingRate.toFixed(1)}x</div>
+                <div className="mt-1 text-slate-500">
+                  このページでは既定値を参照して音声生成を実行します。
+                </div>
               </div>
             </div>
           </Card>
@@ -701,7 +685,7 @@ export function AudioManagePage() {
               )}
 
               <div className="space-y-1 text-xs text-slate-600">
-                <div>エンジン: {selectedPart.audio.ttsEngine}</div>
+                <div>エンジン: {formatTtsEngineLabel(selectedPart.audio.ttsEngine)}</div>
                 <div>ボイス: {selectedPart.audio.voiceId}</div>
                 <div>推定長: {selectedPart.audio.durationSec}s</div>
                 <div className="break-all text-[11px] text-slate-500">
