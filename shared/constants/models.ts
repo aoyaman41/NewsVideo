@@ -105,6 +105,14 @@ const OPENAI_REASONING_EFFORTS_BY_MODEL: Record<
   'gpt-5.2': ['none', 'minimal', 'low', 'medium', 'high', 'xhigh'],
 };
 
+const OPENAI_TEMPERATURE_SUPPORTED_EFFORTS_BY_MODEL: Record<
+  OpenAITextCompletionModel,
+  readonly SelectableOpenAIReasoningEffort[]
+> = {
+  'gpt-5.4': ['none'],
+  'gpt-5.2': ['none'],
+};
+
 const GEMINI_THINKING_LEVELS_BY_MODEL: Record<
   GeminiTextCompletionModel,
   readonly SelectableGeminiThinkingLevel[]
@@ -116,6 +124,16 @@ export function getSupportedOpenAIReasoningEfforts(
   model: OpenAITextCompletionModel
 ): readonly SelectableOpenAIReasoningEffort[] {
   return OPENAI_REASONING_EFFORTS_BY_MODEL[model];
+}
+
+export function supportsOpenAITemperature(
+  model: OpenAITextCompletionModel,
+  reasoningEffort: OpenAIReasoningEffort | null
+): boolean {
+  if (!reasoningEffort || reasoningEffort === 'default') {
+    return false;
+  }
+  return OPENAI_TEMPERATURE_SUPPORTED_EFFORTS_BY_MODEL[model].includes(reasoningEffort);
 }
 
 export function getDefaultOpenAIReasoningEffort(

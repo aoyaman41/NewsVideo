@@ -16,7 +16,9 @@ import {
   isOpenAITextCompletionModel,
   isTextCompletionModel,
   isGeminiTextCompletionModel,
+  supportsOpenAITemperature,
   type GeminiThinkingLevel,
+  type OpenAITextCompletionModel,
   type OpenAIReasoningEffort,
   type TextCompletionModel,
 } from '../../shared/constants/models';
@@ -254,6 +256,20 @@ function resolveOpenAIReasoningEffort(
   return value === 'default' ? null : value;
 }
 
+function buildOpenAITextGenerationOptions(
+  model: OpenAITextCompletionModel,
+  reasoningEffort: Exclude<OpenAIReasoningEffort, 'default'> | null,
+  temperature: number
+): {
+  temperature?: number;
+  reasoning_effort?: Exclude<OpenAIReasoningEffort, 'default'>;
+} {
+  return {
+    ...(supportsOpenAITemperature(model, reasoningEffort) ? { temperature } : {}),
+    ...(reasoningEffort ? { reasoning_effort: reasoningEffort } : {}),
+  };
+}
+
 async function readTextGenerationConfig(scope: TextGenerationScope): Promise<TextGenerationConfig> {
   const fallbackModel =
     scope === 'script' ? DEFAULT_SCRIPT_TEXT_MODEL : DEFAULT_IMAGE_PROMPT_TEXT_MODEL;
@@ -459,8 +475,7 @@ ipcMain.handle(
             { role: 'user', content: scriptUserPrompt },
           ],
           response_format: { type: 'json_object' },
-          temperature: 0.7,
-          ...(reasoningEffort ? { reasoning_effort: reasoningEffort } : {}),
+          ...buildOpenAITextGenerationOptions(selectedModel, reasoningEffort, 0.7),
         });
       });
 
@@ -1359,8 +1374,7 @@ async function extractSinglePartPromptCandidate(params: {
           { role: 'system', content: systemPrompt },
           { role: 'user', content: userPrompt },
         ],
-        temperature: 0.3,
-        ...(reasoningEffort ? { reasoning_effort: reasoningEffort } : {}),
+        ...buildOpenAITextGenerationOptions(selectedModel, reasoningEffort, 0.3),
       });
     });
 
@@ -1629,8 +1643,7 @@ JSONのみを出力してください。`;
             { role: 'system', content: systemPrompt },
             { role: 'user', content: userPrompt },
           ],
-          temperature: 0.7,
-          ...(reasoningEffort ? { reasoning_effort: reasoningEffort } : {}),
+          ...buildOpenAITextGenerationOptions(selectedModel, reasoningEffort, 0.7),
         });
       });
       text = response.choices[0]?.message?.content || '';
