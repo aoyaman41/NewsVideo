@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
+import { useAutoSave } from '../hooks';
 import { Header } from '../components/layout';
 import { Badge, Button, Card, StatusChip } from '../components/ui';
 import {
@@ -133,8 +134,8 @@ export function SettingsPage() {
     google_tts: false,
   });
   const [settings, setSettings] = useState<Settings>(defaultSettings);
-  const [isSavingSettings, setIsSavingSettings] = useState(false);
-  const [settingsSaved, setSettingsSaved] = useState(false);
+  const [hasLoadedSettings, setHasLoadedSettings] = useState(false);
+  const [settingsSaveError, setSettingsSaveError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<'api' | 'video' | 'audio' | 'image' | 'other'>(
     'api'
   );
@@ -150,22 +151,42 @@ export function SettingsPage() {
       setSettings({ ...defaultSettings, ...loaded });
     } catch (error) {
       console.error('Failed to load settings:', error);
+    } finally {
+      setHasLoadedSettings(true);
     }
   };
 
-  const handleSaveSettings = async () => {
-    setIsSavingSettings(true);
-    setSettingsSaved(false);
-    try {
-      await window.electronAPI.settings.set(settings);
-      setSettingsSaved(true);
-      setTimeout(() => setSettingsSaved(false), 2000);
-    } catch (error) {
-      console.error('Failed to save settings:', error);
-    } finally {
-      setIsSavingSettings(false);
+  const settingsAutoSave = useAutoSave({
+    data: settings,
+    enabled: hasLoadedSettings,
+    interval: 1200,
+    onSave: async (nextSettings) => {
+      try {
+        await window.electronAPI.settings.set(nextSettings);
+        setSettingsSaveError(null);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : '不明なエラー';
+        setSettingsSaveError(message);
+        throw error;
+      }
+    },
+  });
+
+  const settingsStatus = useMemo(() => {
+    if (!hasLoadedSettings) {
+      return { label: '読込中', tone: 'neutral' as const };
     }
-  };
+    if (settingsSaveError) {
+      return { label: '自動保存エラー', tone: 'danger' as const };
+    }
+    if (settingsAutoSave.isSaving) {
+      return { label: '自動保存中', tone: 'info' as const };
+    }
+    if (settingsAutoSave.isDirty) {
+      return { label: '変更あり', tone: 'warning' as const };
+    }
+    return { label: '自動保存済み', tone: 'success' as const };
+  }, [hasLoadedSettings, settingsAutoSave.isDirty, settingsAutoSave.isSaving, settingsSaveError]);
 
   const loadApiKeys = async () => {
     const services: ApiKeyService[] = ['openai', 'google_ai', 'google_tts'];
@@ -307,7 +328,9 @@ export function SettingsPage() {
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
       <Header
         title="設定"
-        subtitle="APIキーとアプリケーション設定"
+        subtitle="変更は自動保存されます"
+        statusLabel={settingsStatus.label}
+        statusTone={settingsStatus.tone}
         actions={
           <Button
             variant="secondary"
@@ -863,16 +886,16 @@ export function SettingsPage() {
               </div>
             </Card>
           )}
-
-          <div className="nv-surface flex items-center justify-between gap-3 px-4 py-3">
-            <div className="text-xs text-slate-500">設定変更後は保存してください。</div>
-            <div className="flex items-center gap-2">
-              {settingsSaved && <StatusChip tone="success" label="保存しました" />}
-              <Button onClick={handleSaveSettings} disabled={isSavingSettings}>
-                {isSavingSettings ? '保存中...' : '設定を保存'}
-              </Button>
+          {settingsSaveError && (
+            <div className="rounded-[12px] border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+              設定の自動保存に失敗しました。変更内容は画面上に残っています。詳細: {settingsSaveError}
             </div>
-          </div>
+          )}
+          {!settingsSaveError && settingsAutoSave.lastSavedAt && (
+            <div className="text-right text-xs text-slate-500">
+              最終保存: {settingsAutoSave.lastSavedAt.toLocaleTimeString('ja-JP')}
+            </div>
+          )}
         </div>
       </div>
     </div>
