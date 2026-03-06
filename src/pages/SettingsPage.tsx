@@ -25,7 +25,7 @@ import {
   type TextCompletionModel,
 } from '../../shared/constants/models';
 
-type ApiKeyService = 'openai' | 'google_ai' | 'google_tts';
+type ApiKeyService = 'openai' | 'google_ai';
 
 interface ConnectionStatus {
   success: boolean;
@@ -112,24 +112,20 @@ export function SettingsPage() {
   const [apiKeys, setApiKeys] = useState<Record<ApiKeyService, string>>({
     openai: '',
     google_ai: '',
-    google_tts: '',
   });
   const [connectionStatus, setConnectionStatus] = useState<
     Record<ApiKeyService, ConnectionStatus | null>
   >({
     openai: null,
     google_ai: null,
-    google_tts: null,
   });
   const [isTesting, setIsTesting] = useState<Record<ApiKeyService, boolean>>({
     openai: false,
     google_ai: false,
-    google_tts: false,
   });
   const [isSaving, setIsSaving] = useState<Record<ApiKeyService, boolean>>({
     openai: false,
     google_ai: false,
-    google_tts: false,
   });
   const [settings, setSettings] = useState<Settings>(defaultSettings);
   const [hasLoadedSettings, setHasLoadedSettings] = useState(false);
@@ -185,7 +181,7 @@ export function SettingsPage() {
   }, [hasLoadedSettings, settingsAutoSave.isDirty, settingsAutoSave.isSaving, settingsSaveError]);
 
   const loadApiKeys = async () => {
-    const services: ApiKeyService[] = ['openai', 'google_ai', 'google_tts'];
+    const services: ApiKeyService[] = ['openai', 'google_ai'];
     const keys: Record<string, string> = {};
 
     for (const service of services) {
@@ -246,13 +242,8 @@ export function SettingsPage() {
     },
     google_ai: {
       name: 'Google AI',
-      description: '画像生成と、選択した文章生成モデルがGemini系の場合に使用します',
+      description: '画像生成、Gemini系の文章生成、Gemini TTS に使用します',
       url: 'https://aistudio.google.com/',
-    },
-    google_tts: {
-      name: 'Google TTS（音声合成）',
-      description: 'Chirp 3 HDを使用して音声を合成します',
-      url: 'https://console.cloud.google.com/',
     },
   };
 

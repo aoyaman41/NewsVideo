@@ -286,7 +286,7 @@ interface Settings {
   cost?: CostRates;
 }
 
-type ApiKeyService = 'openai' | 'google_ai' | 'google_tts';
+type ApiKeyService = 'openai' | 'google_ai';
 
 // その他の型
 interface ScriptOptions {
