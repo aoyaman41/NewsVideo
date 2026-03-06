@@ -2,6 +2,7 @@ import type {
   type GeminiThinkingLevel,
   type ImageModel,
   type ImageResolution,
+  type ImageSizeTier,
   type OpenAIReasoningEffort,
   type TextCompletionModel,
 } from '../../shared/constants/models';
@@ -21,6 +22,7 @@ type AllowedEventChannel =
 type TokenUsage = {
   inputTokens?: number;
   outputTokens?: number;
+  cachedInputTokens?: number;
   totalTokens?: number;
   model?: string;
   provider?: 'openai' | 'gemini';
@@ -187,6 +189,15 @@ interface ImageAsset {
     createdAt: string;
     promptId?: string;
     tags: string[];
+    generation?: {
+      model: string;
+      resolution: ImageResolution;
+      imageSizeTier: ImageSizeTier;
+      aspectRatio: '16:9' | '1:1' | '9:16';
+      inputTokens?: number;
+      outputTokens?: number;
+      totalTokens?: number;
+    };
   };
 }
 
@@ -198,7 +209,11 @@ interface UsageRecord {
   operation: string;
   inputTokens?: number;
   outputTokens?: number;
+  cachedInputTokens?: number;
   imageCount?: number;
+  imageResolution?: ImageResolution;
+  imageSizeTier?: ImageSizeTier;
+  imageAspectRatio?: '16:9' | '1:1' | '9:16';
   createdAt: string;
 }
 
@@ -320,20 +335,52 @@ interface VoiceInfo {
 interface CostRates {
   currency: 'USD';
   openai: {
-    model: string;
-    inputPer1MTokensUsd: number;
-    outputPer1MTokensUsd: number;
+    defaultModel: string;
+    textRatesByModel: Record<
+      string,
+      {
+        inputPer1MTokensUsd: number;
+        outputPer1MTokensUsd: number;
+        cachedInputPer1MTokensUsd?: number;
+      }
+    >;
+    model?: string;
+    inputPer1MTokensUsd?: number;
+    outputPer1MTokensUsd?: number;
+    cachedInputPer1MTokensUsd?: number;
   };
   gemini: {
+    defaultTextModel: string;
+    textRatesByModel: Record<
+      string,
+      {
+        inputPer1MTokensUsd: number;
+        outputPer1MTokensUsd: number;
+        inputOverThresholdPer1MTokensUsd?: number;
+        outputOverThresholdPer1MTokensUsd?: number;
+        thresholdTokens?: number;
+      }
+    >;
     ttsModel: string;
-    ttsInputPer1MTokensUsd: number;
-    ttsOutputPer1MTokensUsd: number;
+    ttsRatesByModel: Record<
+      string,
+      {
+        inputPer1MTokensUsd: number;
+        outputPer1MTokensUsd: number;
+      }
+    >;
+    ttsInputPer1MTokensUsd?: number;
+    ttsOutputPer1MTokensUsd?: number;
     imageModel: string;
     imageRatesByModel: Record<
       string,
       {
-        inputPerImageUsd: number;
-        outputPerImageUsd: number;
+        billingMode: 'per_image' | 'per_token';
+        textInputPer1MTokensUsd?: number;
+        outputPer1MTokensUsd?: number;
+        outputPerImageUsdBySize?: Record<ImageSizeTier, number>;
+        fallbackOutputPerImageUsdBySize?: Partial<Record<ImageSizeTier, number>>;
+        legacyInputPerImageUsd?: number;
       }
     >;
     imageInputPerImageUsd?: number;

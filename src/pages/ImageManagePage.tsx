@@ -2,24 +2,15 @@ import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { Header, WorkflowNav } from '../components/layout';
 import { ImageAssignment, PromptEditor } from '../components/image';
-import { Badge, Button, Card, EmptyState, StatusChip } from '../components/ui';
+import { Badge, Button, Card, EmptyState, useConfirm, useToast } from '../components/ui';
 import type { Project, ImageAssetRef, ImagePrompt } from '../schemas';
-import { summarizeProjectProgress } from '../utils/projectHealth';
-import { createGeminiImageUsageRecord, createOpenAIUsageRecord } from '../utils/usage';
-import { DEFAULT_IMAGE_MODEL } from '../../shared/constants/models';
-
-async function getImageModelFromSettings(): Promise<string> {
-  try {
-    const settings = await window.electronAPI.settings.get();
-    return settings.imageModel || DEFAULT_IMAGE_MODEL;
-  } catch {
-    return DEFAULT_IMAGE_MODEL;
-  }
-}
+import { createGeminiImageUsageRecordFromAssets, createOpenAIUsageRecord } from '../utils/usage';
 
 export function ImageManagePage() {
   const { projectId } = useParams<{ projectId: string }>();
   const navigate = useNavigate();
+  const { confirm } = useConfirm();
+  const toast = useToast();
 
   const [project, setProject] = useState<Project | null>(null);
   const [selectedPartId, setSelectedPartId] = useState<string | null>(null);
@@ -173,8 +164,7 @@ export function ImageManagePage() {
         setError(null);
 
         const imageAsset = await window.electronAPI.image.generate(prompt, projectId);
-        const imageModel = await getImageModelFromSettings();
-        const usageRecord = createGeminiImageUsageRecord(1, 'image_generate', imageModel);
+        const usageRecord = createGeminiImageUsageRecordFromAssets([imageAsset], 'image_generate');
 
         // プロジェクトを更新
         const now = new Date().toISOString();
@@ -221,11 +211,9 @@ export function ImageManagePage() {
       setError(null);
 
       const imageAssets = await window.electronAPI.image.generateBatch(targetPrompts, projectId);
-      const imageModel = await getImageModelFromSettings();
-      const usageRecord = createGeminiImageUsageRecord(
-        imageAssets.length,
-        'image_generate_batch',
-        imageModel
+      const usageRecord = createGeminiImageUsageRecordFromAssets(
+        imageAssets,
+        'image_generate_batch'
       );
 
       // プロジェクトを更新
@@ -278,7 +266,13 @@ export function ImageManagePage() {
         project.article.importedImages.find((img) => img.id === imageId);
       if (!image) return;
 
-      if (!confirm('この画像を削除しますか？\n※割り当てからも自動的に解除されます')) return;
+      const accepted = await confirm({
+        title: '画像を削除しますか？',
+        description: 'この画像を削除すると、パートへの割り当ても自動的に解除されます。',
+        confirmLabel: '削除',
+        confirmVariant: 'danger',
+      });
+      if (!accepted) return;
 
       try {
         const result = await window.electronAPI.image.delete(image.filePath);
@@ -308,12 +302,13 @@ export function ImageManagePage() {
 
         await window.electronAPI.project.save(updatedProject);
         setProject(updatedProject);
+        toast.success('画像を削除しました');
       } catch (err) {
         console.error('Failed to delete image:', err);
         setError(err instanceof Error ? err.message : '画像の削除に失敗しました');
       }
     },
-    [project]
+    [confirm, project, toast]
   );
 
   // プロンプト更新
@@ -359,8 +354,6 @@ export function ImageManagePage() {
         project.prompts.some((p) => p.id === img.metadata.promptId && p.partId === selectedPartId)
     );
   }, [project, selectedPartId]);
-  const summary = useMemo(() => (project ? summarizeProjectProgress(project) : null), [project]);
-
   // パートへの割り当て（panelImages）更新
   const handleUpdatePanelImages = useCallback(
     async (partId: string, panelImages: ImageAssetRef[]) => {
@@ -407,12 +400,7 @@ export function ImageManagePage() {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-      <Header
-        title="画像"
-        subtitle={project.name}
-        statusLabel={summary ? `未割当 ${summary.missingImages}` : undefined}
-        statusTone={summary && summary.missingImages > 0 ? 'warning' : 'success'}
-      />
+      <Header title="画像" subtitle={project.name} />
 
       {projectId && <WorkflowNav projectId={projectId} current="image" project={project} />}
 
@@ -425,7 +413,7 @@ export function ImageManagePage() {
       <div className="px-4 pt-3">
         <Card
           title="一括操作"
-          subtitle={`プロンプト ${activePrompts.length}/${project.parts.length} / 未生成画像 ${missingImagePromptCount}`}
+          subtitle={`画像待ち ${missingImagePromptCount} / 生成済みプロンプト ${activePrompts.length}`}
           actions={
             <div className="flex items-center gap-2">
               <Button
@@ -451,11 +439,9 @@ export function ImageManagePage() {
             </div>
           }
         >
-          <div className="flex flex-wrap items-center gap-2 text-xs text-slate-600">
-            <Badge tone="warning">未画像 {summary?.missingImages ?? 0}</Badge>
-            <Badge tone="warning">未音声 {summary?.missingAudio ?? 0}</Badge>
-            <StatusChip tone="info" label={`総パート ${project.parts.length}`} />
-          </div>
+          <p className="text-xs text-slate-500">
+            この画面ではプロンプト作成と画像割り当てだけを扱います。全体進捗は上部の Workflow で確認できます。
+          </p>
         </Card>
       </div>
 
@@ -486,8 +472,8 @@ export function ImageManagePage() {
                       </span>
                     </div>
                     <div className="mt-1 flex items-center gap-1 text-[11px]">
-                      <Badge tone={partPrompt ? 'success' : 'neutral'}>
-                        {partPrompt ? 'Prompt' : 'No Prompt'}
+                      <Badge tone={partPrompt ? 'success' : 'warning'}>
+                        {partPrompt ? 'プロンプト済み' : '未プロンプト'}
                       </Badge>
                       <Badge tone={assignedCount > 0 ? 'success' : 'warning'}>
                         {assignedCount}枚

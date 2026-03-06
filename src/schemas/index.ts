@@ -17,6 +17,17 @@ export const imageAssetSchema = z.object({
     createdAt: z.string().datetime(),
     promptId: z.string().uuid().optional(),
     tags: z.array(z.string()),
+    generation: z
+      .object({
+        model: z.string(),
+        resolution: z.enum(['fhd', '2k', '4k']),
+        imageSizeTier: z.enum(['1K', '2K', '4K']),
+        aspectRatio: z.enum(['16:9', '1:1', '9:16']),
+        inputTokens: z.number().int().nonnegative().optional(),
+        outputTokens: z.number().int().nonnegative().optional(),
+        totalTokens: z.number().int().nonnegative().optional(),
+      })
+      .optional(),
   }),
 });
 
@@ -89,7 +100,11 @@ export const usageRecordSchema = z.object({
   operation: z.string(),
   inputTokens: z.number().int().nonnegative().optional(),
   outputTokens: z.number().int().nonnegative().optional(),
+  cachedInputTokens: z.number().int().nonnegative().optional(),
   imageCount: z.number().int().nonnegative().optional(),
+  imageResolution: z.enum(['fhd', '2k', '4k']).optional(),
+  imageSizeTier: z.enum(['1K', '2K', '4K']).optional(),
+  imageAspectRatio: z.enum(['16:9', '1:1', '9:16']).optional(),
   createdAt: z.string().datetime(),
 });
 

@@ -1,17 +1,33 @@
-import type { UsageRecord } from '../schemas';
+import type { ImageAsset, UsageRecord } from '../schemas';
 import {
   DEFAULT_GEMINI_TTS_MODEL,
   DEFAULT_IMAGE_MODEL,
   GEMINI_TEXT_COMPLETION_MODEL,
   OPENAI_TEXT_COMPLETION_MODEL,
+  type ImageResolution,
+  type ImageSizeTier,
 } from '../../shared/constants/models';
 
 type TokenUsage = {
   inputTokens?: number;
   outputTokens?: number;
+  cachedInputTokens?: number;
   totalTokens?: number;
   model?: string;
   provider?: 'openai' | 'gemini';
+};
+
+type ImageAspectRatio = '16:9' | '1:1' | '9:16';
+
+type GeminiImageUsageDetails = {
+  imageCount: number;
+  operation: string;
+  model?: string;
+  inputTokens?: number;
+  outputTokens?: number;
+  imageResolution?: ImageResolution;
+  imageSizeTier?: ImageSizeTier;
+  imageAspectRatio?: ImageAspectRatio;
 };
 
 function clampNonNegative(value?: number): number {
@@ -35,6 +51,7 @@ export function createOpenAIUsageRecord(
     operation,
     inputTokens: clampNonNegative(usage.inputTokens),
     outputTokens: clampNonNegative(usage.outputTokens),
+    cachedInputTokens: clampNonNegative(usage.cachedInputTokens),
     createdAt: new Date().toISOString(),
   };
 }
@@ -56,20 +73,54 @@ export function createGeminiTtsUsageRecord(
   };
 }
 
-export function createGeminiImageUsageRecord(
-  imageCount: number,
-  operation: string = 'image_generate',
-  model: string = DEFAULT_IMAGE_MODEL
-): UsageRecord | null {
-  const count = clampNonNegative(imageCount);
+export function createGeminiImageUsageRecord(details: GeminiImageUsageDetails): UsageRecord | null {
+  const count = clampNonNegative(details.imageCount);
   if (count <= 0) return null;
   return {
     id: crypto.randomUUID(),
     provider: 'gemini',
     category: 'image',
-    model: model || DEFAULT_IMAGE_MODEL,
-    operation,
+    model: details.model || DEFAULT_IMAGE_MODEL,
+    operation: details.operation,
+    inputTokens: clampNonNegative(details.inputTokens),
+    outputTokens: clampNonNegative(details.outputTokens),
     imageCount: count,
+    imageResolution: details.imageResolution,
+    imageSizeTier: details.imageSizeTier,
+    imageAspectRatio: details.imageAspectRatio,
     createdAt: new Date().toISOString(),
   };
+}
+
+export function createGeminiImageUsageRecordFromAssets(
+  images: ImageAsset[],
+  operation: string
+): UsageRecord | null {
+  const generated = images
+    .map((image) => image.metadata.generation)
+    .filter((metadata): metadata is NonNullable<ImageAsset['metadata']['generation']> => !!metadata);
+
+  if (generated.length === 0) {
+    return createGeminiImageUsageRecord({
+      imageCount: images.length,
+      operation,
+    });
+  }
+
+  const first = generated[0];
+  const sameModel = generated.every((metadata) => metadata.model === first.model);
+  const sameResolution = generated.every((metadata) => metadata.resolution === first.resolution);
+  const sameSizeTier = generated.every((metadata) => metadata.imageSizeTier === first.imageSizeTier);
+  const sameAspectRatio = generated.every((metadata) => metadata.aspectRatio === first.aspectRatio);
+
+  return createGeminiImageUsageRecord({
+    imageCount: images.length,
+    operation,
+    model: sameModel ? first.model : undefined,
+    inputTokens: generated.reduce((sum, metadata) => sum + (metadata.inputTokens ?? 0), 0),
+    outputTokens: generated.reduce((sum, metadata) => sum + (metadata.outputTokens ?? 0), 0),
+    imageResolution: sameResolution ? first.resolution : undefined,
+    imageSizeTier: sameSizeTier ? first.imageSizeTier : undefined,
+    imageAspectRatio: sameAspectRatio ? first.aspectRatio : undefined,
+  });
 }

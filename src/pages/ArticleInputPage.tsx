@@ -1,34 +1,24 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { Header, WorkflowNav } from '../components/layout';
 import { ArticleInput, FileImport, ImageDropzone } from '../components/article';
-import { Badge, Card, StatusChip } from '../components/ui';
+import { Badge, Card, StatusChip, useToast } from '../components/ui';
 import type {
   ArticleInput as ArticleInputType,
   AutoGenerationStatus,
   ImageAsset,
   Project,
 } from '../schemas';
-import { nextActionLabel, stageLabel, summarizeProjectProgress } from '../utils/projectHealth';
 import {
-  createGeminiImageUsageRecord,
+  createGeminiImageUsageRecordFromAssets,
   createGeminiTtsUsageRecord,
   createOpenAIUsageRecord,
 } from '../utils/usage';
-import { DEFAULT_IMAGE_MODEL } from '../../shared/constants/models';
-
-async function getImageModelFromSettings(): Promise<string> {
-  try {
-    const settings = await window.electronAPI.settings.get();
-    return settings.imageModel || DEFAULT_IMAGE_MODEL;
-  } catch {
-    return DEFAULT_IMAGE_MODEL;
-  }
-}
 
 export function ArticleInputPage() {
   const { projectId } = useParams<{ projectId: string }>();
   const navigate = useNavigate();
+  const toast = useToast();
 
   const [project, setProject] = useState<Project | null>(null);
   const [articleData, setArticleData] = useState<Partial<ArticleInputType>>({
@@ -142,12 +132,13 @@ export function ArticleInputPage() {
 
   const notifyCompletion = (message: string) => {
     if (!('Notification' in window)) {
-      alert(message);
+      toast.success(message, '自動生成完了');
       return;
     }
 
     if (Notification.permission === 'granted') {
       new Notification('自動生成完了', { body: message });
+      toast.success(message, '自動生成完了');
       return;
     }
 
@@ -156,13 +147,13 @@ export function ArticleInputPage() {
         if (permission === 'granted') {
           new Notification('自動生成完了', { body: message });
         } else {
-          alert(message);
+          toast.success(message, '自動生成完了');
         }
       });
       return;
     }
 
-    alert(message);
+    toast.success(message, '自動生成完了');
   };
 
   const setProjectSafe = (next: Project | null) => {
@@ -517,11 +508,9 @@ export function ArticleInputPage() {
             await ensureNotCancelled();
           }
 
-          const imageModel = await getImageModelFromSettings();
-          const imageUsage = createGeminiImageUsageRecord(
-            imagesAdded.length,
-            'image_generate_batch',
-            imageModel
+          const imageUsage = createGeminiImageUsageRecordFromAssets(
+            imagesAdded,
+            'image_generate_batch'
           );
           if (imageUsage) usageRecords.push(imageUsage);
 
@@ -844,7 +833,6 @@ export function ArticleInputPage() {
 
   const autoRunning = Boolean(isAutoGenerating || project?.autoGenerationStatus?.running);
   const currentAutoStatus = autoStatus ?? project?.autoGenerationStatus?.step;
-  const summary = useMemo(() => (project ? summarizeProjectProgress(project) : null), [project]);
 
   const handleImportedText = (title: string, text: string) => {
     setArticleData((prev) => ({
@@ -878,12 +866,7 @@ export function ArticleInputPage() {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-      <Header
-        title="記事"
-        subtitle={project?.name}
-        statusLabel={summary ? `次: ${stageLabel(summary.stage)}` : undefined}
-        statusTone="info"
-      />
+      <Header title="記事" subtitle={project?.name} />
 
       {projectId && <WorkflowNav projectId={projectId} current="article" project={project} />}
 
@@ -932,34 +915,25 @@ export function ArticleInputPage() {
           </div>
 
           <div className="space-y-4">
-            <Card title="進行状況" subtitle="次に行う作業と不足項目">
-              <div className="space-y-2 text-sm text-slate-600">
-                {summary && (
-                  <>
-                    <div className="flex items-center justify-between gap-2">
-                      <StatusChip
-                        tone={summary.hasVideoOutput ? 'success' : 'info'}
-                        label={`次: ${stageLabel(summary.stage)}`}
-                      />
-                      <Badge tone={summary.hasVideoOutput ? 'success' : 'warning'}>
-                        {summary.completedSteps}/{summary.totalSteps}
-                      </Badge>
-                    </div>
-                    <p className="text-xs text-slate-500">
-                      推奨アクション: {nextActionLabel(summary)}
-                    </p>
-                    <div className="grid grid-cols-3 gap-2 text-[11px]">
-                      <Badge tone="warning">未プロンプト {summary.missingPrompts}</Badge>
-                      <Badge tone="warning">未画像 {summary.missingImages}</Badge>
-                      <Badge tone="warning">未音声 {summary.missingAudio}</Badge>
-                    </div>
-                  </>
-                )}
-                {autoRunning && currentAutoStatus && (
-                  <div className="rounded-[8px] border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-700">
-                    自動生成中: {currentAutoStatus}
-                  </div>
-                )}
+            <Card title="自動生成" subtitle="記事から動画までをまとめて進行">
+              <div className="space-y-3 text-sm text-slate-600">
+                <div className="flex flex-wrap items-center gap-2">
+                  <StatusChip
+                    tone={autoRunning ? 'info' : 'neutral'}
+                    label={autoRunning ? '実行中' : '待機中'}
+                  />
+                  <Badge tone="info">記事保存 → スクリプト → 画像 → 音声 → 動画</Badge>
+                </div>
+                <p className="text-xs text-slate-500">
+                  上部の Workflow が全体進捗を示します。このカードでは現在の自動生成状態だけを表示します。
+                </p>
+                <div className="rounded-[8px] border border-[var(--nv-color-border)] bg-slate-50 px-3 py-3 text-xs">
+                  {autoRunning && currentAutoStatus ? (
+                    <span className="text-blue-700">自動生成中: {currentAutoStatus}</span>
+                  ) : (
+                    <span className="text-slate-600">必要なときに「記事から動画まで自動生成」を実行できます。</span>
+                  )}
+                </div>
               </div>
             </Card>
 
