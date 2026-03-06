@@ -83,12 +83,20 @@ type OpenAIUsageSummary = {
   provider?: 'openai' | 'gemini';
   inputTokens?: number;
   outputTokens?: number;
+  cachedInputTokens?: number;
   totalTokens?: number;
   model?: string;
 };
 
 function mapOpenAIUsage(
-  usage: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number } | undefined,
+  usage:
+    | {
+        prompt_tokens?: number;
+        completion_tokens?: number;
+        total_tokens?: number;
+        prompt_tokens_details?: { cached_tokens?: number };
+      }
+    | undefined,
   model?: string
 ): OpenAIUsageSummary | null {
   if (!usage && !model) return null;
@@ -96,6 +104,7 @@ function mapOpenAIUsage(
     provider: 'openai',
     inputTokens: usage?.prompt_tokens,
     outputTokens: usage?.completion_tokens,
+    cachedInputTokens: usage?.prompt_tokens_details?.cached_tokens,
     totalTokens: usage?.total_tokens,
     model,
   };
@@ -152,6 +161,7 @@ function aggregateUsageSummaries(
     model: sameModel ? first.model : undefined,
     inputTokens: sum((usage) => usage.inputTokens),
     outputTokens: sum((usage) => usage.outputTokens),
+    cachedInputTokens: sum((usage) => usage.cachedInputTokens),
     totalTokens: sum((usage) => usage.totalTokens),
   };
 }

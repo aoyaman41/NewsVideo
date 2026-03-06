@@ -11,6 +11,7 @@ import {
   isImageResolution,
   type ImageModel,
   type ImageResolution,
+  type ImageSizeTier,
 } from '../../shared/constants/models';
 import { sanitizeImagePromptForRendering } from '../../shared/utils/imagePromptSanitizer';
 import { logger } from '../utils/logger';
@@ -189,7 +190,7 @@ function normalizeNegativePrompt(value: string): string {
   return deduped.join(', ');
 }
 
-function getImageSize(imageResolution: ImageResolution): '1K' | '2K' | '4K' {
+function getImageSize(imageResolution: ImageResolution): ImageSizeTier {
   switch (imageResolution) {
     case '2k':
       return '2K';
@@ -198,6 +199,56 @@ function getImageSize(imageResolution: ImageResolution): '1K' | '2K' | '4K' {
     default:
       return '1K';
   }
+}
+
+function extractImageUsage(
+  usage:
+    | {
+        promptTokenCount?: number;
+        responseTokenCount?: number;
+        candidatesTokenCount?: number;
+        totalTokenCount?: number;
+        promptTokens?: number;
+        completionTokens?: number;
+        totalTokens?: number;
+        prompt_token_count?: number;
+        candidates_token_count?: number;
+        total_token_count?: number;
+      }
+    | undefined
+): {
+  inputTokens?: number;
+  outputTokens?: number;
+  totalTokens?: number;
+} | null {
+  if (!usage) return null;
+
+  const inputTokens = Math.max(
+    0,
+    usage.promptTokenCount ?? usage.promptTokens ?? usage.prompt_token_count ?? 0
+  );
+  const outputTokens = Math.max(
+    0,
+    usage.responseTokenCount ??
+      usage.candidatesTokenCount ??
+      usage.completionTokens ??
+      usage.candidates_token_count ??
+      0
+  );
+  const totalTokens = Math.max(
+    0,
+    usage.totalTokenCount ?? usage.totalTokens ?? usage.total_token_count ?? 0
+  );
+
+  if (inputTokens === 0 && outputTokens === 0 && totalTokens === 0) {
+    return null;
+  }
+
+  return {
+    inputTokens: inputTokens > 0 ? inputTokens : undefined,
+    outputTokens: outputTokens > 0 ? outputTokens : undefined,
+    totalTokens: totalTokens > 0 ? totalTokens : undefined,
+  };
 }
 
 function buildImageSystemInstruction(prompt: ImagePrompt): string {
@@ -254,6 +305,15 @@ interface ImageAsset {
     createdAt: string;
     promptId?: string;
     tags: string[];
+    generation?: {
+      model: string;
+      resolution: ImageResolution;
+      imageSizeTier: ImageSizeTier;
+      aspectRatio: ImageAspectRatio;
+      inputTokens?: number;
+      outputTokens?: number;
+      totalTokens?: number;
+    };
   };
 }
 
@@ -379,6 +439,7 @@ ipcMain.handle(
         },
       });
     });
+    const usage = extractImageUsage(response.usageMetadata);
 
     // レスポンスから画像データを抽出
     const parts = response.candidates?.[0]?.content?.parts;
@@ -420,6 +481,15 @@ ipcMain.handle(
         createdAt: new Date().toISOString(),
         promptId: prompt.id,
         tags: [],
+        generation: {
+          model: imageModel,
+          resolution: imageResolution,
+          imageSizeTier: imageSize,
+          aspectRatio: prompt.aspectRatio,
+          inputTokens: usage?.inputTokens,
+          outputTokens: usage?.outputTokens,
+          totalTokens: usage?.totalTokens,
+        },
       },
     };
 
@@ -484,6 +554,7 @@ ipcMain.handle(
               },
             });
           });
+          const usage = extractImageUsage(response.usageMetadata);
 
           const parts = response.candidates?.[0]?.content?.parts;
           logger.debug('[image:generateBatch] Response received', {
@@ -521,6 +592,15 @@ ipcMain.handle(
               createdAt: new Date().toISOString(),
               promptId: prompt.id,
               tags: [],
+              generation: {
+                model: imageModel,
+                resolution: imageResolution,
+                imageSizeTier: imageSize,
+                aspectRatio: prompt.aspectRatio,
+                inputTokens: usage?.inputTokens,
+                outputTokens: usage?.outputTokens,
+                totalTokens: usage?.totalTokens,
+              },
             },
           };
 
