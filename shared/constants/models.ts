@@ -1,10 +1,32 @@
-export const TEXT_COMPLETION_MODELS = ['gpt-5.2', 'gemini-3.1-pro'] as const;
+export const TEXT_COMPLETION_MODELS = ['gpt-5.4', 'gpt-5.2', 'gemini-3.1-pro'] as const;
 export type TextCompletionModel = (typeof TEXT_COMPLETION_MODELS)[number];
+
+export const OPENAI_TEXT_COMPLETION_MODELS = ['gpt-5.4', 'gpt-5.2'] as const;
+export const GEMINI_TEXT_COMPLETION_MODELS = ['gemini-3.1-pro'] as const;
+export type OpenAITextCompletionModel = (typeof OPENAI_TEXT_COMPLETION_MODELS)[number];
+export type GeminiTextCompletionModel = (typeof GEMINI_TEXT_COMPLETION_MODELS)[number];
+export type TextCompletionProvider = 'openai' | 'gemini';
 
 export const OPENAI_TEXT_COMPLETION_MODEL: TextCompletionModel = 'gpt-5.2';
 export const DEFAULT_SCRIPT_TEXT_MODEL: TextCompletionModel = OPENAI_TEXT_COMPLETION_MODEL;
 export const DEFAULT_IMAGE_PROMPT_TEXT_MODEL: TextCompletionModel = OPENAI_TEXT_COMPLETION_MODEL;
 export const GEMINI_TEXT_COMPLETION_MODEL: TextCompletionModel = 'gemini-3.1-pro';
+
+export const OPENAI_REASONING_EFFORTS = [
+  'default',
+  'none',
+  'minimal',
+  'low',
+  'medium',
+  'high',
+  'xhigh',
+] as const;
+export type OpenAIReasoningEffort = (typeof OPENAI_REASONING_EFFORTS)[number];
+
+export const GEMINI_THINKING_LEVELS = ['default', 'low', 'medium', 'high'] as const;
+export type GeminiThinkingLevel = (typeof GEMINI_THINKING_LEVELS)[number];
+export type SelectableOpenAIReasoningEffort = Exclude<OpenAIReasoningEffort, 'default'>;
+export type SelectableGeminiThinkingLevel = Exclude<GeminiThinkingLevel, 'default' | 'medium'>;
 
 export const IMAGE_MODELS = [
   'gemini-3.1-flash-image-preview',
@@ -27,11 +49,74 @@ export const FIXED_IMAGE_STYLE_PRESET = 'infographic' as const;
 export const DEFAULT_GEMINI_TTS_MODEL = 'gemini-2.5-pro-preview-tts' as const;
 
 const TEXT_COMPLETION_MODEL_SET = new Set<string>(TEXT_COMPLETION_MODELS);
+const OPENAI_TEXT_COMPLETION_MODEL_SET = new Set<string>(OPENAI_TEXT_COMPLETION_MODELS);
+const GEMINI_TEXT_COMPLETION_MODEL_SET = new Set<string>(GEMINI_TEXT_COMPLETION_MODELS);
+const OPENAI_REASONING_EFFORT_SET = new Set<string>(OPENAI_REASONING_EFFORTS);
+const GEMINI_THINKING_LEVEL_SET = new Set<string>(GEMINI_THINKING_LEVELS);
 const IMAGE_MODEL_SET = new Set<string>(IMAGE_MODELS);
 const IMAGE_RESOLUTION_SET = new Set<string>(IMAGE_RESOLUTIONS);
 
 export function isTextCompletionModel(value: unknown): value is TextCompletionModel {
   return typeof value === 'string' && TEXT_COMPLETION_MODEL_SET.has(value);
+}
+
+export function isOpenAITextCompletionModel(value: unknown): value is OpenAITextCompletionModel {
+  return typeof value === 'string' && OPENAI_TEXT_COMPLETION_MODEL_SET.has(value);
+}
+
+export function isGeminiTextCompletionModel(value: unknown): value is GeminiTextCompletionModel {
+  return typeof value === 'string' && GEMINI_TEXT_COMPLETION_MODEL_SET.has(value);
+}
+
+export function getTextCompletionModelProvider(model: TextCompletionModel): TextCompletionProvider {
+  return isOpenAITextCompletionModel(model) ? 'openai' : 'gemini';
+}
+
+export function isOpenAIReasoningEffort(value: unknown): value is OpenAIReasoningEffort {
+  return typeof value === 'string' && OPENAI_REASONING_EFFORT_SET.has(value);
+}
+
+export function isGeminiThinkingLevel(value: unknown): value is GeminiThinkingLevel {
+  return typeof value === 'string' && GEMINI_THINKING_LEVEL_SET.has(value);
+}
+
+const OPENAI_REASONING_EFFORTS_BY_MODEL: Record<
+  OpenAITextCompletionModel,
+  readonly SelectableOpenAIReasoningEffort[]
+> = {
+  'gpt-5.4': ['none', 'minimal', 'low', 'medium', 'high', 'xhigh'],
+  'gpt-5.2': ['none', 'minimal', 'low', 'medium', 'high', 'xhigh'],
+};
+
+const GEMINI_THINKING_LEVELS_BY_MODEL: Record<
+  GeminiTextCompletionModel,
+  readonly SelectableGeminiThinkingLevel[]
+> = {
+  'gemini-3.1-pro': ['low', 'high'],
+};
+
+export function getSupportedOpenAIReasoningEfforts(
+  model: OpenAITextCompletionModel
+): readonly SelectableOpenAIReasoningEffort[] {
+  return OPENAI_REASONING_EFFORTS_BY_MODEL[model];
+}
+
+export function getDefaultOpenAIReasoningEffort(
+  model: OpenAITextCompletionModel
+): SelectableOpenAIReasoningEffort {
+  return OPENAI_REASONING_EFFORTS_BY_MODEL[model][0];
+}
+
+export function getSupportedGeminiThinkingLevels(
+  model: GeminiTextCompletionModel
+): readonly SelectableGeminiThinkingLevel[] {
+  return GEMINI_THINKING_LEVELS_BY_MODEL[model];
+}
+
+export function getDefaultGeminiThinkingLevel(
+  model: GeminiTextCompletionModel
+): SelectableGeminiThinkingLevel {
+  return model === 'gemini-3.1-pro' ? 'high' : GEMINI_THINKING_LEVELS_BY_MODEL[model][0];
 }
 
 export function isImageModel(value: unknown): value is ImageModel {

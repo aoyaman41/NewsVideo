@@ -1,6 +1,8 @@
 import type {
+  type GeminiThinkingLevel,
   type ImageModel,
   type ImageResolution,
+  type OpenAIReasoningEffort,
   type TextCompletionModel,
 } from '../../shared/constants/models';
 import type { type TTSEngine } from '../../shared/settings/appSettings';
@@ -268,6 +270,8 @@ interface Settings {
   ttsPitch: number;
   scriptTextModel: TextCompletionModel;
   imagePromptTextModel: TextCompletionModel;
+  openaiReasoningEffort: OpenAIReasoningEffort;
+  geminiThinkingLevel: GeminiThinkingLevel;
   imageModel: ImageModel;
   imageResolution: ImageResolution;
   defaultAspectRatio: '16:9' | '1:1' | '9:16';

@@ -10,11 +10,15 @@ describe('parseSettingsUpdate', () => {
     const parsed = parseSettingsUpdate({
       imageModel: 'gemini-3-pro-image-preview',
       imageResolution: '2k',
+      openaiReasoningEffort: 'high',
+      geminiThinkingLevel: 'low',
       unknownKey: 'ignored',
     });
 
     expect(parsed.imageModel).toBe('gemini-3-pro-image-preview');
     expect(parsed.imageResolution).toBe('2k');
+    expect(parsed.openaiReasoningEffort).toBe('high');
+    expect(parsed.geminiThinkingLevel).toBe('low');
     expect(parsed).not.toHaveProperty('unknownKey');
   });
 
@@ -39,6 +43,8 @@ describe('normalizeSettings', () => {
     const normalized = normalizeSettings({
       scriptTextModel: 'bad-model',
       imagePromptTextModel: 'bad-model',
+      openaiReasoningEffort: 'bad-effort',
+      geminiThinkingLevel: 'bad-level',
       imageModel: 'bad-model',
       imageResolution: 'bad-resolution',
       cost: { openai: { inputPer1MTokensUsd: 1 } },
@@ -46,6 +52,8 @@ describe('normalizeSettings', () => {
 
     expect(normalized.scriptTextModel).toBe(DEFAULT_SETTINGS.scriptTextModel);
     expect(normalized.imagePromptTextModel).toBe(DEFAULT_SETTINGS.imagePromptTextModel);
+    expect(normalized.openaiReasoningEffort).toBe(DEFAULT_SETTINGS.openaiReasoningEffort);
+    expect(normalized.geminiThinkingLevel).toBe(DEFAULT_SETTINGS.geminiThinkingLevel);
     expect(normalized.imageModel).toBe(DEFAULT_SETTINGS.imageModel);
     expect(normalized.imageResolution).toBe(DEFAULT_SETTINGS.imageResolution);
     expect(normalized.cost).toEqual({ openai: { inputPer1MTokensUsd: 1 } });

@@ -4,14 +4,22 @@ import {
   DEFAULT_IMAGE_PROMPT_TEXT_MODEL,
   DEFAULT_IMAGE_RESOLUTION,
   DEFAULT_SCRIPT_TEXT_MODEL,
+  GEMINI_THINKING_LEVELS,
   IMAGE_MODELS,
   IMAGE_RESOLUTIONS,
+  OPENAI_REASONING_EFFORTS,
   TEXT_COMPLETION_MODELS,
+  getDefaultGeminiThinkingLevel,
+  getDefaultOpenAIReasoningEffort,
+  isGeminiThinkingLevel,
   isImageModel,
   isImageResolution,
+  isOpenAIReasoningEffort,
   isTextCompletionModel,
+  type GeminiThinkingLevel,
   type ImageModel,
   type ImageResolution,
+  type OpenAIReasoningEffort,
   type TextCompletionModel,
 } from '../constants/models';
 
@@ -25,6 +33,8 @@ export type AppSettings = {
   ttsPitch: number;
   scriptTextModel: TextCompletionModel;
   imagePromptTextModel: TextCompletionModel;
+  openaiReasoningEffort: OpenAIReasoningEffort;
+  geminiThinkingLevel: GeminiThinkingLevel;
   imageModel: ImageModel;
   imageResolution: ImageResolution;
   defaultAspectRatio: '16:9' | '1:1' | '9:16';
@@ -47,6 +57,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
   ttsPitch: 0,
   scriptTextModel: DEFAULT_SCRIPT_TEXT_MODEL,
   imagePromptTextModel: DEFAULT_IMAGE_PROMPT_TEXT_MODEL,
+  openaiReasoningEffort: getDefaultOpenAIReasoningEffort('gpt-5.2'),
+  geminiThinkingLevel: getDefaultGeminiThinkingLevel('gemini-3.1-pro'),
   imageModel: DEFAULT_IMAGE_MODEL,
   imageResolution: DEFAULT_IMAGE_RESOLUTION,
   defaultAspectRatio: '16:9',
@@ -69,6 +81,8 @@ export const settingsUpdateSchema = z
     ttsPitch: z.number().finite().optional(),
     scriptTextModel: z.enum(TEXT_COMPLETION_MODELS).optional(),
     imagePromptTextModel: z.enum(TEXT_COMPLETION_MODELS).optional(),
+    openaiReasoningEffort: z.enum(OPENAI_REASONING_EFFORTS).optional(),
+    geminiThinkingLevel: z.enum(GEMINI_THINKING_LEVELS).optional(),
     imageModel: z.enum(IMAGE_MODELS).optional(),
     imageResolution: z.enum(IMAGE_RESOLUTIONS).optional(),
     defaultAspectRatio: z.enum(['16:9', '1:1', '9:16']).optional(),
@@ -119,6 +133,16 @@ export function normalizeSettings(input: unknown): AppSettings {
   }
   if (!isTextCompletionModel(merged.imagePromptTextModel)) {
     merged.imagePromptTextModel = DEFAULT_SETTINGS.imagePromptTextModel;
+  }
+  if (!isOpenAIReasoningEffort(merged.openaiReasoningEffort)) {
+    merged.openaiReasoningEffort = DEFAULT_SETTINGS.openaiReasoningEffort;
+  } else if (merged.openaiReasoningEffort === 'default') {
+    merged.openaiReasoningEffort = getDefaultOpenAIReasoningEffort('gpt-5.2');
+  }
+  if (!isGeminiThinkingLevel(merged.geminiThinkingLevel)) {
+    merged.geminiThinkingLevel = DEFAULT_SETTINGS.geminiThinkingLevel;
+  } else if (merged.geminiThinkingLevel === 'default') {
+    merged.geminiThinkingLevel = getDefaultGeminiThinkingLevel('gemini-3.1-pro');
   }
 
   return merged;

@@ -70,6 +70,8 @@ describe('settings IPC handlers', () => {
         ttsVoice: 'ja-JP-Chirp3-HD-Aoife',
         scriptTextModel: 'invalid-model',
         imagePromptTextModel: 'invalid-model',
+        openaiReasoningEffort: 'invalid-effort',
+        geminiThinkingLevel: 'invalid-level',
         imageModel: 'invalid-model',
         imageResolution: 'invalid-resolution',
         cost: { openai: { inputPer1MTokensUsd: 1 } },
@@ -83,6 +85,8 @@ describe('settings IPC handlers', () => {
     expect(result.ttsVoice).toBe(DEFAULT_SETTINGS.ttsVoice);
     expect(result.scriptTextModel).toBe(DEFAULT_SETTINGS.scriptTextModel);
     expect(result.imagePromptTextModel).toBe(DEFAULT_SETTINGS.imagePromptTextModel);
+    expect(result.openaiReasoningEffort).toBe(DEFAULT_SETTINGS.openaiReasoningEffort);
+    expect(result.geminiThinkingLevel).toBe(DEFAULT_SETTINGS.geminiThinkingLevel);
     expect(result.imageModel).toBe(DEFAULT_SETTINGS.imageModel);
     expect(result.imageResolution).toBe(DEFAULT_SETTINGS.imageResolution);
     expect(result.cost).toEqual({ openai: { inputPer1MTokensUsd: 1 } });
@@ -101,7 +105,13 @@ describe('settings IPC handlers', () => {
     writeFileMock.mockResolvedValueOnce(undefined);
 
     const handler = getHandler('settings:set');
-    await handler({}, { imageModel: 'gemini-3-pro-image-preview', ttsEngine: 'google_tts', unknown: true });
+    await handler({}, {
+      imageModel: 'gemini-3-pro-image-preview',
+      ttsEngine: 'google_tts',
+      openaiReasoningEffort: 'high',
+      geminiThinkingLevel: 'low',
+      unknown: true,
+    });
 
     expect(writeFileMock).toHaveBeenCalledTimes(1);
     const [settingsPath, content] = writeFileMock.mock.calls[0];
@@ -110,6 +120,8 @@ describe('settings IPC handlers', () => {
     const saved = JSON.parse(String(content));
     expect(saved.imageModel).toBe('gemini-3-pro-image-preview');
     expect(saved.ttsEngine).toBe('gemini_tts');
+    expect(saved.openaiReasoningEffort).toBe('high');
+    expect(saved.geminiThinkingLevel).toBe('low');
     expect(saved.unknown).toBeUndefined();
   });
 });

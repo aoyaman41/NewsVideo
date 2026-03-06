@@ -7,12 +7,20 @@ import {
   DEFAULT_IMAGE_PROMPT_TEXT_MODEL,
   DEFAULT_IMAGE_RESOLUTION,
   DEFAULT_SCRIPT_TEXT_MODEL,
+  getDefaultGeminiThinkingLevel,
+  getDefaultOpenAIReasoningEffort,
+  getSupportedGeminiThinkingLevels,
+  getSupportedOpenAIReasoningEfforts,
   IMAGE_MODELS,
   IMAGE_RESOLUTION_LABELS,
   IMAGE_RESOLUTIONS,
   TEXT_COMPLETION_MODELS,
+  type GeminiThinkingLevel,
   type ImageModel,
   type ImageResolution,
+  type OpenAIReasoningEffort,
+  isGeminiTextCompletionModel,
+  isOpenAITextCompletionModel,
   type TextCompletionModel,
 } from '../../shared/constants/models';
 
@@ -31,6 +39,8 @@ interface Settings {
   ttsPitch: number;
   scriptTextModel: TextCompletionModel;
   imagePromptTextModel: TextCompletionModel;
+  openaiReasoningEffort: OpenAIReasoningEffort;
+  geminiThinkingLevel: GeminiThinkingLevel;
   imageModel: ImageModel;
   imageResolution: ImageResolution;
   defaultAspectRatio: '16:9' | '1:1' | '9:16';
@@ -52,6 +62,8 @@ const defaultSettings: Settings = {
   ttsPitch: 0,
   scriptTextModel: DEFAULT_SCRIPT_TEXT_MODEL,
   imagePromptTextModel: DEFAULT_IMAGE_PROMPT_TEXT_MODEL,
+  openaiReasoningEffort: getDefaultOpenAIReasoningEffort('gpt-5.2'),
+  geminiThinkingLevel: getDefaultGeminiThinkingLevel('gemini-3.1-pro'),
   imageModel: DEFAULT_IMAGE_MODEL,
   imageResolution: DEFAULT_IMAGE_RESOLUTION,
   defaultAspectRatio: '16:9',
@@ -65,6 +77,27 @@ const defaultSettings: Settings = {
   autoSaveInterval: 60,
   defaultProjectDir: '',
 };
+
+function formatOpenAIReasoningLabel(value: OpenAIReasoningEffort): string {
+  const labels: Record<Exclude<OpenAIReasoningEffort, 'default'>, string> = {
+    none: 'なし',
+    minimal: '最小',
+    low: '低',
+    medium: '中',
+    high: '高',
+    xhigh: '最高',
+  };
+  return value === 'default' ? 'モデル既定値' : labels[value];
+}
+
+function formatGeminiThinkingLabel(value: GeminiThinkingLevel): string {
+  const labels: Record<Exclude<GeminiThinkingLevel, 'default'>, string> = {
+    low: '低',
+    medium: '中',
+    high: '高',
+  };
+  return value === 'default' ? 'モデル既定値' : labels[value];
+}
 
 export function SettingsPage() {
   const navigate = useNavigate();
@@ -206,6 +239,56 @@ export function SettingsPage() {
     },
   };
 
+  const activeOpenAIModel = useMemo(() => {
+    if (isOpenAITextCompletionModel(settings.scriptTextModel)) return settings.scriptTextModel;
+    if (isOpenAITextCompletionModel(settings.imagePromptTextModel)) return settings.imagePromptTextModel;
+    return null;
+  }, [settings.imagePromptTextModel, settings.scriptTextModel]);
+
+  const activeGeminiModel = useMemo(() => {
+    if (isGeminiTextCompletionModel(settings.scriptTextModel)) return settings.scriptTextModel;
+    if (isGeminiTextCompletionModel(settings.imagePromptTextModel)) return settings.imagePromptTextModel;
+    return null;
+  }, [settings.imagePromptTextModel, settings.scriptTextModel]);
+
+  useEffect(() => {
+    setSettings((prev) => {
+      let changed = false;
+      const next = { ...prev };
+
+      if (activeOpenAIModel) {
+        const supported = getSupportedOpenAIReasoningEfforts(activeOpenAIModel);
+        if (!supported.includes(prev.openaiReasoningEffort as Exclude<OpenAIReasoningEffort, 'default'>)) {
+          next.openaiReasoningEffort = getDefaultOpenAIReasoningEffort(activeOpenAIModel);
+          changed = true;
+        }
+      }
+
+      if (activeGeminiModel) {
+        const supported = getSupportedGeminiThinkingLevels(activeGeminiModel);
+        if (!supported.includes(prev.geminiThinkingLevel as Exclude<GeminiThinkingLevel, 'default' | 'medium'>)) {
+          next.geminiThinkingLevel = getDefaultGeminiThinkingLevel(activeGeminiModel);
+          changed = true;
+        }
+      }
+
+      return changed ? next : prev;
+    });
+  }, [activeGeminiModel, activeOpenAIModel]);
+
+  const scriptOpenAIReasoningOptions = isOpenAITextCompletionModel(settings.scriptTextModel)
+    ? getSupportedOpenAIReasoningEfforts(settings.scriptTextModel)
+    : [];
+  const scriptGeminiThinkingOptions = isGeminiTextCompletionModel(settings.scriptTextModel)
+    ? getSupportedGeminiThinkingLevels(settings.scriptTextModel)
+    : [];
+  const imageOpenAIReasoningOptions = isOpenAITextCompletionModel(settings.imagePromptTextModel)
+    ? getSupportedOpenAIReasoningEfforts(settings.imagePromptTextModel)
+    : [];
+  const imageGeminiThinkingOptions = isGeminiTextCompletionModel(settings.imagePromptTextModel)
+    ? getSupportedGeminiThinkingLevels(settings.imagePromptTextModel)
+    : [];
+
   const handleSelectVideoFile = async (field: 'openingVideoPath' | 'endingVideoPath') => {
     try {
       const selected = await window.electronAPI.file.selectFile({
@@ -245,7 +328,7 @@ export function SettingsPage() {
         <div className="mx-auto flex w-full max-w-6xl flex-col gap-4">
           <div className="flex flex-wrap items-center gap-2 rounded-[12px] border border-[var(--nv-color-border)] bg-white p-2">
             {[
-              { key: 'api', label: 'API' },
+              { key: 'api', label: 'APIキー' },
               { key: 'video', label: '動画' },
               { key: 'audio', label: '音声' },
               { key: 'image', label: '画像' },
@@ -267,58 +350,8 @@ export function SettingsPage() {
           </div>
 
           {activeTab === 'api' && (
-            <Card title="API設定" subtitle="各サービスの接続状態を確認しながら保存">
+            <Card title="APIキー設定" subtitle="各サービスの接続状態を確認しながら保存">
               <div className="space-y-4">
-                <div className="rounded-[8px] border border-[var(--nv-color-border)] p-4">
-                  <h3 className="text-sm font-semibold text-slate-900">文章生成モデル</h3>
-                  <p className="mt-1 text-xs text-slate-500">
-                    スクリプト生成と画像プロンプト生成で別々に選択できます
-                  </p>
-                  <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2">
-                    <div>
-                      <label className="mb-1 block text-xs font-semibold text-slate-600">
-                        スクリプト生成モデル
-                      </label>
-                      <select
-                        value={settings.scriptTextModel}
-                        onChange={(e) =>
-                          setSettings((prev) => ({
-                            ...prev,
-                            scriptTextModel: e.target.value as Settings['scriptTextModel'],
-                          }))
-                        }
-                        className="nv-input"
-                      >
-                        {TEXT_COMPLETION_MODELS.map((model) => (
-                          <option key={model} value={model}>
-                            {model}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-                    <div>
-                      <label className="mb-1 block text-xs font-semibold text-slate-600">
-                        画像プロンプト生成モデル
-                      </label>
-                      <select
-                        value={settings.imagePromptTextModel}
-                        onChange={(e) =>
-                          setSettings((prev) => ({
-                            ...prev,
-                            imagePromptTextModel: e.target.value as Settings['imagePromptTextModel'],
-                          }))
-                        }
-                        className="nv-input"
-                      >
-                        {TEXT_COMPLETION_MODELS.map((model) => (
-                          <option key={model} value={model}>
-                            {model}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-                  </div>
-                </div>
                 {(Object.keys(serviceLabels) as ApiKeyService[]).map((service) => (
                   <div
                     key={service}
@@ -553,100 +586,260 @@ export function SettingsPage() {
           )}
 
           {activeTab === 'audio' && (
-            <Card title="デフォルト音声設定" subtitle="Gemini TTS の初期設定">
-              <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-                <div>
-                  <label className="mb-1 block text-xs font-semibold text-slate-600">
-                    TTSエンジン
-                  </label>
-                  <select
-                    value={settings.ttsEngine}
-                    onChange={(e) =>
-                      setSettings((prev) => ({
-                        ...prev,
-                        ttsEngine: e.target.value as Settings['ttsEngine'],
-                      }))
-                    }
-                    className="nv-input"
-                    disabled
-                  >
-                    <option value="gemini_tts">gemini-2.5-pro-preview-tts</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="mb-1 block text-xs font-semibold text-slate-600">話速</label>
-                  <div className="flex items-center gap-2 rounded-[8px] border border-[var(--nv-color-border)] px-3 py-2">
-                    <input
-                      type="range"
-                      min="0.5"
-                      max="2.0"
-                      step="0.1"
-                      value={settings.ttsSpeakingRate}
+            <>
+              <Card title="スクリプト生成AI" subtitle="ナレーション原稿を作るモデル設定">
+                <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                  <div>
+                    <label className="mb-1 block text-xs font-semibold text-slate-600">
+                      スクリプト生成モデル
+                    </label>
+                    <select
+                      value={settings.scriptTextModel}
                       onChange={(e) =>
                         setSettings((prev) => ({
                           ...prev,
-                          ttsSpeakingRate: Number(e.target.value),
+                          scriptTextModel: e.target.value as Settings['scriptTextModel'],
                         }))
                       }
-                      className="flex-1"
+                      className="nv-input"
+                    >
+                      {TEXT_COMPLETION_MODELS.map((model) => (
+                        <option key={model} value={model}>
+                          {model}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  {isOpenAITextCompletionModel(settings.scriptTextModel) ? (
+                    <div>
+                      <label className="mb-1 block text-xs font-semibold text-slate-600">
+                        推論強度
+                      </label>
+                      <select
+                        value={settings.openaiReasoningEffort}
+                        onChange={(e) =>
+                          setSettings((prev) => ({
+                            ...prev,
+                            openaiReasoningEffort:
+                              e.target.value as Settings['openaiReasoningEffort'],
+                          }))
+                        }
+                        className="nv-input"
+                      >
+                        {scriptOpenAIReasoningOptions.map((effort) => (
+                          <option key={effort} value={effort}>
+                            {formatOpenAIReasoningLabel(effort)} ({effort})
+                          </option>
+                        ))}
+                      </select>
+                      <p className="mt-1 text-xs text-slate-500">
+                        選択中の {settings.scriptTextModel} で使える値だけを表示しています。
+                      </p>
+                    </div>
+                  ) : (
+                    <div>
+                      <label className="mb-1 block text-xs font-semibold text-slate-600">
+                        思考レベル
+                      </label>
+                      <select
+                        value={settings.geminiThinkingLevel}
+                        onChange={(e) =>
+                          setSettings((prev) => ({
+                            ...prev,
+                            geminiThinkingLevel: e.target.value as Settings['geminiThinkingLevel'],
+                          }))
+                        }
+                        className="nv-input"
+                      >
+                        {scriptGeminiThinkingOptions.map((level) => (
+                          <option key={level} value={level}>
+                            {formatGeminiThinkingLabel(level)} ({level})
+                          </option>
+                        ))}
+                      </select>
+                      <p className="mt-1 text-xs text-slate-500">
+                        選択中の {settings.scriptTextModel} で使える値だけを表示しています。
+                      </p>
+                    </div>
+                  )}
+                </div>
+              </Card>
+
+              <Card title="デフォルト音声設定" subtitle="Gemini TTS の初期設定">
+                <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                  <div>
+                    <label className="mb-1 block text-xs font-semibold text-slate-600">
+                      TTSエンジン
+                    </label>
+                    <select
+                      value={settings.ttsEngine}
+                      onChange={(e) =>
+                        setSettings((prev) => ({
+                          ...prev,
+                          ttsEngine: e.target.value as Settings['ttsEngine'],
+                        }))
+                      }
+                      className="nv-input"
                       disabled
-                    />
-                    <span className="w-12 text-right text-xs text-slate-600">
-                      {settings.ttsSpeakingRate.toFixed(1)}x
-                    </span>
+                    >
+                      <option value="gemini_tts">gemini-2.5-pro-preview-tts</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-xs font-semibold text-slate-600">話速</label>
+                    <div className="flex items-center gap-2 rounded-[8px] border border-[var(--nv-color-border)] px-3 py-2">
+                      <input
+                        type="range"
+                        min="0.5"
+                        max="2.0"
+                        step="0.1"
+                        value={settings.ttsSpeakingRate}
+                        onChange={(e) =>
+                          setSettings((prev) => ({
+                            ...prev,
+                            ttsSpeakingRate: Number(e.target.value),
+                          }))
+                        }
+                        className="flex-1"
+                        disabled
+                      />
+                      <span className="w-12 text-right text-xs text-slate-600">
+                        {settings.ttsSpeakingRate.toFixed(1)}x
+                      </span>
+                    </div>
                   </div>
                 </div>
-              </div>
-            </Card>
+              </Card>
+            </>
           )}
 
           {activeTab === 'image' && (
-            <Card title="デフォルト画像設定" subtitle="画像生成モデルと解像度の選択">
-              <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-                <div>
-                  <label className="mb-1 block text-xs font-semibold text-slate-600">
-                    画像生成モデル
-                  </label>
-                  <select
-                    value={settings.imageModel}
-                    onChange={(e) =>
-                      setSettings((prev) => ({
-                        ...prev,
-                        imageModel: e.target.value as Settings['imageModel'],
-                      }))
-                    }
-                    className="nv-input"
-                  >
-                    {IMAGE_MODELS.map((model) => (
-                      <option key={model} value={model}>
-                        {model}
-                      </option>
-                    ))}
-                  </select>
+            <>
+              <Card title="画像プロンプト生成AI" subtitle="画像用の指示文を作るモデル設定">
+                <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                  <div>
+                    <label className="mb-1 block text-xs font-semibold text-slate-600">
+                      画像プロンプト生成モデル
+                    </label>
+                    <select
+                      value={settings.imagePromptTextModel}
+                      onChange={(e) =>
+                        setSettings((prev) => ({
+                          ...prev,
+                          imagePromptTextModel: e.target.value as Settings['imagePromptTextModel'],
+                        }))
+                      }
+                      className="nv-input"
+                    >
+                      {TEXT_COMPLETION_MODELS.map((model) => (
+                        <option key={model} value={model}>
+                          {model}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  {isOpenAITextCompletionModel(settings.imagePromptTextModel) ? (
+                    <div>
+                      <label className="mb-1 block text-xs font-semibold text-slate-600">
+                        推論強度
+                      </label>
+                      <select
+                        value={settings.openaiReasoningEffort}
+                        onChange={(e) =>
+                          setSettings((prev) => ({
+                            ...prev,
+                            openaiReasoningEffort:
+                              e.target.value as Settings['openaiReasoningEffort'],
+                          }))
+                        }
+                        className="nv-input"
+                      >
+                        {imageOpenAIReasoningOptions.map((effort) => (
+                          <option key={effort} value={effort}>
+                            {formatOpenAIReasoningLabel(effort)} ({effort})
+                          </option>
+                        ))}
+                      </select>
+                      <p className="mt-1 text-xs text-slate-500">
+                        選択中の {settings.imagePromptTextModel} で使える値だけを表示しています。
+                      </p>
+                    </div>
+                  ) : (
+                    <div>
+                      <label className="mb-1 block text-xs font-semibold text-slate-600">
+                        思考レベル
+                      </label>
+                      <select
+                        value={settings.geminiThinkingLevel}
+                        onChange={(e) =>
+                          setSettings((prev) => ({
+                            ...prev,
+                            geminiThinkingLevel: e.target.value as Settings['geminiThinkingLevel'],
+                          }))
+                        }
+                        className="nv-input"
+                      >
+                        {imageGeminiThinkingOptions.map((level) => (
+                          <option key={level} value={level}>
+                            {formatGeminiThinkingLabel(level)} ({level})
+                          </option>
+                        ))}
+                      </select>
+                      <p className="mt-1 text-xs text-slate-500">
+                        選択中の {settings.imagePromptTextModel} で使える値だけを表示しています。
+                      </p>
+                    </div>
+                  )}
                 </div>
-                <div>
-                  <label className="mb-1 block text-xs font-semibold text-slate-600">
-                    画像生成解像度
-                  </label>
-                  <select
-                    value={settings.imageResolution}
-                    onChange={(e) =>
-                      setSettings((prev) => ({
-                        ...prev,
-                        imageResolution: e.target.value as Settings['imageResolution'],
-                      }))
-                    }
-                    className="nv-input"
-                  >
-                    {IMAGE_RESOLUTIONS.map((resolution) => (
-                      <option key={resolution} value={resolution}>
-                        {IMAGE_RESOLUTION_LABELS[resolution]}
-                      </option>
-                    ))}
-                  </select>
+              </Card>
+
+              <Card title="デフォルト画像設定" subtitle="画像生成モデルと解像度の選択">
+                <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                  <div>
+                    <label className="mb-1 block text-xs font-semibold text-slate-600">
+                      画像生成モデル
+                    </label>
+                    <select
+                      value={settings.imageModel}
+                      onChange={(e) =>
+                        setSettings((prev) => ({
+                          ...prev,
+                          imageModel: e.target.value as Settings['imageModel'],
+                        }))
+                      }
+                      className="nv-input"
+                    >
+                      {IMAGE_MODELS.map((model) => (
+                        <option key={model} value={model}>
+                          {model}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-xs font-semibold text-slate-600">
+                      画像生成解像度
+                    </label>
+                    <select
+                      value={settings.imageResolution}
+                      onChange={(e) =>
+                        setSettings((prev) => ({
+                          ...prev,
+                          imageResolution: e.target.value as Settings['imageResolution'],
+                        }))
+                      }
+                      className="nv-input"
+                    >
+                      {IMAGE_RESOLUTIONS.map((resolution) => (
+                        <option key={resolution} value={resolution}>
+                          {IMAGE_RESOLUTION_LABELS[resolution]}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
                 </div>
-              </div>
-            </Card>
+              </Card>
+            </>
           )}
 
           {activeTab === 'other' && (

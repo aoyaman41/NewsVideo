@@ -9,10 +9,18 @@ import {
   DEFAULT_SCRIPT_TEXT_MODEL,
   FIXED_IMAGE_STYLE_PRESET,
   GEMINI_TEXT_COMPLETION_MODEL,
-  OPENAI_TEXT_COMPLETION_MODEL,
+  getDefaultGeminiThinkingLevel,
+  getDefaultOpenAIReasoningEffort,
+  getSupportedGeminiThinkingLevels,
+  getSupportedOpenAIReasoningEfforts,
+  isOpenAITextCompletionModel,
   isTextCompletionModel,
+  isGeminiTextCompletionModel,
+  type GeminiThinkingLevel,
+  type OpenAIReasoningEffort,
   type TextCompletionModel,
 } from '../../shared/constants/models';
+import { DEFAULT_SETTINGS, normalizeSettings } from '../../shared/settings/appSettings';
 import { sanitizeImagePromptForRendering } from '../../shared/utils/imagePromptSanitizer';
 
 // シークレットファイルのパス
@@ -20,8 +28,13 @@ const getSecretsPath = () => path.join(app.getPath('userData'), 'secrets.enc');
 const getSettingsPath = () => path.join(app.getPath('userData'), 'settings.json');
 
 type TextGenerationScope = 'script' | 'image_prompt';
-const GEMINI_3_PRO_THINKING_LEVEL = ThinkingLevel.HIGH;
 const GEMINI_3_PRO_API_MODEL_ID = 'gemini-3-pro-preview';
+
+type TextGenerationConfig = {
+  model: TextCompletionModel;
+  openaiReasoningEffort: OpenAIReasoningEffort;
+  geminiThinkingLevel: GeminiThinkingLevel;
+};
 
 // APIキーを読み込み
 async function readApiKey(service: string): Promise<string | null> {
@@ -173,6 +186,7 @@ async function generateGeminiTextContent(params: {
   userPrompt: string;
   temperature: number;
   responseMimeType?: string;
+  thinkingLevel: GeminiThinkingLevel;
 }): Promise<{ text: string; usage: OpenAIUsageSummary | null }> {
   const apiKey = await readApiKey('google_ai');
   if (!apiKey) {
@@ -181,6 +195,14 @@ async function generateGeminiTextContent(params: {
     );
   }
   const ai = new GoogleGenAI({ apiKey });
+  const thinkingLevel =
+    params.thinkingLevel === 'high'
+      ? ThinkingLevel.HIGH
+      : params.thinkingLevel === 'medium'
+        ? ThinkingLevel.MEDIUM
+      : params.thinkingLevel === 'low'
+        ? ThinkingLevel.LOW
+        : null;
   const response = await withRetry(async () => {
     return ai.models.generateContent({
       model: params.model,
@@ -188,10 +210,7 @@ async function generateGeminiTextContent(params: {
       config: {
         systemInstruction: params.systemPrompt,
         temperature: params.temperature,
-        thinkingConfig: {
-          // Gemini 3 Pro は high 寄せで使用
-          thinkingLevel: GEMINI_3_PRO_THINKING_LEVEL,
-        },
+        ...(thinkingLevel ? { thinkingConfig: { thinkingLevel } } : {}),
         ...(params.responseMimeType ? { responseMimeType: params.responseMimeType } : {}),
       },
     });
@@ -219,21 +238,45 @@ function resolveGeminiApiModel(selectedModel: TextCompletionModel): string {
   return selectedModel;
 }
 
-async function readTextCompletionModel(scope: TextGenerationScope): Promise<TextCompletionModel> {
-  const fallback =
+function resolveOpenAIReasoningEffort(
+  value: OpenAIReasoningEffort
+): Exclude<OpenAIReasoningEffort, 'default'> | null {
+  return value === 'default' ? null : value;
+}
+
+async function readTextGenerationConfig(scope: TextGenerationScope): Promise<TextGenerationConfig> {
+  const fallbackModel =
     scope === 'script' ? DEFAULT_SCRIPT_TEXT_MODEL : DEFAULT_IMAGE_PROMPT_TEXT_MODEL;
+  const fallback: TextGenerationConfig = {
+    model: fallbackModel,
+    openaiReasoningEffort: DEFAULT_SETTINGS.openaiReasoningEffort,
+    geminiThinkingLevel: DEFAULT_SETTINGS.geminiThinkingLevel,
+  };
   try {
     const settingsPath = getSettingsPath();
     const content = await fs.readFile(settingsPath, 'utf-8');
-    const settings = JSON.parse(content) as {
-      scriptTextModel?: string;
-      imagePromptTextModel?: string;
+    const settings = normalizeSettings(JSON.parse(content));
+    const selectedModel = scope === 'script' ? settings.scriptTextModel : settings.imagePromptTextModel;
+    const model = isTextCompletionModel(selectedModel) ? selectedModel : fallback.model;
+    const openaiReasoningEffort = isOpenAITextCompletionModel(model)
+      ? getSupportedOpenAIReasoningEfforts(model).includes(
+          settings.openaiReasoningEffort as Exclude<OpenAIReasoningEffort, 'default'>
+        )
+        ? settings.openaiReasoningEffort
+        : getDefaultOpenAIReasoningEffort(model)
+      : settings.openaiReasoningEffort;
+    const geminiThinkingLevel = isGeminiTextCompletionModel(model)
+      ? getSupportedGeminiThinkingLevels(model).includes(
+          settings.geminiThinkingLevel as Exclude<GeminiThinkingLevel, 'default' | 'medium'>
+        )
+        ? settings.geminiThinkingLevel
+        : getDefaultGeminiThinkingLevel(model)
+      : settings.geminiThinkingLevel;
+    return {
+      model,
+      openaiReasoningEffort,
+      geminiThinkingLevel,
     };
-    const selectedRaw =
-      scope === 'script' ? settings.scriptTextModel : settings.imagePromptTextModel;
-    if (selectedRaw && isTextCompletionModel(selectedRaw)) {
-      return selectedRaw;
-    }
   } catch {
     // 設定未作成時はデフォルトを利用
   }
@@ -374,7 +417,8 @@ ipcMain.handle(
     article: Article,
     options: ScriptOptions = {}
   ): Promise<{ parts: GeneratedPart[]; usage: OpenAIUsageSummary | null }> => {
-    const selectedModel = await readTextCompletionModel('script');
+    const generationConfig = await readTextGenerationConfig('script');
+    const selectedModel = generationConfig.model;
     const scriptSystemPrompt =
       'あなたは報道動画のスクリプトライターです。与えられた記事を読みやすいナレーションスクリプトに変換します。';
     const scriptUserPrompt = createScriptGenerationPrompt(article, options);
@@ -389,13 +433,14 @@ ipcMain.handle(
     };
     let usage: OpenAIUsageSummary | null = null;
 
-    if (selectedModel === OPENAI_TEXT_COMPLETION_MODEL) {
+    if (isOpenAITextCompletionModel(selectedModel)) {
       const apiKey = await readApiKey('openai');
       if (!apiKey) {
         throw new Error('OpenAI APIキーが設定されていません。設定画面からAPIキーを入力してください。');
       }
 
       const openai = new OpenAI({ apiKey });
+      const reasoningEffort = resolveOpenAIReasoningEffort(generationConfig.openaiReasoningEffort);
       const response = await withRetry(async () => {
         return openai.chat.completions.parse({
           model: selectedModel,
@@ -405,6 +450,7 @@ ipcMain.handle(
           ],
           response_format: { type: 'json_object' },
           temperature: 0.7,
+          ...(reasoningEffort ? { reasoning_effort: reasoningEffort } : {}),
         });
       });
 
@@ -423,6 +469,7 @@ ipcMain.handle(
         userPrompt: scriptUserPrompt,
         temperature: 0.7,
         responseMimeType: 'application/json',
+        thinkingLevel: generationConfig.geminiThinkingLevel,
       });
       parsed = parseJsonResponse(geminiResult.text);
       usage = geminiResult.usage;
@@ -1276,31 +1323,34 @@ ${partContext}
 async function extractSinglePartPromptCandidate(params: {
   articleContext: string;
   partContext: string;
-  selectedModel: TextCompletionModel;
+  generationConfig: TextGenerationConfig;
 }): Promise<{ candidate: Record<string, unknown> | undefined; usage: OpenAIUsageSummary | null }> {
   const { systemPrompt, userPrompt } = createSinglePartExtractionPrompts(
     params.articleContext,
     params.partContext
   );
+  const selectedModel = params.generationConfig.model;
 
   let resolvedParsed: ImagePromptExtraction | null = null;
   let usage: OpenAIUsageSummary | null = null;
 
-  if (params.selectedModel === OPENAI_TEXT_COMPLETION_MODEL) {
+  if (isOpenAITextCompletionModel(selectedModel)) {
     const apiKey = await readApiKey('openai');
     if (!apiKey) {
       throw new Error('OpenAI APIキーが設定されていません。設定画面からAPIキーを入力してください。');
     }
 
     const openai = new OpenAI({ apiKey });
+    const reasoningEffort = resolveOpenAIReasoningEffort(params.generationConfig.openaiReasoningEffort);
     const response = await withRetry(async () => {
       return openai.chat.completions.create({
-        model: params.selectedModel,
+        model: selectedModel,
         messages: [
           { role: 'system', content: systemPrompt },
           { role: 'user', content: userPrompt },
         ],
         temperature: 0.3,
+        ...(reasoningEffort ? { reasoning_effort: reasoningEffort } : {}),
       });
     });
 
@@ -1335,12 +1385,13 @@ async function extractSinglePartPromptCandidate(params: {
     }
     usage = mapOpenAIUsage(response.usage, response.model);
   } else {
-    const apiModel = resolveGeminiApiModel(params.selectedModel);
+    const apiModel = resolveGeminiApiModel(selectedModel);
     const geminiResult = await generateGeminiTextContent({
       model: apiModel,
       systemPrompt,
       userPrompt,
       temperature: 0.3,
+      thinkingLevel: params.generationConfig.geminiThinkingLevel,
     });
     const parsed = tryParseJsonResponse<unknown>(geminiResult.text);
     if (parsed) {
@@ -1400,7 +1451,7 @@ ipcMain.handle(
     const bodyTextForPrompt = cleanedBodyText || article.bodyText || '';
     const articleText = `${article.title}\n${article.source ?? ''}\n${bodyTextForPrompt}`.trim();
     const articleContext = `タイトル: ${article.title}\n${article.source ? `出典: ${article.source}` : ''}\n本文:\n${bodyTextForPrompt}`;
-    const selectedModel = await readTextCompletionModel('image_prompt');
+    const generationConfig = await readTextGenerationConfig('image_prompt');
     const extractionResults = await runWithConcurrency(
       parts,
       10,
@@ -1417,7 +1468,7 @@ ipcMain.handle(
         return extractSinglePartPromptCandidate({
           articleContext,
           partContext,
-          selectedModel,
+          generationConfig,
         });
       }
     );
@@ -1473,11 +1524,11 @@ ipcMain.handle(
       `要約: ${targetPart.summary || ''}`,
       `ナレーション: ${targetPart.scriptText || ''}`,
     ].join('\n');
-    const selectedModel = await readTextCompletionModel('image_prompt');
+    const generationConfig = await readTextGenerationConfig('image_prompt');
     const { candidate, usage } = await extractSinglePartPromptCandidate({
       articleContext,
       partContext,
-      selectedModel,
+      generationConfig,
     });
     const promptText = buildImagePromptText(candidate, { articleText, styleConfig });
 
@@ -1509,7 +1560,8 @@ ipcMain.handle(
     comment: string
   ): Promise<{ text: string; usage: OpenAIUsageSummary | null }> => {
     const scope: TextGenerationScope = target.type === 'script' ? 'script' : 'image_prompt';
-    const selectedModel = await readTextCompletionModel(scope);
+    const generationConfig = await readTextGenerationConfig(scope);
+    const selectedModel = generationConfig.model;
     const isScriptTarget = target.type === 'script';
     const systemPrompt = isScriptTarget
       ? 'あなたは報道動画のスクリプトエディターです。与えられたコメントに基づいてスクリプトを修正します。'
@@ -1552,13 +1604,14 @@ JSONのみを出力してください。`;
     let text = '';
     let usage: OpenAIUsageSummary | null = null;
 
-    if (selectedModel === OPENAI_TEXT_COMPLETION_MODEL) {
+    if (isOpenAITextCompletionModel(selectedModel)) {
       const apiKey = await readApiKey('openai');
       if (!apiKey) {
         throw new Error('OpenAI APIキーが設定されていません。設定画面からAPIキーを入力してください。');
       }
 
       const openai = new OpenAI({ apiKey });
+      const reasoningEffort = resolveOpenAIReasoningEffort(generationConfig.openaiReasoningEffort);
       const response = await withRetry(async () => {
         return openai.chat.completions.create({
           model: selectedModel,
@@ -1567,6 +1620,7 @@ JSONのみを出力してください。`;
             { role: 'user', content: userPrompt },
           ],
           temperature: 0.7,
+          ...(reasoningEffort ? { reasoning_effort: reasoningEffort } : {}),
         });
       });
       text = response.choices[0]?.message?.content || '';
@@ -1578,6 +1632,7 @@ JSONのみを出力してください。`;
         systemPrompt,
         userPrompt,
         temperature: 0.7,
+        thinkingLevel: generationConfig.geminiThinkingLevel,
       });
       text = geminiResult.text;
       usage = geminiResult.usage;
