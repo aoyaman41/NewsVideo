@@ -13,6 +13,7 @@ import {
   isTextCompletionModel,
   type TextCompletionModel,
 } from '../../shared/constants/models';
+import { sanitizeImagePromptForRendering } from '../../shared/utils/imagePromptSanitizer';
 
 // シークレットファイルのパス
 const getSecretsPath = () => path.join(app.getPath('userData'), 'secrets.enc');
@@ -289,14 +290,6 @@ function normalizeSlideSpecText(value: unknown): string {
   return text.trim();
 }
 
-function stripStyleLinesFromSlideSpec(text: string): string {
-  const styleLinePattern = /^(視覚トーン|配色|色調|トーン|スタイル|質感)\s*[:：]/;
-  const filteredLines = text
-    .split(/\r?\n/)
-    .filter((line) => !styleLinePattern.test(line.trim()));
-  return filteredLines.join('\n').replace(/\n{3,}/g, '\n\n').trim();
-}
-
 // 記事データの型
 interface Article {
   title: string;
@@ -540,10 +533,10 @@ type ImagePromptExtraction = z.infer<typeof ImagePromptExtractionSchema>;
 const INFOGRAPHIC_STYLE_PRESET: StylePresetConfig = {
   id: FIXED_IMAGE_STYLE_PRESET,
   layoutVariants: {
-    dataAndLocation: '左右2カラム。左60%に主ビジュアル、右40%を上下2段（上:地図、下:図表）',
-    dataOnly: '左右2カラム。左60%に主ビジュアル、右40%に図表パネル',
-    locationOnly: '左右2カラム。左60%に主ビジュアル、右40%に地図パネル',
-    general: '左右2カラム。左60%に主ビジュアル、右40%に補助情報パネル',
+    dataAndLocation: '左右2カラム。左に主ビジュアルを大きく、右を上下2段に分けて上に地図、下に図表を置く',
+    dataOnly: '左右2カラム。左に主ビジュアルを大きく、右に図表パネルをまとめる',
+    locationOnly: '左右2カラム。左に主ビジュアルを大きく、右に地図パネルを置く',
+    general: '左右2カラム。左に主ビジュアルを大きく、右に補助情報パネルを置く',
   },
   negative:
     '人物, 顔, 手, 群衆, 肖像, インタビュー, アナウンサー, 記者, 番組セット, テロップ, 速報帯, ティッカー, ニュース名, 番組名, 局名, 番組タイトル, カテゴリー名, ロゴ, 透かし, QRコード, 商標, 写真, 実写, 写真風, 写実, フォトリアル, フォトリアリスティック, カメラ風, 過度なネオン, 強コントラスト, ギラついた光沢, サイバーパンク, アニメ調',
@@ -1049,7 +1042,7 @@ function buildImagePromptText(
       (p as { compositionNote?: unknown }).compositionNote
   );
   if (directSlideSpec) {
-    const normalizedSlideSpec = stripStyleLinesFromSlideSpec(directSlideSpec);
+    const normalizedSlideSpec = sanitizeImagePromptForRendering(directSlideSpec);
     if (normalizedSlideSpec) {
       return truncateTextByChars(normalizedSlideSpec, MAX_IMAGE_PROMPT_CHARS);
     }
@@ -1156,7 +1149,7 @@ function buildImagePromptText(
     'テキスト: 見出し・ラベル・数値のみ。長文禁止',
   ].filter((line) => line.length > 0);
 
-  const promptText = promptLines.join('\n');
+  const promptText = sanitizeImagePromptForRendering(promptLines.join('\n'));
   return truncateTextByChars(promptText, MAX_IMAGE_PROMPT_CHARS);
 }
 
@@ -1171,7 +1164,7 @@ function createSinglePartExtractionPrompts(articleContext: string, partContext: 
 制約:
 - 目的は「このパートを1枚で正確に伝える」こと。
 - 配置指示は解釈余地が出ないように書く（何を/どこに/どの大きさ/どの順に見るか）。
-- 要素ごとにサイズ比（例: 左60%、右上20%、右下20%）または大中小を必ず示す。
+- 要素ごとのサイズ感は「大・中・小」または「主・補助」で示す。割合数値は使わない。
 - 視線誘導（最初に何を見せ、次に何を読ませるか）を必ず示す。
 - 画面内テキストは短ラベルのみ（1ラベル8文字以内、最大6個）。
 - 人物・顔・手・ロゴ・透かし・番組名・QRコードは禁止。
@@ -1192,10 +1185,10 @@ function createSinglePartExtractionPrompts(articleContext: string, partContext: 
 レイアウト方針:
 視線誘導:
 配置:
-- 左(サイズ/内容):
-- 中央(サイズ/内容):
-- 右上(サイズ/内容):
-- 右下(サイズ/内容):
+- 左(サイズ感/内容):
+- 中央(サイズ感/内容):
+- 右上(サイズ感/内容):
+- 右下(サイズ感/内容):
 要素:
 - データ要素:
 - 地理要素:
@@ -1219,13 +1212,13 @@ function createSinglePartExtractionPrompts(articleContext: string, partContext: 
 - 第2: 上昇幅の数値
 - 第3: 地理的な背景要因
 主ビジュアル: 原油ドラム缶と上向き矢印
-レイアウト方針: 左60%に主題、右40%を上下2段で根拠を配置
+レイアウト方針: 左に主題を大きく置き、右を上下2段に分けて根拠を配置
 視線誘導: 左中央の矢印 → 右下の数値グラフ → 右上の地図
 配置:
-- 左(サイズ/内容): 60% / 原油ドラム缶群と上昇矢印
-- 中央(サイズ/内容): 0% / 未使用
-- 右上(サイズ/内容): 20% / 産油地域の簡易地図
-- 右下(サイズ/内容): 20% / 価格推移の折れ線グラフ
+- 左(サイズ感/内容): 大 / 原油ドラム缶群と上昇矢印
+- 中央(サイズ感/内容): 未使用 / なし
+- 右上(サイズ感/内容): 小 / 産油地域の簡易地図
+- 右下(サイズ感/内容): 小 / 価格推移の折れ線グラフ
 要素:
 - データ要素: 直近高値、前日比
 - 地理要素: 中東の産油地域
@@ -1233,7 +1226,7 @@ function createSinglePartExtractionPrompts(articleContext: string, partContext: 
 画面テキスト:
 - 1: 原油先物
 - 2: 前日比
-- 3: +5%
+- 3: 上昇
 - 4:
 - 5:
 - 6:
@@ -1249,13 +1242,13 @@ function createSinglePartExtractionPrompts(articleContext: string, partContext: 
 - 第2: 前年同月比の伸び
 - 第3: 国別の内訳
 主ビジュアル: 空港到着ゲートと増加アイコン
-レイアウト方針: 左55%を主ビジュアル、右45%を上下に分割
+レイアウト方針: 左に主ビジュアルを大きく置き、右を上下に分割
 視線誘導: 左の主ビジュアル → 右下の棒グラフ → 右上の円グラフ
 配置:
-- 左(サイズ/内容): 55% / 到着ゲート図解と増加アイコン
-- 中央(サイズ/内容): 0% / 未使用
-- 右上(サイズ/内容): 20% / 国別比率の円グラフ
-- 右下(サイズ/内容): 25% / 月次推移の棒グラフ
+- 左(サイズ感/内容): 大 / 到着ゲート図解と増加アイコン
+- 中央(サイズ感/内容): 未使用 / なし
+- 右上(サイズ感/内容): 小 / 国別比率の円グラフ
+- 右下(サイズ感/内容): 中 / 月次推移の棒グラフ
 要素:
 - データ要素: 前年同月比、月次推移
 - 地理要素: 主要3市場

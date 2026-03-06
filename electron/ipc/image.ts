@@ -12,6 +12,7 @@ import {
   type ImageModel,
   type ImageResolution,
 } from '../../shared/constants/models';
+import { sanitizeImagePromptForRendering } from '../../shared/utils/imagePromptSanitizer';
 import { logger } from '../utils/logger';
 
 // シークレットファイルのパス
@@ -132,10 +133,10 @@ const INFOGRAPHIC_STYLE_PRESET: StylePresetConfig = {
   background: '余白を十分に取った明るい無地背景',
   density: '低め',
   layoutVariants: {
-    dataAndLocation: '左右2カラム。左60%に主ビジュアル、右40%を上下2段（上:地図、下:図表）',
-    dataOnly: '左右2カラム。左60%に主ビジュアル、右40%に図表パネル',
-    locationOnly: '左右2カラム。左60%に主ビジュアル、右40%に地図パネル',
-    general: '左右2カラム。左60%に主ビジュアル、右40%に補助情報パネル',
+    dataAndLocation: '左右2カラム。左に主ビジュアルを大きく、右を上下2段に分けて上に地図、下に図表を置く',
+    dataOnly: '左右2カラム。左に主ビジュアルを大きく、右に図表パネルをまとめる',
+    locationOnly: '左右2カラム。左に主ビジュアルを大きく、右に地図パネルを置く',
+    general: '左右2カラム。左に主ビジュアルを大きく、右に補助情報パネルを置く',
   },
   negative:
     '人物, 顔, 手, 群衆, 肖像, インタビュー, アナウンサー, 記者, 番組セット, テロップ, 速報帯, ティッカー, ニュース名, 番組名, 局名, 番組タイトル, カテゴリー名, ロゴ, 透かし, QRコード, 商標, 写真, 実写, 写真風, 写実, フォトリアル, フォトリアリスティック, カメラ風, 過度なネオン, 強コントラスト, ギラついた光沢, サイバーパンク, アニメ調',
@@ -153,8 +154,8 @@ const IMAGE_SYSTEM_POLICY_CORE = `タスク:
 - 「指示」にない要素・見出し・数値・キャプションを追加しない。
 - 画面内文字として描画してよいのは「指示」内の「画面テキスト」欄にある項目のみ。
 - 「配置」「レイアウト方針」「要素」「情報の優先順位」などの見出し・説明文は描画しない。
-- 「左45%」「右45%」「右上20%」などのサイズ比・座標メモは構図メタ情報として扱い、文字として描画しない。
-- 「%」記号を文字として描画してよいのは、「画面テキスト」欄に含まれる値のみ。
+- レイアウト用の割合値・サイズメモ・座標メモは構図メタ情報として扱い、文字として描画しない。
+- 割合値は「画面テキスト」欄に明示されたものだけを文字として扱う。
 - 文字を配置する場合は短いラベルまたは数値のみ。長文を配置しない。
 - 写実表現は禁止。`;
 
@@ -226,11 +227,12 @@ function buildImageSystemInstruction(prompt: ImagePrompt): string {
 }
 
 function buildImagePromptText(prompt: ImagePrompt): string {
-  const userPromptText = truncateTextByChars(prompt.prompt, MAX_USER_PROMPT_CHARS);
+  const sanitizedPrompt = sanitizeImagePromptForRendering(prompt.prompt);
+  const userPromptText = truncateTextByChars(sanitizedPrompt, MAX_USER_PROMPT_CHARS);
   const composedPrompt = [
     '描画ルール:',
     '- 画面内の文字は「画面テキスト」欄の項目のみを使用する。',
-    '- 配置・レイアウト方針・要素・情報の優先順位・サイズ比（例: 左45%、右上20%）は画面に文字として描画しない。',
+    '- 配置・レイアウト方針・要素・情報の優先順位に含まれるレイアウト用メモは画面に文字として描画しない。',
     '指示:',
     userPromptText,
   ]
