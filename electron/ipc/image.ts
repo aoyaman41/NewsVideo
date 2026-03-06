@@ -131,7 +131,7 @@ const INFOGRAPHIC_STYLE_PRESET: StylePresetConfig = {
     '背景 #F6F7F9、主要線 #1F3552、補助線 #5C6B7A、アクセント #2C8E8A（単色）、文字 #0F172A',
   lighting: 'フラットでマットな質感',
   background: '余白を十分に取った明るい無地背景',
-  density: '低め',
+  density: 'low',
   layoutVariants: {
     dataAndLocation: '左右2カラム。左に主ビジュアルを大きく、右を上下2段に分けて上に地図、下に図表を置く',
     dataOnly: '左右2カラム。左に主ビジュアルを大きく、右に図表パネルをまとめる',
