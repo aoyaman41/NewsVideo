@@ -289,6 +289,14 @@ function normalizeSlideSpecText(value: unknown): string {
   return text.trim();
 }
 
+function stripStyleLinesFromSlideSpec(text: string): string {
+  const styleLinePattern = /^(視覚トーン|配色|色調|トーン|スタイル|質感)\s*[:：]/;
+  const filteredLines = text
+    .split(/\r?\n/)
+    .filter((line) => !styleLinePattern.test(line.trim()));
+  return filteredLines.join('\n').replace(/\n{3,}/g, '\n\n').trim();
+}
+
 // 記事データの型
 interface Article {
   title: string;
@@ -467,11 +475,6 @@ ipcMain.handle(
 
 type StylePresetConfig = {
   id: string;
-  baseStyle: string;
-  colorPalette: string;
-  lighting: string;
-  background: string;
-  density: 'low' | 'medium' | 'high';
   layoutVariants: {
     dataAndLocation: string;
     dataOnly: string;
@@ -536,11 +539,6 @@ type ImagePromptExtraction = z.infer<typeof ImagePromptExtractionSchema>;
 
 const INFOGRAPHIC_STYLE_PRESET: StylePresetConfig = {
   id: FIXED_IMAGE_STYLE_PRESET,
-  baseStyle: 'フラットで明瞭なベクター調、非写実',
-  colorPalette: 'white and light gray base, dark navy structure, one muted teal accent',
-  lighting: 'flat and matte',
-  background: 'plain light background with generous whitespace',
-  density: 'low',
   layoutVariants: {
     dataAndLocation: '左右2カラム。左60%に主ビジュアル、右40%を上下2段（上:地図、下:図表）',
     dataOnly: '左右2カラム。左60%に主ビジュアル、右40%に図表パネル',
@@ -1051,7 +1049,10 @@ function buildImagePromptText(
       (p as { compositionNote?: unknown }).compositionNote
   );
   if (directSlideSpec) {
-    return truncateTextByChars(directSlideSpec, MAX_IMAGE_PROMPT_CHARS);
+    const normalizedSlideSpec = stripStyleLinesFromSlideSpec(directSlideSpec);
+    if (normalizedSlideSpec) {
+      return truncateTextByChars(normalizedSlideSpec, MAX_IMAGE_PROMPT_CHARS);
+    }
   }
 
   const rawTopic = normalizeString(
@@ -1152,7 +1153,6 @@ function buildImagePromptText(
     ...slotInstructions.map((line) => `- ${line}`),
     detailLines.length > 0 ? '要素:' : '',
     ...detailLines,
-    '表現: フラットなベクター調、写真・実写なし',
     'テキスト: 見出し・ラベル・数値のみ。長文禁止',
   ].filter((line) => line.length > 0);
 
@@ -1173,7 +1173,6 @@ function createSinglePartExtractionPrompts(articleContext: string, partContext: 
 - 配置指示は解釈余地が出ないように書く（何を/どこに/どの大きさ/どの順に見るか）。
 - 要素ごとにサイズ比（例: 左60%、右上20%、右下20%）または大中小を必ず示す。
 - 視線誘導（最初に何を見せ、次に何を読ませるか）を必ず示す。
-- 配色とトーン（背景色、主色、アクセント色、線の太さ、情報密度）を必ず示す。
 - 画面内テキストは短ラベルのみ（1ラベル8文字以内、最大6個）。
 - 人物・顔・手・ロゴ・透かし・番組名・QRコードは禁止。
 - 推測で新事実を追加しない。入力にない事実は書かない。
@@ -1185,7 +1184,6 @@ function createSinglePartExtractionPrompts(articleContext: string, partContext: 
 伝える1文:
 背景要約:
 意図:
-視覚トーン:
 情報の優先順位:
 - 第1:
 - 第2:
@@ -1209,8 +1207,6 @@ function createSinglePartExtractionPrompts(articleContext: string, partContext: 
 - 4:
 - 5:
 - 6:
-禁止:
-- 
 
 出力例1:
 スライド仕様:
@@ -1218,7 +1214,6 @@ function createSinglePartExtractionPrompts(articleContext: string, partContext: 
 伝える1文: 供給懸念で原油先物が上昇した
 背景要約: 産油地域の不安定化と需給懸念
 意図: 価格上昇の理由と規模を一目で理解させる
-視覚トーン: 明るい灰背景、濃紺を主線、ティールを強調、線は中太、情報密度は低め
 情報の優先順位:
 - 第1: 原油価格が上昇した事実
 - 第2: 上昇幅の数値
@@ -1242,8 +1237,6 @@ function createSinglePartExtractionPrompts(articleContext: string, partContext: 
 - 4:
 - 5:
 - 6:
-禁止:
-- 人物、顔、ロゴ
 
 出力例2:
 スライド仕様:
@@ -1251,7 +1244,6 @@ function createSinglePartExtractionPrompts(articleContext: string, partContext: 
 伝える1文: 訪日客数が前年同月比で回復した
 背景要約: 入国規制緩和後の需要回復
 意図: 回復傾向を数値と内訳で短時間に把握させる
-視覚トーン: 白背景、濃紺の骨格、緑を増加色、線は細中、情報密度は中
 情報の優先順位:
 - 第1: 訪日客数が回復した事実
 - 第2: 前年同月比の伸び
@@ -1275,8 +1267,7 @@ function createSinglePartExtractionPrompts(articleContext: string, partContext: 
 - 4:
 - 5:
 - 6:
-禁止:
-- 人物の顔アップ、透かし、番組名`;
+`;
 
   const userPrompt = `記事情報:
 ${articleContext}

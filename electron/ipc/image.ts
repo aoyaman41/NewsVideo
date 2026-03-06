@@ -126,7 +126,8 @@ type StylePresetConfig = {
 const INFOGRAPHIC_STYLE_PRESET: StylePresetConfig = {
   id: FIXED_IMAGE_STYLE_PRESET,
   baseStyle: 'フラットなベクター調、非写実、情報整理しやすい明瞭な図解表現',
-  colorPalette: '白と淡いグレーを基調、濃紺で構造化、彩度を抑えたティールを1色アクセント',
+  colorPalette:
+    '背景 #F6F7F9、主要線 #1F3552、補助線 #5C6B7A、アクセント #2C8E8A（単色）、文字 #0F172A',
   lighting: 'フラットでマットな質感',
   background: '余白を十分に取った明るい無地背景',
   density: '低め',
@@ -148,8 +149,12 @@ const IMAGE_SYSTEM_POLICY_CORE = `タスク:
 「指示」ブロックの内容に基づき、1枚の画像を生成する。
 
 制約:
-- 「指示」ブロックを最優先の描画仕様として扱う。
+- 構図・要素配置・情報優先度は「指示」ブロックを最優先の描画仕様として扱う。
 - 「指示」にない要素・見出し・数値・キャプションを追加しない。
+- 画面内文字として描画してよいのは「指示」内の「画面テキスト」欄にある項目のみ。
+- 「配置」「レイアウト方針」「要素」「情報の優先順位」などの見出し・説明文は描画しない。
+- 「左45%」「右45%」「右上20%」などのサイズ比・座標メモは構図メタ情報として扱い、文字として描画しない。
+- 「%」記号を文字として描画してよいのは、「画面テキスト」欄に含まれる値のみ。
 - 文字を配置する場合は短いラベルまたは数値のみ。長文を配置しない。
 - 写実表現は禁止。`;
 
@@ -211,7 +216,7 @@ function buildImageSystemInstruction(prompt: ImagePrompt): string {
 
   const systemInstruction = [
     IMAGE_SYSTEM_POLICY_CORE,
-    'スタイル方針:\n指示内のスタイル指定を最優先とし、下記ガイドに矛盾しないこと。',
+    'スタイル方針:\n配色・質感・背景・情報密度は下記スタイルを固定適用する。指示内の色・トーン指定は採用しない。',
     `スタイル:\n${styleLines}`,
     strictAvoidSection,
   ]
@@ -223,6 +228,9 @@ function buildImageSystemInstruction(prompt: ImagePrompt): string {
 function buildImagePromptText(prompt: ImagePrompt): string {
   const userPromptText = truncateTextByChars(prompt.prompt, MAX_USER_PROMPT_CHARS);
   const composedPrompt = [
+    '描画ルール:',
+    '- 画面内の文字は「画面テキスト」欄の項目のみを使用する。',
+    '- 配置・レイアウト方針・要素・情報の優先順位・サイズ比（例: 左45%、右上20%）は画面に文字として描画しない。',
     '指示:',
     userPromptText,
   ]

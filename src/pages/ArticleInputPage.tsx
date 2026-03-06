@@ -453,7 +453,7 @@ export function ArticleInputPage() {
 
       type AudioPipelineResult = {
         audioAdded: Project['audio'];
-        partAudioById: Map<string, Project['parts'][number]['audio']>;
+        partAudioById: Map<string, Project['audio'][number]>;
         usageRecords: Project['usage'];
         errors: string[];
       };
@@ -548,30 +548,78 @@ export function ArticleInputPage() {
         await ensureNotCancelled();
         const ttsOptions = buildTtsOptions(settings);
         const usageRecords: Project['usage'] = [];
-        const partAudioById = new Map<string, Project['parts'][number]['audio']>();
+        const partAudioById = new Map<string, Project['audio'][number]>();
         const audioAdded: Project['audio'] = [];
         const errors: string[] = [];
         const targets = baseProject.parts.filter((part) => !part.audio);
+        const AUDIO_GENERATION_CONCURRENCY = 5;
 
-        for (const part of targets) {
-          await ensureNotCancelled();
-          try {
-            const scriptText = part.scriptText?.trim() ?? '';
-            if (!scriptText) {
-              throw new Error('スクリプトが空です');
+        if (!projectId) {
+          throw new Error('projectId が指定されていません');
+        }
+
+        type AudioTaskResult =
+          | {
+              ok: true;
+              partId: string;
+              audio: Project['audio'][number];
+              usageRecord: Project['usage'][number] | null;
             }
-            if (!projectId) {
-              throw new Error('projectId が指定されていません');
+          | {
+              ok: false;
+              error: string;
+            };
+
+        const taskResults: Array<AudioTaskResult | null> = Array(targets.length).fill(null);
+        const workerCount = Math.max(1, Math.min(AUDIO_GENERATION_CONCURRENCY, targets.length));
+        let cursor = 0;
+
+        await Promise.all(
+          Array.from({ length: workerCount }, async () => {
+            while (true) {
+              const taskIndex = cursor;
+              cursor += 1;
+              if (taskIndex >= targets.length) {
+                return;
+              }
+
+              const part = targets[taskIndex];
+              await ensureNotCancelled();
+              try {
+                const scriptText = part.scriptText?.trim() ?? '';
+                if (!scriptText) {
+                  throw new Error('スクリプトが空です');
+                }
+                const result = await window.electronAPI.tts.generate(scriptText, ttsOptions, projectId);
+                await ensureNotCancelled();
+                const usageRecord = createGeminiTtsUsageRecord('tts_generate', result.usage);
+                taskResults[taskIndex] = {
+                  ok: true,
+                  partId: part.id,
+                  audio: result.audio,
+                  usageRecord,
+                };
+              } catch (error) {
+                taskResults[taskIndex] = {
+                  ok: false,
+                  error: `パート${part.index + 1}: ${
+                    error instanceof Error ? error.message : String(error)
+                  }`,
+                };
+              }
             }
-            const result = await window.electronAPI.tts.generate(scriptText, ttsOptions, projectId);
-            await ensureNotCancelled();
-            const usageRecord = createGeminiTtsUsageRecord('tts_generate', result.usage);
-            if (usageRecord) usageRecords.push(usageRecord);
-            partAudioById.set(part.id, result.audio);
-            audioAdded.push(result.audio);
-          } catch (error) {
-            errors.push(`パート${part.index + 1}: ${error instanceof Error ? error.message : String(error)}`);
+          })
+        );
+
+        for (const result of taskResults) {
+          if (!result) continue;
+          if (!result.ok) {
+            errors.push(result.error);
+            continue;
           }
+          if (result.usageRecord) usageRecords.push(result.usageRecord);
+          partAudioById.set(result.partId, result.audio);
+          audioAdded.push(result.audio);
         }
 
         return {
