@@ -7,6 +7,7 @@ import {
   Button,
   Card,
   EmptyState,
+  ErrorDetailPanel,
   ProgressBar,
   useConfirm,
   useToast,
@@ -80,6 +81,14 @@ export function AudioManagePage() {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const syncListRef = useRef<HTMLDivElement | null>(null);
 
+  const reportError = useCallback(
+    (message: string, title?: string) => {
+      setError(message);
+      toast.error(message, title);
+    },
+    [toast]
+  );
+
   useEffect(() => {
     projectRef.current = project;
   }, [project]);
@@ -109,14 +118,14 @@ export function AudioManagePage() {
         }
       } catch (err) {
         console.error('Failed to load project/settings:', err);
-        setError(err instanceof Error ? err.message : '読み込みに失敗しました');
+        reportError(err instanceof Error ? err.message : '読み込みに失敗しました', '読み込みに失敗しました');
       } finally {
         setIsLoading(false);
       }
     };
 
     load();
-  }, [projectId]);
+  }, [projectId, reportError]);
 
   const selectedPart = useMemo(() => {
     return project?.parts.find((p) => p.id === selectedPartId) || null;
@@ -192,11 +201,11 @@ export function AudioManagePage() {
       await applyAudioToPart(selectedPart.id, result.audio, usageRecord);
     } catch (err) {
       console.error('Failed to generate audio:', err);
-      setError(err instanceof Error ? err.message : '音声生成に失敗しました');
+      reportError(err instanceof Error ? err.message : '音声生成に失敗しました');
     } finally {
       setIsGenerating(false);
     }
-  }, [applyAudioToPart, projectId, selectedPart, ttsOptions]);
+  }, [applyAudioToPart, projectId, reportError, selectedPart, ttsOptions]);
 
   const handleClearAudio = useCallback(async () => {
     if (!project || !selectedPart) return;
@@ -227,9 +236,9 @@ export function AudioManagePage() {
       toast.success('音声の紐付けを解除しました');
     } catch (err) {
       console.error('Failed to clear audio:', err);
-      setError(err instanceof Error ? err.message : '音声の解除に失敗しました');
+      reportError(err instanceof Error ? err.message : '音声の解除に失敗しました');
     }
-  }, [confirm, project, saveProject, selectedPart, toast]);
+  }, [confirm, project, reportError, saveProject, selectedPart, toast]);
 
   const handleGenerateAll = useCallback(async () => {
     if (!projectId || !project) return;
@@ -240,7 +249,8 @@ export function AudioManagePage() {
       : project.parts.filter((p) => p.scriptText.trim());
 
     if (targets.length === 0) {
-      setError('生成対象のパートがありません');
+      setError(null);
+      toast.info('読み上げ対象の原稿がありません。', '生成対象はありません');
       return;
     }
 
@@ -280,21 +290,24 @@ export function AudioManagePage() {
       await saveChain;
 
       if (cancelRef.current) {
-        setError('キャンセルしました');
+        setError(null);
+        toast.info('音声生成をキャンセルしました。', 'キャンセル');
       } else if (errors.length > 0) {
         const head = errors.slice(0, 3).join(' / ');
         const tail = errors.length > 3 ? `（他${errors.length - 3}件）` : '';
-        setError(`一部の音声生成に失敗しました: ${head}${tail}`);
+        const message = `一部の音声生成に失敗しました: ${head}${tail}`;
+        setError(message);
+        toast.warning(message, '一部失敗');
       }
     } catch (err) {
       console.error('Failed to generate batch audio:', err);
-      setError(err instanceof Error ? err.message : '一括音声生成に失敗しました');
+      reportError(err instanceof Error ? err.message : '一括音声生成に失敗しました');
     } finally {
       setBatchProgress(null);
       setIsGeneratingAll(false);
       cancelRef.current = false;
     }
-  }, [applyAudioToPart, generateOnlyMissing, project, projectId, ttsOptions]);
+  }, [applyAudioToPart, generateOnlyMissing, project, projectId, reportError, toast, ttsOptions]);
 
   const syncSegments = useMemo(() => {
     if (!selectedPart) return [];
@@ -409,10 +422,11 @@ export function AudioManagePage() {
   if (!project) {
     return (
       <div className="flex flex-1 items-center justify-center">
-        <div className="text-center">
-          <p className="mb-4 text-red-600">{error || 'プロジェクトが見つかりません'}</p>
-          <Button onClick={() => navigate('/projects')}>プロジェクト一覧に戻る</Button>
-        </div>
+        <EmptyState
+          title="プロジェクトを読み込めません"
+          description={error || 'プロジェクトが見つかりません'}
+          action={<Button onClick={() => navigate('/projects')}>プロジェクト一覧に戻る</Button>}
+        />
       </div>
     );
   }
@@ -424,8 +438,8 @@ export function AudioManagePage() {
       {projectId && <WorkflowNav projectId={projectId} current="audio" project={project} />}
 
       {error && (
-        <div className="mx-4 mt-4 rounded-[8px] border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-          {error}
+        <div className="px-4 pt-4">
+          <ErrorDetailPanel message={error} onDismiss={() => setError(null)} />
         </div>
       )}
 

@@ -1,8 +1,8 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { Header, WorkflowNav } from '../components/layout';
 import { ArticleInput, FileImport, ImageDropzone } from '../components/article';
-import { Badge, Card, StatusChip, useToast } from '../components/ui';
+import { Badge, Card, ErrorDetailPanel, StatusChip, useToast } from '../components/ui';
 import type {
   ArticleInput as ArticleInputType,
   AutoGenerationStatus,
@@ -36,6 +36,24 @@ export function ArticleInputPage() {
   const autoCancelRef = useRef(false);
   const isMountedRef = useRef(true);
   const blobUrlsRef = useRef<Map<string, string>>(new Map());
+
+  const reportError = useCallback(
+    (message: string, title?: string) => {
+      if (!isMountedRef.current) return;
+      setError(message);
+      toast.error(message, title);
+    },
+    [toast]
+  );
+
+  const reportInfo = useCallback(
+    (message: string, title?: string) => {
+      if (!isMountedRef.current) return;
+      setError(null);
+      toast.info(message, title);
+    },
+    [toast]
+  );
 
   useEffect(() => {
     blobUrlsRef.current = blobUrls;
@@ -87,7 +105,10 @@ export function ArticleInputPage() {
         }
       } catch (err) {
         console.error('Failed to load project:', err);
-        setError(err instanceof Error ? err.message : 'プロジェクトの読み込みに失敗しました');
+        reportError(
+          err instanceof Error ? err.message : 'プロジェクトの読み込みに失敗しました',
+          '読み込みに失敗しました'
+        );
       }
     };
 
@@ -95,7 +116,7 @@ export function ArticleInputPage() {
     return () => {
       cancelled = true;
     };
-  }, [projectId]);
+  }, [projectId, reportError]);
 
   useEffect(() => {
     if (!projectId) return;
@@ -335,7 +356,7 @@ export function ArticleInputPage() {
       navigate(`/projects/${projectId}/script`);
     } catch (err) {
       console.error('Script generation failed:', err);
-      setError(err instanceof Error ? err.message : 'スクリプト生成に失敗しました');
+      reportError(err instanceof Error ? err.message : 'スクリプト生成に失敗しました');
     } finally {
       setIsGenerating(false);
     }
@@ -355,7 +376,7 @@ export function ArticleInputPage() {
         setProjectSafe(project);
         setAutoStatusSafe(project.autoGenerationStatus.step ?? '自動生成中...');
         setIsAutoGeneratingSafe(true);
-        setErrorSafe('既に自動生成中です');
+        reportInfo('既に自動生成中です。進行状況をそのまま表示します。', '既に実行中です');
         return;
       }
       const startedAt = new Date().toISOString();
@@ -761,7 +782,7 @@ export function ArticleInputPage() {
     } catch (err) {
       const message = err instanceof Error ? err.message : '自動生成に失敗しました';
       if (message.includes('キャンセル')) {
-        setErrorSafe('キャンセルしました');
+        reportInfo('自動生成をキャンセルしました。', 'キャンセル');
         if (projectId) {
           try {
             const latest = await window.electronAPI.project.load(projectId);
@@ -776,7 +797,7 @@ export function ArticleInputPage() {
         }
       } else {
         console.error('Auto generation failed:', err);
-        setErrorSafe(message);
+        reportError(message, '自動生成に失敗しました');
         if (projectId) {
           try {
             const latest = await window.electronAPI.project.load(projectId);
@@ -874,9 +895,7 @@ export function ArticleInputPage() {
         <div className="mx-auto grid w-full max-w-7xl gap-4 lg:grid-cols-[2fr_1fr]">
           <div className="space-y-4">
             {error && (
-              <div className="rounded-[8px] border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-                {error}
-              </div>
+              <ErrorDetailPanel message={error} onDismiss={() => setError(null)} />
             )}
 
             <Card title="スクリプト生成設定" subtitle="記事入力後のパート分割数を指定">

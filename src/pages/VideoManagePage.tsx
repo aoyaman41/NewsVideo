@@ -1,7 +1,16 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { Header, WorkflowNav } from '../components/layout';
-import { Badge, Button, Card, ProgressBar, StatusChip } from '../components/ui';
+import {
+  Badge,
+  Button,
+  Card,
+  EmptyState,
+  ErrorDetailPanel,
+  ProgressBar,
+  StatusChip,
+  useToast,
+} from '../components/ui';
 import type { AutoGenerationStatus, Project } from '../schemas';
 import { toLocalFileUrl } from '../utils/toLocalFileUrl';
 import { summarizeProjectProgress } from '../utils/projectHealth';
@@ -41,6 +50,7 @@ type ResolvedVideoAsset = {
 export function VideoManagePage() {
   const { projectId } = useParams<{ projectId: string }>();
   const navigate = useNavigate();
+  const toast = useToast();
 
   const [project, setProject] = useState<Project | null>(null);
   const [settings, setSettings] = useState<Settings | null>(null);
@@ -71,6 +81,14 @@ export function VideoManagePage() {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const lastVideoPathRef = useRef<string | null>(null);
   const lastVideoIdentityRef = useRef<string | null>(null);
+
+  const reportError = useCallback(
+    (message: string, title?: string) => {
+      setError(message);
+      toast.error(message, title);
+    },
+    [toast]
+  );
 
   const syncVideoAsset = useCallback((path: string, identity: string) => {
     const pathChanged = lastVideoPathRef.current !== path;
@@ -299,14 +317,14 @@ export function VideoManagePage() {
         }
       } catch (err) {
         console.error('Failed to load project/settings:', err);
-        setError(err instanceof Error ? err.message : '読み込みに失敗しました');
+        reportError(err instanceof Error ? err.message : '読み込みに失敗しました', '読み込みに失敗しました');
       } finally {
         setIsLoading(false);
       }
     };
 
     load();
-  }, [applyResolvedVideoAsset, clearVideoAsset, projectId, resolveExistingVideoPath]);
+  }, [applyResolvedVideoAsset, clearVideoAsset, projectId, reportError, resolveExistingVideoPath]);
 
   useEffect(() => {
     if (!projectId) return;
@@ -356,16 +374,17 @@ export function VideoManagePage() {
       }, 0);
     } catch (err) {
       console.error('Failed to generate preview:', err);
-      setError(err instanceof Error ? err.message : 'プレビュー生成に失敗しました');
+      reportError(err instanceof Error ? err.message : 'プレビュー生成に失敗しました');
     } finally {
       setIsPreviewing(false);
     }
-  }, [forceReloadVideoAsset, selectedPartId]);
+  }, [forceReloadVideoAsset, reportError, selectedPartId]);
 
   const handleRender = useCallback(async () => {
     if (!project) return;
     if (!outputPath.trim()) {
-      setError('出力先が未指定です');
+      setError(null);
+      toast.warning('保存先を選択してから書き出してください。', '出力先が未指定です');
       return;
     }
 
@@ -406,11 +425,11 @@ export function VideoManagePage() {
       }, 0);
     } catch (err) {
       console.error('Failed to render video:', err);
-      setError(err instanceof Error ? err.message : '動画書き出しに失敗しました');
+      reportError(err instanceof Error ? err.message : '動画書き出しに失敗しました');
     } finally {
       setIsRendering(false);
     }
-  }, [forceReloadVideoAsset, outputPath, project, renderOptions]);
+  }, [forceReloadVideoAsset, outputPath, project, renderOptions, reportError, toast]);
 
   const handleCancel = useCallback(async () => {
     try {
@@ -418,11 +437,12 @@ export function VideoManagePage() {
       setShowProgress(false);
       setIsRendering(false);
       setIsPreviewing(false);
-      setError('キャンセルしました');
+      setError(null);
+      toast.info('動画の処理をキャンセルしました。', 'キャンセル');
     } catch (err) {
       console.warn('Failed to cancel render:', err);
     }
-  }, []);
+  }, [toast]);
 
   if (isLoading) {
     return (
@@ -435,10 +455,11 @@ export function VideoManagePage() {
   if (!project || !settings) {
     return (
       <div className="flex flex-1 items-center justify-center">
-        <div className="text-center">
-          <p className="mb-4 text-red-600">{error || 'プロジェクトが見つかりません'}</p>
-          <Button onClick={() => navigate('/projects')}>プロジェクト一覧に戻る</Button>
-        </div>
+        <EmptyState
+          title="プロジェクトを読み込めません"
+          description={error || 'プロジェクトが見つかりません'}
+          action={<Button onClick={() => navigate('/projects')}>プロジェクト一覧に戻る</Button>}
+        />
       </div>
     );
   }
@@ -450,8 +471,8 @@ export function VideoManagePage() {
       {projectId && <WorkflowNav projectId={projectId} current="video" project={project} />}
 
       {error && (
-        <div className="mx-4 mt-4 rounded-[8px] border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-          {error}
+        <div className="px-4 pt-4">
+          <ErrorDetailPanel message={error} onDismiss={() => setError(null)} />
         </div>
       )}
 
@@ -577,9 +598,12 @@ export function VideoManagePage() {
               )}
             </div>
             {mediaError && (
-              <div className="rounded-[8px] border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
-                {mediaError}
-              </div>
+              <ErrorDetailPanel
+                title="再生エラー"
+                message={mediaError}
+                onDismiss={() => setMediaError(null)}
+                className="px-3 py-2"
+              />
             )}
             {mediaDebug && (
               <div className="rounded-[8px] border border-[var(--nv-color-border)] bg-slate-50 px-3 py-2 text-xs text-slate-700 break-all">

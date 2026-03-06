@@ -1,8 +1,9 @@
 import { useState, useEffect, useCallback } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useParams } from 'react-router-dom';
 import { Header, WorkflowNav } from '../components/layout';
 import { PartList, ScriptEditor } from '../components/script';
-import { Badge, Card, EmptyState, StatusChip } from '../components/ui';
+import { Badge, Button, Card, EmptyState, ErrorDetailPanel, StatusChip, useToast } from '../components/ui';
 import { useAutoSave } from '../hooks';
 import type { Project, PartEdit } from '../schemas';
 import { createNewPart } from '../schemas';
@@ -10,6 +11,8 @@ import { createOpenAIUsageRecord } from '../utils/usage';
 
 export function ScriptEditPage() {
   const { projectId } = useParams<{ projectId: string }>();
+  const navigate = useNavigate();
+  const toast = useToast();
 
   const [project, setProject] = useState<Project | null>(null);
   const [selectedPartId, setSelectedPartId] = useState<string | null>(null);
@@ -20,6 +23,14 @@ export function ScriptEditPage() {
   const [lastDiffByPart, setLastDiffByPart] = useState<
     Record<string, { before: string; after: string }>
   >({});
+
+  const reportError = useCallback(
+    (message: string, title?: string) => {
+      setError(message);
+      toast.error(message, title);
+    },
+    [toast]
+  );
 
   useEffect(() => {
     if (!projectId) return;
@@ -34,14 +45,14 @@ export function ScriptEditPage() {
         }
       } catch (err) {
         console.error('Failed to load project:', err);
-        setError('プロジェクトの読み込みに失敗しました');
+        reportError('プロジェクトの読み込みに失敗しました', '読み込みに失敗しました');
       } finally {
         setIsLoading(false);
       }
     };
 
     void loadProject();
-  }, [projectId]);
+  }, [projectId, reportError]);
 
   const handleSave = useCallback(async (data: Project) => {
     try {
@@ -73,9 +84,9 @@ export function ScriptEditPage() {
       await window.electronAPI.project.save(updatedProject);
     } catch (err) {
       console.error('Failed to save project after adding part:', err);
-      setError('パート追加の保存に失敗しました');
+      reportError('パート追加の保存に失敗しました');
     }
-  }, [project]);
+  }, [project, reportError]);
 
   const handleDeletePart = useCallback(
     async (partId: string) => {
@@ -99,10 +110,10 @@ export function ScriptEditPage() {
         await window.electronAPI.project.save(updatedProject);
       } catch (err) {
         console.error('Failed to save project after deleting part:', err);
-        setError('パート削除の保存に失敗しました');
+        reportError('パート削除の保存に失敗しました');
       }
     },
-    [project, selectedPartId]
+    [project, reportError, selectedPartId]
   );
 
   const handleReorderParts = useCallback(
@@ -124,10 +135,10 @@ export function ScriptEditPage() {
         await window.electronAPI.project.save(updatedProject);
       } catch (err) {
         console.error('Failed to save project after reordering parts:', err);
-        setError('パート並び替えの保存に失敗しました');
+        reportError('パート並び替えの保存に失敗しました');
       }
     },
-    [project]
+    [project, reportError]
   );
 
   const handleSavePart = useCallback(
@@ -207,12 +218,12 @@ export function ScriptEditPage() {
         setLastCommentAppliedAt(new Date().toISOString());
       } catch (err) {
         console.error('Failed to regenerate script:', err);
-        setError(err instanceof Error ? err.message : 'スクリプト修正に失敗しました');
+        reportError(err instanceof Error ? err.message : 'スクリプト修正に失敗しました');
       } finally {
         setIsProcessing(false);
       }
     },
-    [project]
+    [project, reportError]
   );
 
   const selectedPart = project?.parts.find((p) => p.id === selectedPartId) ?? null;
@@ -228,7 +239,11 @@ export function ScriptEditPage() {
   if (!project) {
     return (
       <div className="flex flex-1 items-center justify-center">
-        <p className="text-red-500">{error || 'プロジェクトが見つかりません'}</p>
+        <EmptyState
+          title="プロジェクトを読み込めません"
+          description={error || 'プロジェクトが見つかりません'}
+          action={<Button onClick={() => navigate('/projects')}>プロジェクト一覧に戻る</Button>}
+        />
       </div>
     );
   }
@@ -240,11 +255,8 @@ export function ScriptEditPage() {
       {projectId && <WorkflowNav projectId={projectId} current="script" project={project} />}
 
       {error && (
-        <div className="mx-5 mt-4 rounded-[8px] border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-          {error}
-          <button onClick={() => setError(null)} className="ml-3 text-red-500 hover:text-red-700">
-            ×
-          </button>
+        <div className="px-5 pt-4">
+          <ErrorDetailPanel message={error} onDismiss={() => setError(null)} />
         </div>
       )}
 

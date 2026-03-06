@@ -4,6 +4,7 @@ export { Badge } from './Badge';
 export { StatusChip } from './StatusChip';
 export { ProgressBar } from './ProgressBar';
 export { EmptyState } from './EmptyState';
+export { ErrorDetailPanel } from './ErrorDetailPanel';
 export { Skeleton } from './Skeleton';
 export { Toast } from './Toast';
 export { ConfirmDialog } from './ConfirmDialog';

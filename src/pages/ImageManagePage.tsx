@@ -2,7 +2,15 @@ import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { Header, WorkflowNav } from '../components/layout';
 import { ImageAssignment, PromptEditor } from '../components/image';
-import { Badge, Button, Card, EmptyState, useConfirm, useToast } from '../components/ui';
+import {
+  Badge,
+  Button,
+  Card,
+  EmptyState,
+  ErrorDetailPanel,
+  useConfirm,
+  useToast,
+} from '../components/ui';
 import type { Project, ImageAssetRef, ImagePrompt } from '../schemas';
 import { createGeminiImageUsageRecordFromAssets, createOpenAIUsageRecord } from '../utils/usage';
 
@@ -19,6 +27,14 @@ export function ImageManagePage() {
   const [isGeneratingPrompts, setIsGeneratingPrompts] = useState(false);
   const [isGeneratingSinglePrompt, setIsGeneratingSinglePrompt] = useState(false);
   const [isGeneratingImage, setIsGeneratingImage] = useState(false);
+
+  const reportError = useCallback(
+    (message: string, title?: string) => {
+      setError(message);
+      toast.error(message, title);
+    },
+    [toast]
+  );
 
   const latestPromptByPartId = useMemo(() => {
     const map = new Map<string, ImagePrompt>();
@@ -79,14 +95,17 @@ export function ImageManagePage() {
         }
       } catch (err) {
         console.error('Failed to load project:', err);
-        setError(err instanceof Error ? err.message : 'プロジェクトの読み込みに失敗しました');
+        reportError(
+          err instanceof Error ? err.message : 'プロジェクトの読み込みに失敗しました',
+          '読み込みに失敗しました'
+        );
       } finally {
         setIsLoading(false);
       }
     };
 
     loadProject();
-  }, [projectId]);
+  }, [projectId, reportError]);
 
   // 画像プロンプト生成
   const handleGeneratePrompts = useCallback(async () => {
@@ -114,11 +133,11 @@ export function ImageManagePage() {
       setProject(updatedProject);
     } catch (err) {
       console.error('Failed to generate prompts:', err);
-      setError(err instanceof Error ? err.message : 'プロンプト生成に失敗しました');
+      reportError(err instanceof Error ? err.message : 'プロンプト生成に失敗しました');
     } finally {
       setIsGeneratingPrompts(false);
     }
-  }, [project]);
+  }, [project, reportError]);
 
   const handleGeneratePromptForTarget = useCallback(
     async (targetId: string) => {
@@ -146,12 +165,12 @@ export function ImageManagePage() {
         setProject(updatedProject);
       } catch (err) {
         console.error('Failed to generate prompt:', err);
-        setError(err instanceof Error ? err.message : 'プロンプト生成に失敗しました');
+        reportError(err instanceof Error ? err.message : 'プロンプト生成に失敗しました');
       } finally {
         setIsGeneratingSinglePrompt(false);
       }
     },
-    [project]
+    [project, reportError]
   );
 
   // 画像生成
@@ -187,12 +206,12 @@ export function ImageManagePage() {
         setProject(updatedProject);
       } catch (err) {
         console.error('Failed to generate image:', err);
-        setError(err instanceof Error ? err.message : '画像生成に失敗しました');
+        reportError(err instanceof Error ? err.message : '画像生成に失敗しました');
       } finally {
         setIsGeneratingImage(false);
       }
     },
-    [project, projectId]
+    [project, projectId, reportError]
   );
 
   // 全パートの画像を一括生成
@@ -202,7 +221,11 @@ export function ImageManagePage() {
     const targetPrompts = activePrompts.filter((prompt) => !promptIdsWithAnyImage.has(prompt.id));
 
     if (targetPrompts.length === 0) {
-      setError('未生成の画像がありません（必要なら各パートで個別に生成してください）');
+      setError(null);
+      toast.info(
+        '未生成の画像はありません。必要なら各パートで個別に生成してください。',
+        '生成対象はありません'
+      );
       return;
     }
 
@@ -250,11 +273,11 @@ export function ImageManagePage() {
       setProject(updatedProject);
     } catch (err) {
       console.error('Failed to generate images:', err);
-      setError(err instanceof Error ? err.message : '画像生成に失敗しました');
+      reportError(err instanceof Error ? err.message : '画像生成に失敗しました');
     } finally {
       setIsGeneratingImage(false);
     }
-  }, [project, projectId, activePrompts, promptIdsWithAnyImage]);
+  }, [project, projectId, activePrompts, promptIdsWithAnyImage, reportError, toast]);
 
   // 画像削除
   const handleDeleteImage = useCallback(
@@ -305,10 +328,10 @@ export function ImageManagePage() {
         toast.success('画像を削除しました');
       } catch (err) {
         console.error('Failed to delete image:', err);
-        setError(err instanceof Error ? err.message : '画像の削除に失敗しました');
+        reportError(err instanceof Error ? err.message : '画像の削除に失敗しました');
       }
     },
-    [confirm, project, toast]
+    [confirm, project, reportError, toast]
   );
 
   // プロンプト更新
@@ -373,10 +396,10 @@ export function ImageManagePage() {
         setProject(updatedProject);
       } catch (err) {
         console.error('Failed to update panel images:', err);
-        setError(err instanceof Error ? err.message : '画像の割り当て更新に失敗しました');
+        reportError(err instanceof Error ? err.message : '画像の割り当て更新に失敗しました');
       }
     },
-    [project]
+    [project, reportError]
   );
 
   if (isLoading) {
@@ -390,10 +413,11 @@ export function ImageManagePage() {
   if (!project) {
     return (
       <div className="flex flex-1 items-center justify-center">
-        <div className="text-center">
-          <p className="mb-4 text-red-600">プロジェクトが見つかりません</p>
-          <Button onClick={() => navigate('/')}>プロジェクト一覧に戻る</Button>
-        </div>
+        <EmptyState
+          title="プロジェクトを読み込めません"
+          description={error || 'プロジェクトが見つかりません'}
+          action={<Button onClick={() => navigate('/projects')}>プロジェクト一覧に戻る</Button>}
+        />
       </div>
     );
   }
@@ -405,8 +429,8 @@ export function ImageManagePage() {
       {projectId && <WorkflowNav projectId={projectId} current="image" project={project} />}
 
       {error && (
-        <div className="mx-4 mt-4 rounded-[8px] border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-          {error}
+        <div className="px-4 pt-4">
+          <ErrorDetailPanel message={error} onDismiss={() => setError(null)} />
         </div>
       )}
 

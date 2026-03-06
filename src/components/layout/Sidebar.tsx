@@ -3,7 +3,7 @@ import { NavLink, useLocation } from 'react-router-dom';
 import type { Project } from '../../schemas';
 import pkg from '../../../package.json';
 import { nextActionLabel, stageLabel, summarizeProjectProgress } from '../../utils/projectHealth';
-import { Badge, ProgressBar, StatusChip } from '../ui';
+import { StatusChip } from '../ui';
 
 interface NavItem {
   path: string;
@@ -153,24 +153,14 @@ export function Sidebar() {
 
         {projectId && projectSummary && (
           <div className="mt-5 rounded-[12px] border border-white/15 bg-white/10 p-3 text-blue-50">
-            <div className="mb-2 flex items-center justify-between gap-2">
-              <p className="truncate text-sm font-semibold">{projectName}</p>
-              <Badge tone={projectSummary.hasVideoOutput ? 'success' : 'info'}>
-                {projectSummary.completedSteps}/5
-              </Badge>
-            </div>
-            <ProgressBar
-              value={projectSummary.completedSteps}
-              max={projectSummary.totalSteps}
-              tone={projectSummary.hasVideoOutput ? 'success' : 'accent'}
-            />
+            <p className="truncate text-sm font-semibold">{projectName}</p>
             <div className="mt-3 space-y-2 text-xs text-blue-100">
               <StatusChip
                 tone={projectSummary.hasVideoOutput ? 'success' : 'info'}
                 label={projectSummary.hasVideoOutput ? '完成' : `次: ${stageLabel(projectSummary.stage)}`}
                 className="border-white/20 bg-white/10 text-blue-50"
               />
-              <p>推奨アクション: {nextActionLabel(projectSummary)}</p>
+              <p>{nextActionLabel(projectSummary)}</p>
             </div>
           </div>
         )}

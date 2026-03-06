@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useAutoSave } from '../hooks';
 import { Header } from '../components/layout';
-import { Badge, Button, Card, StatusChip, useToast } from '../components/ui';
+import { Badge, Button, Card, ErrorDetailPanel, StatusChip, useToast } from '../components/ui';
 import {
   DEFAULT_IMAGE_MODEL,
   DEFAULT_IMAGE_PROMPT_TEXT_MODEL,
@@ -929,9 +929,10 @@ export function SettingsPage() {
           )}
 
           {settingsSaveError && (
-            <div className="rounded-[12px] border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-              設定の自動保存に失敗しました。変更内容は画面上に残っています。詳細: {settingsSaveError}
-            </div>
+            <ErrorDetailPanel
+              title="保存エラー"
+              message={`設定の自動保存に失敗しました。変更内容は画面上に残っています。詳細: ${settingsSaveError}`}
+            />
           )}
         </div>
       </div>
