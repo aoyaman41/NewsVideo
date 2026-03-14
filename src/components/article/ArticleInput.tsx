@@ -2,6 +2,7 @@ import { useEffect } from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { articleInputSchema, type ArticleInput as ArticleInputType } from '../../schemas';
+import { Button } from '../ui';
 
 interface ArticleInputProps {
   defaultValues?: Partial<ArticleInputType>;
@@ -45,10 +46,9 @@ export function ArticleInput({
   }, [defaultValues?.bodyText, defaultValues?.source, defaultValues?.title, reset]);
 
   return (
-    <form onSubmit={handleSubmit(onSubmit)} className="space-y-6">
-      {/* タイトル */}
+    <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
       <div>
-        <label htmlFor="title" className="block text-sm font-medium text-gray-700 mb-1">
+        <label htmlFor="title" className="mb-1 block text-sm font-medium text-slate-700">
           記事タイトル <span className="text-red-500">*</span>
         </label>
         <input
@@ -56,16 +56,13 @@ export function ArticleInput({
           type="text"
           {...register('title')}
           placeholder="記事のタイトルを入力"
-          className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+          className="nv-input"
         />
-        {errors.title && (
-          <p className="mt-1 text-sm text-red-600">{errors.title.message}</p>
-        )}
+        {errors.title && <p className="mt-1 text-sm text-red-600">{errors.title.message}</p>}
       </div>
 
-      {/* 出典 */}
       <div>
-        <label htmlFor="source" className="block text-sm font-medium text-gray-700 mb-1">
+        <label htmlFor="source" className="mb-1 block text-sm font-medium text-slate-700">
           出典（任意）
         </label>
         <input
@@ -73,16 +70,13 @@ export function ArticleInput({
           type="text"
           {...register('source')}
           placeholder="出典元を入力（例：〇〇新聞、△△ニュース）"
-          className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+          className="nv-input"
         />
-        {errors.source && (
-          <p className="mt-1 text-sm text-red-600">{errors.source.message}</p>
-        )}
+        {errors.source && <p className="mt-1 text-sm text-red-600">{errors.source.message}</p>}
       </div>
 
-      {/* 本文 */}
       <div>
-        <label htmlFor="bodyText" className="block text-sm font-medium text-gray-700 mb-1">
+        <label htmlFor="bodyText" className="mb-1 block text-sm font-medium text-slate-700">
           記事本文 <span className="text-red-500">*</span>
         </label>
         <textarea
@@ -90,51 +84,40 @@ export function ArticleInput({
           {...register('bodyText')}
           rows={15}
           placeholder="記事の本文を入力またはファイルからインポート"
-          className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent resize-y font-mono text-sm"
+          className="nv-input resize-y font-mono text-sm"
         />
-        {errors.bodyText && (
-          <p className="mt-1 text-sm text-red-600">{errors.bodyText.message}</p>
-        )}
+        {errors.bodyText && <p className="mt-1 text-sm text-red-600">{errors.bodyText.message}</p>}
       </div>
 
-      {/* 送信ボタン */}
-      <div className="flex justify-end">
+      <div className="flex flex-wrap justify-end gap-2">
         {onAutoSubmit && (
-          <button
+          <Button
             type="button"
             onClick={handleSubmit(onAutoSubmit)}
             disabled={isLoading || isAutoLoading}
-            className="px-6 py-2 mr-3 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            variant="success"
           >
             {isAutoLoading ? '自動生成中...' : '続きから自動生成'}
-          </button>
+          </Button>
         )}
         {onAutoRestart && (
-          <button
+          <Button
             type="button"
             onClick={handleSubmit(onAutoRestart)}
             disabled={isLoading || isAutoLoading}
-            className="px-6 py-2 mr-3 bg-amber-500 text-white rounded-lg hover:bg-amber-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            variant="secondary"
           >
             {isAutoLoading ? '自動生成中...' : '最初から自動生成'}
-          </button>
+          </Button>
         )}
         {onAutoCancel && isAutoLoading && (
-          <button
-            type="button"
-            onClick={onAutoCancel}
-            className="px-6 py-2 mr-3 bg-gray-200 text-gray-800 rounded-lg hover:bg-gray-300 transition-colors"
-          >
+          <Button type="button" onClick={onAutoCancel} variant="secondary">
             停止
-          </button>
+          </Button>
         )}
-        <button
-          type="submit"
-          disabled={isLoading || isAutoLoading}
-          className="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-        >
+        <Button type="submit" disabled={isLoading || isAutoLoading}>
           {isLoading ? 'スクリプト生成中...' : 'スクリプトを生成'}
-        </button>
+        </Button>
       </div>
     </form>
   );

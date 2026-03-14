@@ -1,21 +1,22 @@
 {
   "name": "newsvideo",
-  "version": "1.0.0",
+  "version": "2.0.1",
   "type": "module",
   "description": "報道動画自動生成アプリケーション",
   "main": "dist-electron/main.js",
   "scripts": {
     "dev": "vite",
-    "build": "tsc && vite build && electron-builder",
+    "build": "tsc --noEmit && vite build && electron-builder",
     "build:vite": "vite build",
     "preview": "vite preview",
     "electron:dev": "vite",
     "prepare:ffmpeg:mac": "node scripts/prepare-ffmpeg.mjs",
     "prebuild": "node scripts/prepare-ffmpeg.mjs",
-    "lint": "eslint . --ext .ts,.tsx",
-    "lint:fix": "eslint . --ext .ts,.tsx --fix",
-    "format": "prettier --write \"src/**/*.{ts,tsx,css}\" \"electron/**/*.ts\"",
-    "typecheck": "tsc --noEmit"
+    "lint": "eslint \"src/**/*.{ts,tsx}\" \"electron/**/*.ts\" \"shared/**/*.ts\" \"vite.config.ts\"",
+    "lint:fix": "eslint \"src/**/*.{ts,tsx}\" \"electron/**/*.ts\" \"shared/**/*.ts\" \"vite.config.ts\" --fix",
+    "format": "prettier --write \"src/**/*.{ts,tsx,css}\" \"electron/**/*.ts\" \"shared/**/*.ts\"",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --config vitest.config.ts"
   },
   "repository": {
     "type": "git",
@@ -37,6 +38,9 @@
     "url": "https://github.com/aoyaman41/NewsVideo/issues"
   },
   "homepage": "https://github.com/aoyaman41/NewsVideo#readme",
+  "overrides": {
+    "underscore": "1.13.8"
+  },
   "devDependencies": {
     "@tailwindcss/postcss": "^4.1.17",
     "@types/node": "^24.10.1",
@@ -47,7 +51,7 @@
     "@vitejs/plugin-react": "^5.1.1",
     "autoprefixer": "^10.4.22",
     "concurrently": "^9.2.1",
-    "electron": "^39.2.6",
+    "electron": "^40.7.0",
     "electron-builder": "^26.0.12",
     "eslint": "^9.39.1",
     "eslint-config-prettier": "^10.1.8",
@@ -61,13 +65,14 @@
     "typescript": "^5.9.3",
     "vite": "^7.2.6",
     "vite-plugin-electron": "^0.29.0",
-    "vite-plugin-electron-renderer": "^0.14.6"
+    "vite-plugin-electron-renderer": "^0.14.6",
+    "vitest": "^4.0.18"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",
     "@dnd-kit/sortable": "^10.0.0",
     "@dnd-kit/utilities": "^3.2.2",
-    "@google/generative-ai": "^0.24.1",
+    "@google/genai": "^1.43.0",
     "@hookform/resolvers": "^5.2.2",
     "mammoth": "^1.11.0",
     "openai": "^6.10.0",
@@ -75,7 +80,7 @@
     "react-dom": "^19.2.1",
     "react-dropzone": "^14.3.8",
     "react-hook-form": "^7.68.0",
-    "react-router-dom": "^7.10.1",
+    "react-router-dom": "^7.13.1",
     "zod": "^4.1.13",
     "zustand": "^5.0.9"
   }

@@ -1,41 +1,19 @@
 import { ipcMain, app, safeStorage } from 'electron';
-import * as fs from 'fs/promises';
-import * as path from 'path';
+import * as fs from 'node:fs/promises';
+import * as path from 'node:path';
+import {
+  DEFAULT_SETTINGS,
+  normalizeSettings,
+  parseSettingsUpdate,
+  type AppSettings,
+} from '../../shared/settings/appSettings';
+import { logger } from '../utils/logger';
 
 // 設定ファイルのパス
 const getSettingsPath = () => path.join(app.getPath('userData'), 'settings.json');
 const getSecretsPath = () => path.join(app.getPath('userData'), 'secrets.enc');
 
-// デフォルト設定
-type TTSEngine = 'google_tts' | 'gemini_tts' | 'macos_tts';
-
-const defaultSettings = {
-  // TTS設定
-  ttsEngine: 'gemini_tts' as TTSEngine,
-  ttsVoice: 'Charon',
-  ttsSpeakingRate: 1.0,
-  ttsPitch: 0,
-
-  // 画像設定
-  imageStylePreset: 'news_panel',
-  defaultAspectRatio: '16:9' as const,
-
-  // 動画設定
-  videoResolution: '1920x1080' as const,
-  videoFps: 30,
-  videoBitrate: '8M',
-  audioBitrate: '192k',
-  // パート切替後、読み上げ開始までの「間」（秒）
-  videoPartLeadInSec: 0.3,
-  openingVideoPath: '',
-  endingVideoPath: '',
-
-  // その他
-  autoSaveInterval: 60, // 秒
-  defaultProjectDir: '',
-};
-
-type Settings = typeof defaultSettings;
+type Settings = AppSettings;
 
 // APIキーの種類
 type ApiKeyService = 'openai' | 'google_ai' | 'google_tts';
@@ -48,26 +26,15 @@ async function readSettings(): Promise<Settings> {
   try {
     const settingsPath = getSettingsPath();
     const content = await fs.readFile(settingsPath, 'utf-8');
-    const merged = { ...defaultSettings, ...JSON.parse(content) } as Settings;
-    // 旧ボイス名の移行
-    if (merged.ttsVoice === 'ja-JP-Chirp3-HD-Aoife') {
-      merged.ttsVoice = defaultSettings.ttsVoice;
-    }
-    // 本アプリでは Gemini TTS をデフォルト運用にする
-    merged.ttsEngine = 'gemini_tts';
-    // 旧Google/macos系のボイス名が残っている場合はGemini側のデフォルトへ寄せる
-    if (!merged.ttsVoice || merged.ttsVoice.includes('-')) {
-      merged.ttsVoice = defaultSettings.ttsVoice;
-    }
-    return merged;
+    return normalizeSettings(JSON.parse(content));
   } catch {
-    return defaultSettings;
+    return normalizeSettings(DEFAULT_SETTINGS);
   }
 }
 
 async function readApiKey(service: ApiKeyService): Promise<string | null> {
   if (!safeStorage.isEncryptionAvailable()) {
-    console.warn('Encryption is not available');
+    logger.warn('Encryption is not available');
     return null;
   }
 
@@ -92,10 +59,11 @@ ipcMain.handle('settings:get', async (): Promise<Settings> => {
 });
 
 // 設定保存
-ipcMain.handle('settings:set', async (_, settings: Partial<Settings>) => {
+ipcMain.handle('settings:set', async (_, settings: unknown) => {
   const settingsPath = getSettingsPath();
   const currentSettings = await readSettings();
-  const newSettings = { ...currentSettings, ...settings };
+  const validatedSettings = parseSettingsUpdate(settings);
+  const newSettings = normalizeSettings({ ...currentSettings, ...validatedSettings });
 
   await fs.writeFile(settingsPath, JSON.stringify(newSettings, null, 2));
   return { success: true };

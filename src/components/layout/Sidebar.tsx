@@ -1,5 +1,9 @@
-import { useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { NavLink, useLocation } from 'react-router-dom';
+import type { Project } from '../../schemas';
+import pkg from '../../../package.json';
+import { nextActionLabel, stageLabel, summarizeProjectProgress } from '../../utils/projectHealth';
+import { StatusChip } from '../ui';
 
 interface NavItem {
   path: string;
@@ -12,12 +16,7 @@ const navItems: NavItem[] = [
     path: '/projects',
     label: 'プロジェクト',
     icon: (
-      <svg
-        className="w-5 h-5"
-        fill="none"
-        stroke="currentColor"
-        viewBox="0 0 24 24"
-      >
+      <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
         <path
           strokeLinecap="round"
           strokeLinejoin="round"
@@ -31,12 +30,7 @@ const navItems: NavItem[] = [
     path: '/settings',
     label: '設定',
     icon: (
-      <svg
-        className="w-5 h-5"
-        fill="none"
-        stroke="currentColor"
-        viewBox="0 0 24 24"
-      >
+      <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
         <path
           strokeLinecap="round"
           strokeLinejoin="round"
@@ -54,8 +48,18 @@ const navItems: NavItem[] = [
   },
 ];
 
+function extractProjectId(pathname: string): string | null {
+  const match = pathname.match(/^\/projects\/([^/]+)/);
+  return match?.[1] ?? null;
+}
+
 export function Sidebar() {
   const location = useLocation();
+  const projectId = useMemo(() => extractProjectId(location.pathname), [location.pathname]);
+  const [projectName, setProjectName] = useState<string>('');
+  const [projectSummary, setProjectSummary] = useState<ReturnType<
+    typeof summarizeProjectProgress
+  > | null>(null);
 
   const returnTo = useMemo(() => {
     const state = location.state as { returnTo?: string } | null;
@@ -64,18 +68,48 @@ export function Sidebar() {
     return state.returnTo;
   }, [location.state]);
 
+  useEffect(() => {
+    if (!projectId) {
+      return;
+    }
+
+    let cancelled = false;
+
+    const load = async () => {
+      try {
+        const project: Project = await window.electronAPI.project.load(projectId);
+        if (cancelled) return;
+        setProjectSummary(summarizeProjectProgress(project));
+        setProjectName(project.name);
+      } catch {
+        if (cancelled) return;
+        setProjectSummary(null);
+        setProjectName('');
+      }
+    };
+
+    void load();
+    const interval = setInterval(() => {
+      void load();
+    }, 3000);
+
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [projectId]);
+
   const shouldShowReturnToWork = location.pathname === '/settings' && Boolean(returnTo);
 
   return (
-    <aside className="w-56 bg-gray-900 text-white flex flex-col">
-      {/* ロゴ */}
-      <div className="titlebar-drag h-14 flex items-center px-4 border-b border-gray-700">
-        <h1 className="text-lg font-bold">NewsVideo</h1>
+    <aside className="flex h-full w-64 flex-col border-r border-[#0f2a4d] bg-[var(--nv-color-brand)] text-white">
+      <div className="titlebar-drag border-b border-white/10 px-4 py-3">
+        <p className="text-[11px] uppercase tracking-[0.16em] text-blue-200">NewsVideo</p>
+        <h1 className="mt-1 text-xl font-bold">Desk</h1>
       </div>
 
-      {/* ナビゲーション */}
-      <nav className="flex-1 py-4">
-        <ul className="space-y-1 px-2">
+      <nav className="flex-1 px-3 py-3">
+        <ul className="space-y-1">
           {navItems.map((item) => (
             <li key={item.path}>
               <NavLink
@@ -90,15 +124,15 @@ export function Sidebar() {
                     : undefined
                 }
                 className={({ isActive }) =>
-                  `titlebar-no-drag flex items-center gap-3 px-3 py-2 rounded-lg transition-colors ${
+                  `titlebar-no-drag flex items-center gap-2 rounded-[8px] px-3 py-2 text-sm transition-colors duration-[var(--nv-duration-fast)] ${
                     isActive
-                      ? 'bg-blue-600 text-white'
-                      : 'text-gray-300 hover:bg-gray-800 hover:text-white'
+                      ? 'bg-white/18 text-white'
+                      : 'text-blue-100 hover:bg-white/10 hover:text-white'
                   }`
                 }
               >
                 {item.path === '/projects' && shouldShowReturnToWork ? (
-                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path
                       strokeLinecap="round"
                       strokeLinejoin="round"
@@ -109,16 +143,31 @@ export function Sidebar() {
                 ) : (
                   item.icon
                 )}
-                <span>{item.path === '/projects' && shouldShowReturnToWork ? '作業に戻る' : item.label}</span>
+                <span>
+                  {item.path === '/projects' && shouldShowReturnToWork ? '作業に戻る' : item.label}
+                </span>
               </NavLink>
             </li>
           ))}
         </ul>
+
+        {projectId && projectSummary && (
+          <div className="mt-5 rounded-[12px] border border-white/15 bg-white/10 p-3 text-blue-50">
+            <p className="truncate text-sm font-semibold">{projectName}</p>
+            <div className="mt-3 space-y-2 text-xs text-blue-100">
+              <StatusChip
+                tone={projectSummary.hasVideoOutput ? 'success' : 'info'}
+                label={projectSummary.hasVideoOutput ? '完成' : `次: ${stageLabel(projectSummary.stage)}`}
+                className="border-white/20 bg-white/10 text-blue-50"
+              />
+              <p>{nextActionLabel(projectSummary)}</p>
+            </div>
+          </div>
+        )}
       </nav>
 
-      {/* フッター */}
-      <div className="p-4 border-t border-gray-700">
-        <p className="text-xs text-gray-500">Version 1.0.0</p>
+      <div className="border-t border-white/10 px-4 py-3">
+        <p className="text-xs text-blue-200">v{pkg.version}</p>
       </div>
     </aside>
   );

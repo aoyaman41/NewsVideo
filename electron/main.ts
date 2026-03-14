@@ -11,6 +11,7 @@ const __dirname = path.dirname(__filename);
 
 // 開発環境かどうか
 const isDev = !app.isPackaged;
+const shouldOpenDevTools = isDev && process.env.NEWSVIDEO_OPEN_DEVTOOLS === '1';
 
 // カスタムプロトコル 'local-file' を登録
 protocol.registerSchemesAsPrivileged([
@@ -28,6 +29,10 @@ protocol.registerSchemesAsPrivileged([
 ]);
 
 let mainWindow: BrowserWindow | null = null;
+
+function toWebReadableStream(nodeStream: fs.ReadStream): ReadableStream<Uint8Array> {
+  return Readable.toWeb(nodeStream) as ReadableStream<Uint8Array>;
+}
 
 function parseLocalFileRequestUrl(requestUrl: string): string {
   // Electron/Chromium may canonicalize `local-file:///Users/...` into either:
@@ -101,7 +106,9 @@ function createWindow(): void {
   if (isDev) {
     const port = process.env.VITE_DEV_SERVER_URL || 'http://localhost:5173';
     mainWindow.loadURL(port);
-    mainWindow.webContents.openDevTools();
+    if (shouldOpenDevTools) {
+      mainWindow.webContents.openDevTools();
+    }
   } else {
     mainWindow.loadFile(path.join(__dirname, '../dist/index.html'));
   }
@@ -134,6 +141,9 @@ app.whenReady().then(() => {
       const baseHeaders = new Headers();
       baseHeaders.set('Content-Type', contentType);
       baseHeaders.set('Accept-Ranges', 'bytes');
+      baseHeaders.set('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0');
+      baseHeaders.set('Pragma', 'no-cache');
+      baseHeaders.set('Expires', '0');
       // fetch()/Range を使う場合に備えて CORS を緩める（アプリ内のローカル用途）
       baseHeaders.set('Access-Control-Allow-Origin', '*');
       baseHeaders.set('Access-Control-Allow-Headers', 'Range, Content-Type, Origin, Accept');
@@ -191,7 +201,7 @@ app.whenReady().then(() => {
         }
 
         const nodeStream = fs.createReadStream(filePath, { start, end });
-        const stream = Readable.toWeb(nodeStream) as unknown as any;
+        const stream = toWebReadableStream(nodeStream);
         return new Response(stream, { status: 206, headers });
       }
 
@@ -201,7 +211,7 @@ app.whenReady().then(() => {
       }
 
       const nodeStream = fs.createReadStream(filePath);
-      const stream = Readable.toWeb(nodeStream) as unknown as any;
+      const stream = toWebReadableStream(nodeStream);
       return new Response(stream, { status: 200, headers: baseHeaders });
     } catch {
       return new Response('Not found', { status: 404 });

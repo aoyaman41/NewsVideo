@@ -81,10 +81,10 @@ export function Waveform({
 
   useEffect(() => {
     let cancelled = false;
-    setPeaks(null);
-    setError(null);
 
     void (async () => {
+      setPeaks(null);
+      setError(null);
       try {
         const next = await decodeToPeaks(src, 1024);
         if (!cancelled) setPeaks(next);
@@ -167,4 +167,3 @@ export function Waveform({
     </div>
   );
 }
-

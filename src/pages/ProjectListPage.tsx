@@ -1,25 +1,33 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Header } from '../components/layout';
-
-interface ProjectMeta {
-  id: string;
-  name: string;
-  createdAt: string;
-  updatedAt: string;
-  path: string;
-}
+import {
+  Badge,
+  Button,
+  Card,
+  EmptyState,
+  ProgressBar,
+  Skeleton,
+  StatusChip,
+  useConfirm,
+  useToast,
+} from '../components/ui';
+import type { ProjectListItem } from '../types/ui';
+import { nextActionLabel, stageLabel } from '../utils/projectHealth';
 
 export function ProjectListPage() {
   const navigate = useNavigate();
-  const [projects, setProjects] = useState<ProjectMeta[]>([]);
+  const { confirm } = useConfirm();
+  const toast = useToast();
+  const [projects, setProjects] = useState<ProjectListItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [newProjectName, setNewProjectName] = useState('');
   const [isCreating, setIsCreating] = useState(false);
   const [openingProjectId, setOpeningProjectId] = useState<string | null>(null);
+  const [search, setSearch] = useState('');
 
   useEffect(() => {
-    loadProjects();
+    void loadProjects();
   }, []);
 
   const loadProjects = async () => {
@@ -42,21 +50,31 @@ export function ProjectListPage() {
       await window.electronAPI.project.create(newProjectName.trim());
       setNewProjectName('');
       await loadProjects();
+      toast.success('プロジェクトを作成しました');
     } catch (error) {
       console.error('Failed to create project:', error);
+      toast.error(error instanceof Error ? error.message : '不明なエラー', '作成に失敗しました');
     } finally {
       setIsCreating(false);
     }
   };
 
-  const handleDeleteProject = async (projectId: string) => {
-    if (!confirm('このプロジェクトを削除しますか？')) return;
+  const handleDeleteProject = async (project: ProjectListItem) => {
+    const accepted = await confirm({
+      title: 'プロジェクトを削除しますか？',
+      description: `「${project.name}」を削除します。この操作は取り消せません。`,
+      confirmLabel: '削除',
+      confirmVariant: 'danger',
+    });
+    if (!accepted) return;
 
     try {
-      await window.electronAPI.project.delete(projectId);
+      await window.electronAPI.project.delete(project.id);
       await loadProjects();
+      toast.success('プロジェクトを削除しました');
     } catch (error) {
       console.error('Failed to delete project:', error);
+      toast.error(error instanceof Error ? error.message : '不明なエラー', '削除に失敗しました');
     }
   };
 
@@ -95,85 +113,168 @@ export function ProjectListPage() {
     }
   };
 
+  const filteredProjects = useMemo(() => {
+    const keyword = search.trim().toLowerCase();
+    if (!keyword) return projects;
+    return projects.filter((project) => {
+      const haystack = `${project.name} ${project.articleTitle ?? ''}`.toLowerCase();
+      return haystack.includes(keyword);
+    });
+  }, [projects, search]);
+
   const formatDate = (dateString: string) => {
     return new Date(dateString).toLocaleString('ja-JP');
   };
 
   return (
-    <div className="flex-1 flex flex-col overflow-hidden">
-      <Header title="プロジェクト一覧" />
+    <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+      <Header title="プロジェクト" subtitle="新規作成と作業再開" />
 
-      {/* メインコンテンツ */}
-      <div className="flex-1 overflow-auto p-6">
-        {/* 新規プロジェクト作成 */}
-        <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6 mb-8">
-          <h2 className="text-lg font-semibold text-gray-900 mb-4">新規プロジェクト作成</h2>
-          <div className="flex gap-4">
-            <input
-              type="text"
-              value={newProjectName}
-              onChange={(e) => setNewProjectName(e.target.value)}
-              placeholder="プロジェクト名を入力"
-              className="flex-1 px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-            />
-            <button
-              onClick={handleCreateProject}
-              disabled={!newProjectName.trim() || isCreating}
-              className="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-            >
-              {isCreating ? '作成中...' : '作成'}
-            </button>
-          </div>
-        </div>
-
-        {/* プロジェクト一覧 */}
-        <div className="bg-white rounded-lg shadow-sm border border-gray-200">
-          <div className="px-6 py-4 border-b border-gray-200">
-            <h2 className="text-lg font-semibold text-gray-900">プロジェクト一覧</h2>
-          </div>
-
-          {isLoading ? (
-            <div className="px-6 py-12 text-center text-gray-500">読み込み中...</div>
-          ) : projects.length === 0 ? (
-            <div className="px-6 py-12 text-center text-gray-500">
-              プロジェクトがありません。新規プロジェクトを作成してください。
-            </div>
-          ) : (
-            <ul className="divide-y divide-gray-200">
-              {projects.map((project) => (
-                <li
-                  key={project.id}
-                  className="px-6 py-4 hover:bg-gray-50 transition-colors"
+      <div className="flex-1 overflow-auto p-5">
+        <div className="mx-auto flex w-full max-w-6xl flex-col gap-4">
+          <Card
+            title="新規プロジェクト"
+            subtitle="タイトルを入力してすぐに記事作成を開始"
+          >
+            <div className="space-y-2">
+              <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_auto]">
+                <input
+                  type="text"
+                  value={newProjectName}
+                  onChange={(e) => setNewProjectName(e.target.value)}
+                  placeholder="例: 日米金利差と為替の関係"
+                  className="nv-input"
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      void handleCreateProject();
+                    }
+                  }}
+                />
+                <Button
+                  onClick={handleCreateProject}
+                  disabled={!newProjectName.trim() || isCreating}
+                  variant="primary"
                 >
-                  <div className="flex items-center justify-between">
-                    <div className="flex-1 min-w-0">
-                      <h3 className="text-base font-medium text-gray-900 truncate">
-                        {project.name}
-                      </h3>
-                      <p className="text-sm text-gray-500 mt-1">
-                        更新: {formatDate(project.updatedAt)} / 作成: {formatDate(project.createdAt)}
-                      </p>
+                  {isCreating ? '作成中...' : '作成'}
+                </Button>
+              </div>
+              <div className="text-xs text-slate-500">
+                作成後は記事入力画面から開始します。
+              </div>
+            </div>
+          </Card>
+
+          <Card title="検索と再開" subtitle="プロジェクト名や記事タイトルで絞り込み">
+            <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_auto] md:items-center">
+              <input
+                type="text"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="検索（プロジェクト名 / 記事タイトル）"
+                className="nv-input"
+              />
+              <div className="flex items-center gap-2 text-xs text-slate-500">
+                <Badge tone="info">{filteredProjects.length}件</Badge>
+                {search.trim() ? (
+                  <span>「{search.trim()}」で絞り込み中</span>
+                ) : (
+                  <span>全プロジェクトを表示</span>
+                )}
+              </div>
+            </div>
+          </Card>
+
+          <Card title="プロジェクト一覧" subtitle={`${filteredProjects.length}件`}>
+            <div className="space-y-2">
+              {isLoading && (
+                <div className="space-y-2">
+                  <Skeleton className="h-24 w-full" />
+                  <Skeleton className="h-24 w-full" />
+                </div>
+              )}
+
+              {!isLoading && filteredProjects.length === 0 && (
+                <EmptyState
+                  title="表示できるプロジェクトがありません"
+                  description="新規プロジェクトを作成するか、検索条件を変更してください。"
+                />
+              )}
+
+              {!isLoading &&
+                filteredProjects.map((project) => {
+                  const summary = project.summary;
+                  const isOpening = openingProjectId === project.id;
+                  const blockers = summary
+                    ? [
+                        summary.missingPrompts > 0 ? `プロンプト ${summary.missingPrompts}` : null,
+                        summary.missingImages > 0 ? `画像 ${summary.missingImages}` : null,
+                        summary.missingAudio > 0 ? `音声 ${summary.missingAudio}` : null,
+                      ].filter((value): value is string => value != null)
+                    : [];
+
+                  return (
+                    <div key={project.id} className="nv-surface-muted px-4 py-4">
+                      <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+                        <div className="min-w-0 flex-1">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <h3 className="truncate text-sm font-semibold text-slate-900">
+                              {project.name}
+                            </h3>
+                            {summary ? (
+                              <StatusChip
+                                tone={summary.hasVideoOutput ? 'success' : 'info'}
+                                label={
+                                  summary.hasVideoOutput ? '完成' : `次: ${stageLabel(summary.stage)}`
+                                }
+                              />
+                            ) : (
+                              <Badge tone="neutral">旧データ</Badge>
+                            )}
+                          </div>
+
+                          <div className="mt-1 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-slate-500">
+                            <span>更新: {formatDate(project.updatedAt)}</span>
+                            <span>作成: {formatDate(project.createdAt)}</span>
+                            {project.articleTitle && (
+                              <span className="truncate">記事: {project.articleTitle}</span>
+                            )}
+                          </div>
+
+                          {summary && (
+                            <div className="mt-3 space-y-2">
+                              <ProgressBar
+                                value={summary.completedSteps}
+                                max={summary.totalSteps}
+                                label={`進捗 ${summary.completedSteps}/${summary.totalSteps}`}
+                                tone={summary.hasVideoOutput ? 'success' : 'accent'}
+                              />
+                              <div className="flex flex-wrap items-center gap-2 text-xs text-slate-600">
+                                <span>次の一手: {nextActionLabel(summary)}</span>
+                                {blockers.length > 0 && <span>不足: {blockers.join(' / ')}</span>}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+
+                        <div className="flex shrink-0 items-center gap-2">
+                          <Button
+                            variant="primary"
+                            onClick={() => handleOpenProject(project.id)}
+                            disabled={isOpening}
+                          >
+                            {isOpening ? '開いています...' : '再開'}
+                          </Button>
+                          <Button variant="secondary" onClick={() => void handleDeleteProject(project)}>
+                            削除
+                          </Button>
+                        </div>
+                      </div>
                     </div>
-                    <div className="flex items-center gap-2 ml-4">
-                      <button
-                        onClick={() => handleOpenProject(project.id)}
-                        disabled={openingProjectId === project.id}
-                        className="px-4 py-2 text-sm text-blue-600 hover:bg-blue-50 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                      >
-                        {openingProjectId === project.id ? '開いています...' : '開く'}
-                      </button>
-                      <button
-                        onClick={() => handleDeleteProject(project.id)}
-                        className="px-4 py-2 text-sm text-red-600 hover:bg-red-50 rounded-lg transition-colors"
-                      >
-                        削除
-                      </button>
-                    </div>
-                  </div>
-                </li>
-              ))}
-            </ul>
-          )}
+                  );
+                })}
+            </div>
+          </Card>
         </div>
       </div>
     </div>

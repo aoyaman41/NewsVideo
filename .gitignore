@@ -35,6 +35,13 @@ release/
 *.exe
 *.AppImage
 
+# Generated TypeScript artifacts (source of truth is *.ts)
+electron/**/*.js
+electron/**/*.d.ts
+vite.config.js
+vite.config.d.ts
+tsconfig.node.tsbuildinfo
+
 # Bundled binaries (generated)
 resources/ffmpeg/ffmpeg
 resources/ffmpeg/ffprobe

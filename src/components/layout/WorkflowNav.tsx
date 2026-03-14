@@ -1,11 +1,19 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import type { Project } from '../../schemas';
-import { DEFAULT_COST_RATES, formatUsd, sumUsageCostUsd, type CostRates } from '../../utils/cost';
+import {
+  DEFAULT_COST_RATES,
+  formatUsd,
+  normalizeCostRates,
+  sumUsageCostUsd,
+  type CostRates,
+} from '../../utils/cost';
+import { nextActionLabel, stageLabel, summarizeProjectProgress } from '../../utils/projectHealth';
+import type { WorkflowStage } from '../../types/ui';
+import { Badge, ProgressBar, StatusChip } from '../ui';
 
-export type WorkflowStage = 'article' | 'script' | 'image' | 'audio' | 'video';
-
-type StepStatus = 'done' | 'todo';
+type NonCurrentStepStatus = 'done' | 'warning' | 'todo';
+type StepStatus = NonCurrentStepStatus | 'current';
 
 type Step = {
   key: WorkflowStage;
@@ -21,97 +29,60 @@ const steps: Step[] = [
   { key: 'video', label: '動画', to: (id) => `/projects/${id}/video` },
 ];
 
-function safeTrim(value: unknown): string {
-  return typeof value === 'string' ? value.trim() : '';
+function hasText(value: string | undefined | null): boolean {
+  return Boolean(value && value.trim().length > 0);
 }
 
-function computeProgress(project?: Project | null) {
-  const parts = project?.parts ?? [];
-  const totalParts = parts.length;
+function computeStepStatuses(
+  project: Project | null | undefined,
+  summary: ReturnType<typeof summarizeProjectProgress> | null
+): Record<WorkflowStage, NonCurrentStepStatus> {
+  if (!project || !summary) {
+    return {
+      article: 'todo',
+      script: 'todo',
+      image: 'todo',
+      audio: 'todo',
+      video: 'todo',
+    };
+  }
 
-  const hasArticle =
-    safeTrim(project?.article?.title).length > 0 &&
-    safeTrim(project?.article?.bodyText).length > 0;
+  const hasArticle = hasText(project.article?.title) && hasText(project.article?.bodyText);
+  const hasScript = summary.partCount > 0;
+  const hasImage = hasScript && summary.missingPrompts === 0 && summary.missingImages === 0;
+  const hasAudio = hasScript && summary.missingAudio === 0;
+  const hasVideo = summary.hasVideoOutput;
 
-  const partIdSet = new Set(parts.map((p) => p.id));
-  const partsWithPrompt = project?.prompts
-    ? new Set(project.prompts.filter((p) => partIdSet.has(p.partId)).map((p) => p.partId)).size
-    : 0;
-  const partsWithAssignedImages = parts.filter((p) => (p.panelImages?.length ?? 0) > 0).length;
-  const partsWithAudio = parts.filter((p) => Boolean(p.audio)).length;
-
-  const allAssignedImages = totalParts > 0 && partsWithAssignedImages === totalParts;
-  const allAudio = totalParts > 0 && partsWithAudio === totalParts;
+  const imageInProgress =
+    hasScript &&
+    !hasImage &&
+    (summary.missingPrompts < summary.partCount || summary.missingImages < summary.partCount);
+  const audioInProgress = hasScript && !hasAudio && summary.missingAudio < summary.partCount;
+  const videoInProgress = !hasVideo && (hasImage || hasAudio || imageInProgress || audioInProgress);
 
   return {
-    totalParts,
-    hasArticle,
-    partsWithPrompt,
-    partsWithAssignedImages,
-    partsWithAudio,
-    allAssignedImages,
-    allAudio,
+    article: hasArticle ? 'done' : 'todo',
+    script: hasScript ? 'done' : 'todo',
+    image: hasImage ? 'done' : imageInProgress ? 'warning' : 'todo',
+    audio: hasAudio ? 'done' : audioInProgress ? 'warning' : 'todo',
+    video: hasVideo ? 'done' : videoInProgress ? 'warning' : 'todo',
   };
 }
 
-function statusFor(step: WorkflowStage, progress: ReturnType<typeof computeProgress>): StepStatus {
-  switch (step) {
-    case 'article':
-      return progress.hasArticle ? 'done' : 'todo';
-    case 'script':
-      return progress.totalParts > 0 ? 'done' : 'todo';
-    case 'image':
-      return progress.allAssignedImages ? 'done' : 'todo';
-    case 'audio':
-      return progress.allAudio ? 'done' : 'todo';
-    case 'video':
-      return progress.allAssignedImages && progress.allAudio ? 'done' : 'todo';
-    default:
-      return 'todo';
-  }
-}
-
-function detailFor(step: WorkflowStage, progress: ReturnType<typeof computeProgress>): string {
-  const n = progress.totalParts;
-  switch (step) {
-    case 'article':
-      return progress.hasArticle ? '入力済' : '未入力';
-    case 'script':
-      return n > 0 ? `${n}パート` : '未生成';
-    case 'image':
-      return n > 0
-        ? `プロンプト ${progress.partsWithPrompt}/${n} ・ 割当 ${progress.partsWithAssignedImages}/${n}`
-        : '未生成';
-    case 'audio':
-      return n > 0 ? `生成 ${progress.partsWithAudio}/${n}` : '未生成';
-    case 'video':
-      return progress.allAssignedImages && progress.allAudio ? '準備OK' : '準備中';
-    default:
-      return '';
-  }
-}
-
-function stylesFor(status: StepStatus, isCurrent: boolean) {
-  if (isCurrent) {
-    return {
-      circle: 'bg-blue-600 border-blue-600 text-white ring-2 ring-blue-200',
-      label: 'text-gray-900 font-semibold',
-      sub: 'text-blue-700',
-    };
+function stylesFor(status: StepStatus): string {
+  if (status === 'current') {
+    return 'border-[var(--nv-color-accent)] bg-blue-50 text-blue-800';
   }
   if (status === 'done') {
-    return {
-      circle: 'bg-green-600 border-green-600 text-white',
-      label: 'text-gray-900',
-      sub: 'text-green-700',
-    };
+    return 'border-emerald-200 bg-emerald-50 text-emerald-700';
   }
-  return {
-    circle: 'bg-white border-gray-300 text-gray-500',
-    label: 'text-gray-700',
-    sub: 'text-gray-500',
-  };
+  if (status === 'warning') {
+    return 'border-amber-200 bg-amber-50 text-amber-800';
+  }
+  return 'border-[var(--nv-color-border)] bg-white text-slate-600 hover:bg-slate-50';
 }
+
+export { type WorkflowStage };
 
 export function WorkflowNav({
   projectId,
@@ -126,23 +97,20 @@ export function WorkflowNav({
   const [costRates, setCostRates] = useState<CostRates>(DEFAULT_COST_RATES);
   const [liveProject, setLiveProject] = useState<Project | null | undefined>(project);
   const displayProject = liveProject ?? project;
-  const progress = useMemo(() => computeProgress(displayProject), [displayProject]);
-  const currentIndex = useMemo(() => steps.findIndex((s) => s.key === current), [current]);
-  const usageRecords = displayProject?.usage ?? [];
+  const summary = useMemo(
+    () => (displayProject ? summarizeProjectProgress(displayProject) : null),
+    [displayProject]
+  );
+  const stepStatuses = useMemo(
+    () => computeStepStatuses(displayProject, summary),
+    [displayProject, summary]
+  );
+
+  const usageRecords = useMemo(() => displayProject?.usage ?? [], [displayProject?.usage]);
   const totalCost = useMemo(
     () => sumUsageCostUsd(usageRecords, costRates),
     [usageRecords, costRates]
   );
-  const openaiCost = useMemo(
-    () => sumUsageCostUsd(usageRecords.filter((r) => r.provider === 'openai'), costRates),
-    [usageRecords, costRates]
-  );
-  const geminiCost = useMemo(
-    () => sumUsageCostUsd(usageRecords.filter((r) => r.provider === 'gemini'), costRates),
-    [usageRecords, costRates]
-  );
-  const autoStatus = displayProject?.autoGenerationStatus;
-  const autoRunning = Boolean(autoStatus?.running);
 
   useEffect(() => {
     setLiveProject(project);
@@ -154,14 +122,12 @@ export function WorkflowNav({
       try {
         const settings = await window.electronAPI.settings.get();
         if (cancelled) return;
-        if (settings?.cost) {
-          setCostRates(settings.cost);
-        }
+        setCostRates(normalizeCostRates(settings?.cost));
       } catch {
-        // fallback to default
+        // noop
       }
     };
-    loadRates();
+    void loadRates();
     return () => {
       cancelled = true;
     };
@@ -170,7 +136,6 @@ export function WorkflowNav({
   useEffect(() => {
     if (!projectId) return;
     let cancelled = false;
-    const intervalMs = autoRunning ? 2000 : 5000;
 
     const tick = async () => {
       try {
@@ -178,110 +143,84 @@ export function WorkflowNav({
         if (cancelled) return;
         setLiveProject(latest);
       } catch {
-        // ignore
+        // noop
       }
     };
 
     void tick();
-    const interval = setInterval(tick, intervalMs);
+    const interval = setInterval(tick, 3000);
 
     return () => {
       cancelled = true;
       clearInterval(interval);
     };
-  }, [projectId, autoRunning]);
+  }, [projectId]);
 
   return (
-    <nav aria-label="Workflow" className="titlebar-no-drag bg-white border-b border-gray-200">
-      <div className="px-6 py-3">
-        <div className="flex items-center justify-between gap-4">
-          <div className="text-xs text-gray-500">
-            <span className="font-medium text-gray-700">ワークフロー</span>
-            <span className="ml-2">
-              {currentIndex >= 0 ? `${currentIndex + 1}/${steps.length}` : `1/${steps.length}`}
-            </span>
+    <nav
+      aria-label="Workflow"
+      className="titlebar-no-drag border-b border-[var(--nv-color-border)] bg-white px-5 py-4"
+    >
+      <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-start">
+        <div className="min-w-0 space-y-2">
+          <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
+            <span className="font-semibold uppercase tracking-[0.08em] text-slate-700">Workflow</span>
+            {summary && (
+              <Badge tone={summary.hasVideoOutput ? 'success' : 'info'}>
+                {summary.completedSteps}/{summary.totalSteps}
+              </Badge>
+            )}
+            {summary && (
+              <StatusChip
+                tone={summary.hasVideoOutput ? 'success' : 'info'}
+                label={summary.hasVideoOutput ? '完成' : `次: ${stageLabel(summary.stage)}`}
+              />
+            )}
+            {summary && <span>推奨: {nextActionLabel(summary)}</span>}
           </div>
-          {displayProject && (
-            <div className="text-xs text-gray-500 truncate">
-              {progress.totalParts > 0 ? `パート ${progress.totalParts}` : 'パート未生成'}
-            </div>
-          )}
-          {displayProject && (
-            <div
-              className="text-xs text-gray-600"
-              title={`OpenAI ${formatUsd(openaiCost)} / Gemini ${formatUsd(geminiCost)}`}
-            >
-              推定コスト {formatUsd(totalCost)}
-            </div>
+          {summary && (
+            <>
+              <ProgressBar
+                value={summary.completedSteps}
+                max={summary.totalSteps}
+                tone={summary.hasVideoOutput ? 'success' : 'accent'}
+              />
+              <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
+                <span>パート {summary.partCount}</span>
+                {summary.missingPrompts > 0 && <Badge tone="warning">未プロンプト {summary.missingPrompts}</Badge>}
+                {summary.missingImages > 0 && <Badge tone="warning">未画像 {summary.missingImages}</Badge>}
+                {summary.missingAudio > 0 && <Badge tone="warning">未音声 {summary.missingAudio}</Badge>}
+              </div>
+            </>
           )}
         </div>
-        {autoRunning && (
-          <div className="mt-2 text-xs text-blue-700">
-            自動生成中: {autoStatus?.step ?? '処理中'}
+        {displayProject && (
+          <div className="rounded-[10px] border border-[var(--nv-color-border)] bg-slate-50 px-3 py-2 text-right text-xs text-slate-500">
+            <div className="font-semibold text-slate-700">推定コスト</div>
+            <div className="mt-1 text-sm font-semibold text-slate-900">{formatUsd(totalCost)}</div>
           </div>
         )}
-
-        <ol className="mt-3 flex items-center gap-3 overflow-x-auto pb-1">
-          {steps.map((step, idx) => {
-            const isCurrent = step.key === current;
-            const status = statusFor(step.key, progress);
-            const detail = displayProject ? detailFor(step.key, progress) : '';
-            const styles = stylesFor(status, isCurrent);
-
-            const connectorClass =
-              idx < steps.length - 1
-                ? status === 'done'
-                  ? 'bg-green-300'
-                  : 'bg-gray-200'
-                : '';
-
-            return (
-              <li key={step.key} className="flex items-center">
-                <button
-                  type="button"
-                  onClick={() => navigate(step.to(projectId))}
-                  aria-current={isCurrent ? 'step' : undefined}
-                  className="titlebar-no-drag group flex items-center gap-3 rounded-lg px-2 py-1.5 hover:bg-gray-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
-                  title={detail}
-                >
-                  <span
-                    className={`flex items-center justify-center w-9 h-9 rounded-full border text-sm font-semibold transition-colors ${styles.circle}`}
-                  >
-                    {status === 'done' ? (
-                      <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-                        <path
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          strokeWidth={3}
-                          d="M5 13l4 4L19 7"
-                        />
-                      </svg>
-                    ) : (
-                      idx + 1
-                    )}
-                  </span>
-
-                  <div className="text-left min-w-[5.5rem]">
-                    <div className="flex items-center gap-1">
-                      <div className={`text-sm leading-4 ${styles.label}`}>{step.label}</div>
-                      {isCurrent && (
-                        <span className="px-1.5 py-0.5 rounded-full text-[10px] font-semibold bg-blue-600 text-white">
-                          現在
-                        </span>
-                      )}
-                    </div>
-                    {project && <div className={`text-[11px] mt-0.5 leading-4 ${styles.sub}`}>{detail}</div>}
-                  </div>
-                </button>
-
-                {idx < steps.length - 1 && (
-                  <div className={`h-px w-8 rounded ${connectorClass} shrink-0`} />
-                )}
-              </li>
-            );
-          })}
-        </ol>
       </div>
+
+      <ol className="mt-4 flex items-center gap-2 overflow-x-auto pb-1">
+        {steps.map((step) => {
+          const status: StepStatus = step.key === current ? 'current' : stepStatuses[step.key];
+          return (
+            <li key={step.key}>
+              <button
+                type="button"
+                onClick={() => navigate(step.to(projectId))}
+                className={`titlebar-no-drag rounded-[8px] border px-3 py-1.5 text-xs font-semibold transition-colors duration-[var(--nv-duration-fast)] ${stylesFor(
+                  status
+                )}`}
+                aria-current={step.key === current ? 'step' : undefined}
+              >
+                {step.label}
+              </button>
+            </li>
+          );
+        })}
+      </ol>
     </nav>
   );
 }

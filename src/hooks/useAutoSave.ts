@@ -25,6 +25,9 @@ export function useAutoSave<T>({
   const timeoutRef = useRef<NodeJS.Timeout | null>(null);
   const isSavingRef = useRef(false);
   const isMountedRef = useRef(true);
+  const latestIsDirtyRef = useRef(false);
+  const latestEnabledRef = useRef(enabled);
+  const latestSaveRef = useRef<() => Promise<void>>(async () => {});
   const [lastSavedAt, setLastSavedAt] = useState<Date | null>(null);
   const [isSaving, setIsSaving] = useState(false);
 
@@ -70,6 +73,12 @@ export function useAutoSave<T>({
     }
   }, [data, onSave, serialize]);
 
+  useEffect(() => {
+    latestIsDirtyRef.current = isDirty;
+    latestEnabledRef.current = enabled;
+    latestSaveRef.current = save;
+  }, [isDirty, enabled, save]);
+
   // デバウンスされた自動保存
   useEffect(() => {
     if (!enabled) return;
@@ -96,8 +105,8 @@ export function useAutoSave<T>({
   // アンマウント時に未保存データを保存
   useEffect(() => {
     return () => {
-      if (isDirty && enabled) {
-        save();
+      if (latestIsDirtyRef.current && latestEnabledRef.current) {
+        void latestSaveRef.current();
       }
     };
   }, []);

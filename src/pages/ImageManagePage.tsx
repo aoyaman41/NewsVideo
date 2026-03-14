@@ -2,12 +2,23 @@ import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { Header, WorkflowNav } from '../components/layout';
 import { ImageAssignment, PromptEditor } from '../components/image';
+import {
+  Badge,
+  Button,
+  Card,
+  EmptyState,
+  ErrorDetailPanel,
+  useConfirm,
+  useToast,
+} from '../components/ui';
 import type { Project, ImageAssetRef, ImagePrompt } from '../schemas';
-import { createGeminiImageUsageRecord, createOpenAIUsageRecord } from '../utils/usage';
+import { createGeminiImageUsageRecordFromAssets, createOpenAIUsageRecord } from '../utils/usage';
 
 export function ImageManagePage() {
   const { projectId } = useParams<{ projectId: string }>();
   const navigate = useNavigate();
+  const { confirm } = useConfirm();
+  const toast = useToast();
 
   const [project, setProject] = useState<Project | null>(null);
   const [selectedPartId, setSelectedPartId] = useState<string | null>(null);
@@ -16,6 +27,14 @@ export function ImageManagePage() {
   const [isGeneratingPrompts, setIsGeneratingPrompts] = useState(false);
   const [isGeneratingSinglePrompt, setIsGeneratingSinglePrompt] = useState(false);
   const [isGeneratingImage, setIsGeneratingImage] = useState(false);
+
+  const reportError = useCallback(
+    (message: string, title?: string) => {
+      setError(message);
+      toast.error(message, title);
+    },
+    [toast]
+  );
 
   const latestPromptByPartId = useMemo(() => {
     const map = new Map<string, ImagePrompt>();
@@ -52,7 +71,6 @@ export function ImageManagePage() {
     return set;
   }, [project]);
 
-
   const missingImagePromptCount = useMemo(() => {
     let missing = 0;
     for (const prompt of activePrompts) {
@@ -77,14 +95,17 @@ export function ImageManagePage() {
         }
       } catch (err) {
         console.error('Failed to load project:', err);
-        setError(err instanceof Error ? err.message : 'プロジェクトの読み込みに失敗しました');
+        reportError(
+          err instanceof Error ? err.message : 'プロジェクトの読み込みに失敗しました',
+          '読み込みに失敗しました'
+        );
       } finally {
         setIsLoading(false);
       }
     };
 
     loadProject();
-  }, [projectId]);
+  }, [projectId, reportError]);
 
   // 画像プロンプト生成
   const handleGeneratePrompts = useCallback(async () => {
@@ -96,8 +117,7 @@ export function ImageManagePage() {
 
       const result = await window.electronAPI.ai.generateImagePrompts(
         project.parts,
-        project.article,
-        'news_broadcast'
+        project.article
       );
       const usageRecord = createOpenAIUsageRecord('image_prompt_generate', result.usage);
 
@@ -105,7 +125,7 @@ export function ImageManagePage() {
       const updatedProject = {
         ...project,
         prompts: [...project.prompts, ...result.prompts],
-        usage: usageRecord ? [...(project.usage ?? []), usageRecord] : project.usage ?? [],
+        usage: usageRecord ? [...(project.usage ?? []), usageRecord] : (project.usage ?? []),
         updatedAt: new Date().toISOString(),
       };
 
@@ -113,11 +133,11 @@ export function ImageManagePage() {
       setProject(updatedProject);
     } catch (err) {
       console.error('Failed to generate prompts:', err);
-      setError(err instanceof Error ? err.message : 'プロンプト生成に失敗しました');
+      reportError(err instanceof Error ? err.message : 'プロンプト生成に失敗しました');
     } finally {
       setIsGeneratingPrompts(false);
     }
-  }, [project]);
+  }, [project, reportError]);
 
   const handleGeneratePromptForTarget = useCallback(
     async (targetId: string) => {
@@ -137,7 +157,7 @@ export function ImageManagePage() {
         const updatedProject: Project = {
           ...project,
           prompts: [...project.prompts, result.prompt],
-          usage: usageRecord ? [...(project.usage ?? []), usageRecord] : project.usage ?? [],
+          usage: usageRecord ? [...(project.usage ?? []), usageRecord] : (project.usage ?? []),
           updatedAt: new Date().toISOString(),
         };
 
@@ -145,12 +165,12 @@ export function ImageManagePage() {
         setProject(updatedProject);
       } catch (err) {
         console.error('Failed to generate prompt:', err);
-        setError(err instanceof Error ? err.message : 'プロンプト生成に失敗しました');
+        reportError(err instanceof Error ? err.message : 'プロンプト生成に失敗しました');
       } finally {
         setIsGeneratingSinglePrompt(false);
       }
     },
-    [project]
+    [project, reportError]
   );
 
   // 画像生成
@@ -163,7 +183,7 @@ export function ImageManagePage() {
         setError(null);
 
         const imageAsset = await window.electronAPI.image.generate(prompt, projectId);
-        const usageRecord = createGeminiImageUsageRecord(1, 'image_generate');
+        const usageRecord = createGeminiImageUsageRecordFromAssets([imageAsset], 'image_generate');
 
         // プロジェクトを更新
         const now = new Date().toISOString();
@@ -178,7 +198,7 @@ export function ImageManagePage() {
           ...project,
           parts: updatedParts,
           images: [...project.images, imageAsset],
-          usage: usageRecord ? [...(project.usage ?? []), usageRecord] : project.usage ?? [],
+          usage: usageRecord ? [...(project.usage ?? []), usageRecord] : (project.usage ?? []),
           updatedAt: now,
         };
 
@@ -186,24 +206,26 @@ export function ImageManagePage() {
         setProject(updatedProject);
       } catch (err) {
         console.error('Failed to generate image:', err);
-        setError(err instanceof Error ? err.message : '画像生成に失敗しました');
+        reportError(err instanceof Error ? err.message : '画像生成に失敗しました');
       } finally {
         setIsGeneratingImage(false);
       }
     },
-    [project, projectId]
+    [project, projectId, reportError]
   );
 
   // 全パートの画像を一括生成
   const handleGenerateAllImages = useCallback(async () => {
     if (!project || !projectId) return;
 
-    const targetPrompts = activePrompts.filter(
-      (prompt) => !promptIdsWithAnyImage.has(prompt.id)
-    );
+    const targetPrompts = activePrompts.filter((prompt) => !promptIdsWithAnyImage.has(prompt.id));
 
     if (targetPrompts.length === 0) {
-      setError('未生成の画像がありません（必要なら各パートで個別に生成してください）');
+      setError(null);
+      toast.info(
+        '未生成の画像はありません。必要なら各パートで個別に生成してください。',
+        '生成対象はありません'
+      );
       return;
     }
 
@@ -212,7 +234,10 @@ export function ImageManagePage() {
       setError(null);
 
       const imageAssets = await window.electronAPI.image.generateBatch(targetPrompts, projectId);
-      const usageRecord = createGeminiImageUsageRecord(imageAssets.length, 'image_generate_batch');
+      const usageRecord = createGeminiImageUsageRecordFromAssets(
+        imageAssets,
+        'image_generate_batch'
+      );
 
       // プロジェクトを更新
       const now = new Date().toISOString();
@@ -229,14 +254,18 @@ export function ImageManagePage() {
         if (!part) continue;
         if ((part.panelImages?.length ?? 0) > 0) continue;
 
-        nextPartsById.set(p.partId, { ...part, panelImages: [{ imageId: imageAsset.id }], updatedAt: now });
+        nextPartsById.set(p.partId, {
+          ...part,
+          panelImages: [{ imageId: imageAsset.id }],
+          updatedAt: now,
+        });
       }
 
       const updatedProject: Project = {
         ...project,
         parts: project.parts.map((p) => nextPartsById.get(p.id) ?? p),
         images: [...project.images, ...imageAssets],
-        usage: usageRecord ? [...(project.usage ?? []), usageRecord] : project.usage ?? [],
+        usage: usageRecord ? [...(project.usage ?? []), usageRecord] : (project.usage ?? []),
         updatedAt: now,
       };
 
@@ -244,11 +273,11 @@ export function ImageManagePage() {
       setProject(updatedProject);
     } catch (err) {
       console.error('Failed to generate images:', err);
-      setError(err instanceof Error ? err.message : '画像生成に失敗しました');
+      reportError(err instanceof Error ? err.message : '画像生成に失敗しました');
     } finally {
       setIsGeneratingImage(false);
     }
-  }, [project, projectId, activePrompts, promptIdsWithAnyImage]);
+  }, [project, projectId, activePrompts, promptIdsWithAnyImage, reportError, toast]);
 
   // 画像削除
   const handleDeleteImage = useCallback(
@@ -260,7 +289,13 @@ export function ImageManagePage() {
         project.article.importedImages.find((img) => img.id === imageId);
       if (!image) return;
 
-      if (!confirm('この画像を削除しますか？\n※割り当てからも自動的に解除されます')) return;
+      const accepted = await confirm({
+        title: '画像を削除しますか？',
+        description: 'この画像を削除すると、パートへの割り当ても自動的に解除されます。',
+        confirmLabel: '削除',
+        confirmVariant: 'danger',
+      });
+      if (!accepted) return;
 
       try {
         const result = await window.electronAPI.image.delete(image.filePath);
@@ -284,19 +319,19 @@ export function ImageManagePage() {
           },
           parts: updatedParts,
           images: project.images.filter((img) => img.id !== imageId),
-          thumbnail:
-            project.thumbnail?.imageId === imageId ? undefined : project.thumbnail,
+          thumbnail: project.thumbnail?.imageId === imageId ? undefined : project.thumbnail,
           updatedAt: now,
         };
 
         await window.electronAPI.project.save(updatedProject);
         setProject(updatedProject);
+        toast.success('画像を削除しました');
       } catch (err) {
         console.error('Failed to delete image:', err);
-        setError(err instanceof Error ? err.message : '画像の削除に失敗しました');
+        reportError(err instanceof Error ? err.message : '画像の削除に失敗しました');
       }
     },
-    [project]
+    [confirm, project, reportError, toast]
   );
 
   // プロンプト更新
@@ -306,9 +341,7 @@ export function ImageManagePage() {
 
       const updatedProject = {
         ...project,
-        prompts: project.prompts.map((p) =>
-          p.id === updatedPrompt.id ? updatedPrompt : p
-        ),
+        prompts: project.prompts.map((p) => (p.id === updatedPrompt.id ? updatedPrompt : p)),
         updatedAt: new Date().toISOString(),
       };
 
@@ -317,7 +350,6 @@ export function ImageManagePage() {
     },
     [project]
   );
-
 
   // 選択中のパート
   const selectedPart = project?.parts.find((p) => p.id === selectedPartId);
@@ -331,27 +363,20 @@ export function ImageManagePage() {
     return map;
   }, [project]);
 
-  const getImageById = useCallback(
-    (imageId: string) => imageById.get(imageId),
-    [imageById]
-  );
+  const getImageById = useCallback((imageId: string) => imageById.get(imageId), [imageById]);
 
   // 選択中のパートのプロンプト
-  const selectedPartPrompt = selectedPartId
-    ? latestPromptByPartId.get(selectedPartId)
-    : undefined;
+  const selectedPartPrompt = selectedPartId ? latestPromptByPartId.get(selectedPartId) : undefined;
 
   // 選択中のパートの画像
-  const selectedPartImages = project?.images.filter(
-    (img) => img.metadata.promptId && project.prompts.find(
-      (p) => p.id === img.metadata.promptId && p.partId === selectedPartId
-    )
-  ) || [];
-
   const candidateImagesForPart = useMemo(() => {
-    return selectedPartImages;
-  }, [selectedPartImages]);
-
+    if (!project) return [];
+    return project.images.filter(
+      (img) =>
+        img.metadata.promptId &&
+        project.prompts.some((p) => p.id === img.metadata.promptId && p.partId === selectedPartId)
+    );
+  }, [project, selectedPartId]);
   // パートへの割り当て（panelImages）更新
   const handleUpdatePanelImages = useCallback(
     async (partId: string, panelImages: ImageAssetRef[]) => {
@@ -371,191 +396,172 @@ export function ImageManagePage() {
         setProject(updatedProject);
       } catch (err) {
         console.error('Failed to update panel images:', err);
-        setError(err instanceof Error ? err.message : '画像の割り当て更新に失敗しました');
+        reportError(err instanceof Error ? err.message : '画像の割り当て更新に失敗しました');
       }
     },
-    [project]
+    [project, reportError]
   );
 
   if (isLoading) {
     return (
-      <div className="flex-1 flex items-center justify-center">
-        <div className="text-center">
-          <svg className="animate-spin h-8 w-8 text-blue-600 mx-auto mb-4" viewBox="0 0 24 24">
-            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
-            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-          </svg>
-          <p className="text-gray-600">読み込み中...</p>
-        </div>
+      <div className="flex flex-1 items-center justify-center">
+        <p className="text-slate-500">読み込み中...</p>
       </div>
     );
   }
 
   if (!project) {
     return (
-      <div className="flex-1 flex items-center justify-center">
-        <div className="text-center">
-          <p className="text-red-600 mb-4">プロジェクトが見つかりません</p>
-          <button
-            onClick={() => navigate('/')}
-            className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
-          >
-            プロジェクト一覧に戻る
-          </button>
-        </div>
+      <div className="flex flex-1 items-center justify-center">
+        <EmptyState
+          title="プロジェクトを読み込めません"
+          description={error || 'プロジェクトが見つかりません'}
+          action={<Button onClick={() => navigate('/projects')}>プロジェクト一覧に戻る</Button>}
+        />
       </div>
     );
   }
 
   return (
-    <div className="flex-1 flex flex-col overflow-hidden">
-      <Header
-        title="画像"
-        subtitle={project.name}
-      />
+    <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+      <Header title="画像" subtitle={project.name} />
 
       {projectId && <WorkflowNav projectId={projectId} current="image" project={project} />}
 
-      {/* エラー表示 */}
       {error && (
-        <div className="mx-6 mt-4 bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg">
-          {error}
+        <div className="px-4 pt-4">
+          <ErrorDetailPanel message={error} onDismiss={() => setError(null)} />
         </div>
       )}
 
-      <div className="flex-1 flex overflow-hidden">
-        {/* 左サイドバー: パートリスト */}
-        <div className="w-64 border-r border-gray-200 overflow-auto bg-gray-50">
-          <div className="p-4">
-            <h3 className="font-semibold text-gray-900 mb-4">パート一覧</h3>
-            <ul className="space-y-2">
-              {project.parts.map((part, index) => {
-                const partPrompt = latestPromptByPartId.get(part.id);
-                const assignedCount = part.panelImages.length;
-
-                return (
-                  <li key={part.id}>
-                    <button
-                      onClick={() => setSelectedPartId(part.id)}
-                      className={`w-full text-left p-3 rounded-lg transition-colors ${
-                        selectedPartId === part.id
-                          ? 'bg-white shadow border border-blue-200'
-                          : 'hover:bg-white'
-                      }`}
-                    >
-                      <div className="flex items-center gap-2">
-                        <span className="text-xs font-medium text-gray-400">
-                          {index + 1}
-                        </span>
-                        <span className="text-sm font-medium text-gray-900 truncate">
-                          {part.title}
-                        </span>
-                      </div>
-                      <div className="flex items-center gap-2 mt-1">
-                        <span className={`text-xs ${partPrompt ? 'text-green-600' : 'text-gray-400'}`}>
-                          {partPrompt ? 'プロンプト有' : 'プロンプト無'}
-                        </span>
-                        <span className="text-xs text-gray-400">|</span>
-                        <span className={`text-xs ${assignedCount > 0 ? 'text-blue-600' : 'text-gray-400'}`}>
-                          使用 {assignedCount}枚
-                        </span>
-                      </div>
-                    </button>
-                  </li>
-                );
-              })}
-            </ul>
-
-            {/* プロンプト一括生成ボタン */}
-            <button
-              onClick={handleGeneratePrompts}
-              disabled={isGeneratingPrompts}
-              className="w-full mt-4 px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
-            >
-              {isGeneratingPrompts ? (
-                <>
-                  <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24">
-                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
-                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-                  </svg>
-                  生成中...
-                </>
-              ) : (
-                `プロンプト生成 (${activePrompts.length}/${project.parts.length}件)`
-              )}
-            </button>
-
-            {/* 画像一括生成ボタン */}
-            {activePrompts.length > 0 && (
-              <button
-                onClick={handleGenerateAllImages}
-                disabled={isGeneratingImage || missingImagePromptCount === 0}
-                className="w-full mt-2 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+      <div className="px-4 pt-3">
+        <Card
+          title="一括操作"
+          subtitle={`画像待ち ${missingImagePromptCount} / 生成済みプロンプト ${activePrompts.length}`}
+          actions={
+            <div className="flex items-center gap-2">
+              <Button
+                variant="secondary"
+                onClick={handleGeneratePrompts}
+                disabled={isGeneratingPrompts}
               >
-                {isGeneratingImage ? (
-                  <>
-                    <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24">
-                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
-                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-                    </svg>
-                    生成中...
-                  </>
-                ) : (
-                  `画像一括生成 (未生成 ${missingImagePromptCount}/${activePrompts.length}枚)`
-                )}
-              </button>
-            )}
-          </div>
-        </div>
-
-        {/* メインコンテンツ */}
-        <div className="flex-1 overflow-auto p-6">
-          {selectedPart && (
-            <div className="space-y-6">
-              <div className="bg-white rounded-lg border border-gray-200 p-6">
-                <h3 className="text-lg font-semibold text-gray-900 mb-2">
-                  {selectedPart.title}
-                </h3>
-                <p className="text-sm text-gray-500 mb-4">{selectedPart.summary}</p>
-
-                {/* プロンプトエディタ */}
-                {selectedPartPrompt ? (
-                  <PromptEditor
-                    key={selectedPartPrompt.id}
-                    prompt={selectedPartPrompt}
-                    onSave={handleUpdatePrompt}
-                    onGenerate={handleGenerateImage}
-                    onRegenerate={() => handleGeneratePromptForTarget(selectedPart.id)}
-                    isGenerating={isGeneratingImage}
-                    isRegenerating={isGeneratingSinglePrompt}
-                  />
-                ) : (
-                  <div className="text-center py-8 text-gray-500">
-                    <p>このパートのプロンプトはまだ生成されていません</p>
-                    <button
-                      onClick={() => handleGeneratePromptForTarget(selectedPart.id)}
-                      disabled={isGeneratingSinglePrompt}
-                      className="mt-4 px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 disabled:opacity-50"
-                    >
-                      プロンプトを生成
-                    </button>
-                  </div>
-                )}
-              </div>
-
-              {/* 画像割り当て */}
-              <div className="bg-white rounded-lg border border-gray-200 p-6">
-                <ImageAssignment
-                  panelImages={selectedPart.panelImages}
-                  candidateImages={candidateImagesForPart}
-                  getImageById={getImageById}
-                  onChange={(next) => handleUpdatePanelImages(selectedPart.id, next)}
-                  onDeleteImage={handleDeleteImage}
-                />
-              </div>
+                {isGeneratingPrompts
+                  ? '生成中...'
+                  : `プロンプト一括生成 (${activePrompts.length}/${project.parts.length})`}
+              </Button>
+              <Button
+                variant="success"
+                onClick={handleGenerateAllImages}
+                disabled={
+                  isGeneratingImage || activePrompts.length === 0 || missingImagePromptCount === 0
+                }
+              >
+                {isGeneratingImage
+                  ? '画像生成中...'
+                  : `画像一括生成 (未生成 ${missingImagePromptCount}/${activePrompts.length})`}
+              </Button>
             </div>
+          }
+        >
+          <p className="text-xs text-slate-500">
+            この画面ではプロンプト作成と画像割り当てだけを扱います。全体進捗は上部の Workflow で確認できます。
+          </p>
+        </Card>
+      </div>
+
+      <div className="grid min-h-0 flex-1 grid-cols-[260px_minmax(0,1.15fr)_minmax(0,1.15fr)] gap-4 overflow-hidden p-4">
+        <Card
+          title="パート一覧"
+          subtitle={`${project.parts.length}パート`}
+          className="overflow-hidden"
+        >
+          <ul className="nv-scrollbar max-h-[calc(100vh-280px)] space-y-2 overflow-auto pr-1">
+            {project.parts.map((part, index) => {
+              const partPrompt = latestPromptByPartId.get(part.id);
+              const assignedCount = part.panelImages.length;
+              return (
+                <li key={part.id}>
+                  <button
+                    onClick={() => setSelectedPartId(part.id)}
+                    className={`w-full rounded-[8px] border px-3 py-2 text-left transition-colors ${
+                      selectedPartId === part.id
+                        ? 'border-[var(--nv-color-accent)] bg-blue-50'
+                        : 'border-[var(--nv-color-border)] bg-white hover:bg-slate-50'
+                    }`}
+                  >
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs text-slate-400">{index + 1}</span>
+                      <span className="truncate text-sm font-semibold text-slate-900">
+                        {part.title}
+                      </span>
+                    </div>
+                    <div className="mt-1 flex items-center gap-1 text-[11px]">
+                      <Badge tone={partPrompt ? 'success' : 'warning'}>
+                        {partPrompt ? 'プロンプト済み' : '未プロンプト'}
+                      </Badge>
+                      <Badge tone={assignedCount > 0 ? 'success' : 'warning'}>
+                        {assignedCount}枚
+                      </Badge>
+                    </div>
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        </Card>
+
+        <Card
+          title={selectedPart ? selectedPart.title : 'プロンプト'}
+          subtitle={selectedPart?.summary || 'パートを選択してください'}
+          className="min-h-0 overflow-auto"
+        >
+          {selectedPart ? (
+            selectedPartPrompt ? (
+              <PromptEditor
+                key={selectedPartPrompt.id}
+                prompt={selectedPartPrompt}
+                onSave={handleUpdatePrompt}
+                onGenerate={handleGenerateImage}
+                onRegenerate={() => handleGeneratePromptForTarget(selectedPart.id)}
+                isGenerating={isGeneratingImage}
+                isRegenerating={isGeneratingSinglePrompt}
+              />
+            ) : (
+              <EmptyState
+                title="このパートのプロンプトがありません"
+                description="先にプロンプトを生成すると画像生成できます。"
+                action={
+                  <Button
+                    onClick={() => handleGeneratePromptForTarget(selectedPart.id)}
+                    disabled={isGeneratingSinglePrompt}
+                  >
+                    {isGeneratingSinglePrompt ? '生成中...' : 'プロンプトを生成'}
+                  </Button>
+                }
+              />
+            )
+          ) : (
+            <EmptyState title="パートを選択してください" />
           )}
-        </div>
+        </Card>
+
+        <Card
+          title="画像割り当て"
+          subtitle="候補をクリックで即割り当て（右上アイコンで拡大）"
+          className="min-h-0 overflow-auto"
+        >
+          {selectedPart ? (
+            <ImageAssignment
+              panelImages={selectedPart.panelImages}
+              candidateImages={candidateImagesForPart}
+              getImageById={getImageById}
+              onChange={(next) => handleUpdatePanelImages(selectedPart.id, next)}
+              onDeleteImage={handleDeleteImage}
+            />
+          ) : (
+            <EmptyState title="パートを選択してください" />
+          )}
+        </Card>
       </div>
     </div>
   );

@@ -1,6 +1,7 @@
 import { dialog, ipcMain, shell } from 'electron';
-import * as fs from 'fs/promises';
-import * as path from 'path';
+import * as fs from 'node:fs/promises';
+import * as path from 'node:path';
+import { logger } from '../utils/logger';
 
 type FileDialogOptions = {
   title?: string;
@@ -99,7 +100,7 @@ ipcMain.handle('file:revealInFinder', async (_, targetPath: string) => {
     await shell.openPath(openPath);
     return { success: true };
   } catch (error) {
-    console.error('Failed to open path:', error);
+    logger.error('Failed to open path', error);
     return { success: false };
   }
 });

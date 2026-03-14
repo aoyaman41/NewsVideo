@@ -1,3 +1,13 @@
+import type {
+  type GeminiThinkingLevel,
+  type ImageModel,
+  type ImageResolution,
+  type ImageSizeTier,
+  type OpenAIReasoningEffort,
+  type TextCompletionModel,
+} from '../../shared/constants/models';
+import type { type TTSEngine } from '../../shared/settings/appSettings';
+
 // Electron API の型定義
 
 type AllowedEventChannel =
@@ -12,13 +22,15 @@ type AllowedEventChannel =
 type TokenUsage = {
   inputTokens?: number;
   outputTokens?: number;
+  cachedInputTokens?: number;
   totalTokens?: number;
   model?: string;
+  provider?: 'openai' | 'gemini';
 };
 
 interface ElectronAPI {
   project: {
-    list: () => Promise<ProjectMeta[]>;
+    list: () => Promise<ProjectListItem[]>;
     load: (projectId: string) => Promise<Project>;
     save: (project: Project) => Promise<{ success: boolean; savedAt: string }>;
     delete: (projectId: string) => Promise<{ success: boolean }>;
@@ -43,8 +55,7 @@ interface ElectronAPI {
     ) => Promise<{ parts: Part[]; usage?: TokenUsage | null }>;
     generateImagePrompts: (
       parts: Part[],
-      article: Article,
-      stylePreset: string
+      article: Article
     ) => Promise<{ prompts: ImagePrompt[]; usage?: TokenUsage | null }>;
     generateImagePromptForTarget: (
       parts: Part[],
@@ -75,7 +86,7 @@ interface ElectronAPI {
       options: TTSOptions,
       projectId: string
     ) => Promise<Array<{ audio: AudioAsset; usage?: TokenUsage | null }>>;
-    getVoices: (engine?: 'google_tts' | 'gemini_tts' | 'macos_tts') => Promise<VoiceInfo[]>;
+    getVoices: (engine?: TTSEngine) => Promise<VoiceInfo[]>;
   };
 
   video: {
@@ -110,6 +121,25 @@ interface ProjectMeta {
   createdAt: string;
   updatedAt: string;
   path: string;
+}
+
+type WorkflowStage = 'article' | 'script' | 'image' | 'audio' | 'video';
+
+interface ProjectProgressSummary {
+  stage: WorkflowStage;
+  completedSteps: number;
+  totalSteps: 5;
+  partCount: number;
+  missingPrompts: number;
+  missingImages: number;
+  missingAudio: number;
+  hasVideoOutput: boolean;
+}
+
+interface ProjectListItem extends ProjectMeta {
+  articleTitle?: string;
+  thumbnailImageId?: string;
+  summary?: ProjectProgressSummary;
 }
 
 interface Project extends ProjectMeta {
@@ -159,6 +189,15 @@ interface ImageAsset {
     createdAt: string;
     promptId?: string;
     tags: string[];
+    generation?: {
+      model: string;
+      resolution: ImageResolution;
+      imageSizeTier: ImageSizeTier;
+      aspectRatio: '16:9' | '1:1' | '9:16';
+      inputTokens?: number;
+      outputTokens?: number;
+      totalTokens?: number;
+    };
   };
 }
 
@@ -170,7 +209,11 @@ interface UsageRecord {
   operation: string;
   inputTokens?: number;
   outputTokens?: number;
+  cachedInputTokens?: number;
   imageCount?: number;
+  imageResolution?: ImageResolution;
+  imageSizeTier?: ImageSizeTier;
+  imageAspectRatio?: '16:9' | '1:1' | '9:16';
   createdAt: string;
 }
 
@@ -212,7 +255,7 @@ interface AudioAsset {
   id: string;
   filePath: string;
   durationSec: number;
-  ttsEngine: 'google_tts' | 'gemini_tts' | 'macos_tts';
+  ttsEngine: TTSEngine;
   voiceId: string;
   segments?: string[];
   timepoints?: Array<{
@@ -236,11 +279,16 @@ interface Comment {
 
 // 設定関連の型
 interface Settings {
-  ttsEngine: 'google_tts' | 'gemini_tts' | 'macos_tts';
+  ttsEngine: TTSEngine;
   ttsVoice: string;
   ttsSpeakingRate: number;
   ttsPitch: number;
-  imageStylePreset: string;
+  scriptTextModel: TextCompletionModel;
+  imagePromptTextModel: TextCompletionModel;
+  openaiReasoningEffort: OpenAIReasoningEffort;
+  geminiThinkingLevel: GeminiThinkingLevel;
+  imageModel: ImageModel;
+  imageResolution: ImageResolution;
   defaultAspectRatio: '16:9' | '1:1' | '9:16';
   videoResolution: '1920x1080' | '1280x720' | '3840x2160';
   videoFps: number;
@@ -249,12 +297,11 @@ interface Settings {
   videoPartLeadInSec: number;
   openingVideoPath: string;
   endingVideoPath: string;
-  autoSaveInterval: number;
   defaultProjectDir: string;
   cost?: CostRates;
 }
 
-type ApiKeyService = 'openai' | 'google_ai' | 'google_tts';
+type ApiKeyService = 'openai' | 'google_ai';
 
 // その他の型
 interface ScriptOptions {
@@ -270,7 +317,7 @@ interface CommentTarget {
 }
 
 interface TTSOptions {
-  ttsEngine: 'google_tts' | 'gemini_tts' | 'macos_tts';
+  ttsEngine: TTSEngine;
   voiceName: string;
   languageCode: string;
   speakingRate: number;
@@ -288,17 +335,56 @@ interface VoiceInfo {
 interface CostRates {
   currency: 'USD';
   openai: {
-    model: string;
-    inputPer1MTokensUsd: number;
-    outputPer1MTokensUsd: number;
+    defaultModel: string;
+    textRatesByModel: Record<
+      string,
+      {
+        inputPer1MTokensUsd: number;
+        outputPer1MTokensUsd: number;
+        cachedInputPer1MTokensUsd?: number;
+      }
+    >;
+    model?: string;
+    inputPer1MTokensUsd?: number;
+    outputPer1MTokensUsd?: number;
+    cachedInputPer1MTokensUsd?: number;
   };
   gemini: {
+    defaultTextModel: string;
+    textRatesByModel: Record<
+      string,
+      {
+        inputPer1MTokensUsd: number;
+        outputPer1MTokensUsd: number;
+        inputOverThresholdPer1MTokensUsd?: number;
+        outputOverThresholdPer1MTokensUsd?: number;
+        thresholdTokens?: number;
+      }
+    >;
     ttsModel: string;
-    ttsInputPer1MTokensUsd: number;
-    ttsOutputPer1MTokensUsd: number;
+    ttsRatesByModel: Record<
+      string,
+      {
+        inputPer1MTokensUsd: number;
+        outputPer1MTokensUsd: number;
+      }
+    >;
+    ttsInputPer1MTokensUsd?: number;
+    ttsOutputPer1MTokensUsd?: number;
     imageModel: string;
-    imageInputPerImageUsd: number;
-    imageOutputPerImageUsd: number;
+    imageRatesByModel: Record<
+      string,
+      {
+        billingMode: 'per_image' | 'per_token';
+        textInputPer1MTokensUsd?: number;
+        outputPer1MTokensUsd?: number;
+        outputPerImageUsdBySize?: Record<ImageSizeTier, number>;
+        fallbackOutputPerImageUsdBySize?: Partial<Record<ImageSizeTier, number>>;
+        legacyInputPerImageUsd?: number;
+      }
+    >;
+    imageInputPerImageUsd?: number;
+    imageOutputPerImageUsd?: number;
   };
 }
 

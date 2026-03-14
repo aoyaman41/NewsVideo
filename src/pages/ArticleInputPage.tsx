@@ -1,10 +1,16 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { Header, WorkflowNav } from '../components/layout';
-import { ArticleInput } from '../components/article';
-import type { ArticleInput as ArticleInputType, AutoGenerationStatus, ImageAsset, Project } from '../schemas';
+import { ArticleInput, FileImport, ImageDropzone } from '../components/article';
+import { Badge, Card, ErrorDetailPanel, StatusChip, useToast } from '../components/ui';
+import type {
+  ArticleInput as ArticleInputType,
+  AutoGenerationStatus,
+  ImageAsset,
+  Project,
+} from '../schemas';
 import {
-  createGeminiImageUsageRecord,
+  createGeminiImageUsageRecordFromAssets,
   createGeminiTtsUsageRecord,
   createOpenAIUsageRecord,
 } from '../utils/usage';
@@ -12,6 +18,7 @@ import {
 export function ArticleInputPage() {
   const { projectId } = useParams<{ projectId: string }>();
   const navigate = useNavigate();
+  const toast = useToast();
 
   const [project, setProject] = useState<Project | null>(null);
   const [articleData, setArticleData] = useState<Partial<ArticleInputType>>({
@@ -20,6 +27,7 @@ export function ArticleInputPage() {
     bodyText: '',
   });
   const [images, setImages] = useState<ImageAsset[]>([]);
+  const [blobUrls, setBlobUrls] = useState<Map<string, string>>(new Map());
   const [isGenerating, setIsGenerating] = useState(false);
   const [isAutoGenerating, setIsAutoGenerating] = useState(false);
   const [autoStatus, setAutoStatus] = useState<string | null>(null);
@@ -27,10 +35,36 @@ export function ArticleInputPage() {
   const [targetPartCount, setTargetPartCount] = useState<number>(5);
   const autoCancelRef = useRef(false);
   const isMountedRef = useRef(true);
+  const blobUrlsRef = useRef<Map<string, string>>(new Map());
+
+  const reportError = useCallback(
+    (message: string, title?: string) => {
+      if (!isMountedRef.current) return;
+      setError(message);
+      toast.error(message, title);
+    },
+    [toast]
+  );
+
+  const reportInfo = useCallback(
+    (message: string, title?: string) => {
+      if (!isMountedRef.current) return;
+      setError(null);
+      toast.info(message, title);
+    },
+    [toast]
+  );
+
+  useEffect(() => {
+    blobUrlsRef.current = blobUrls;
+  }, [blobUrls]);
 
   useEffect(() => {
     return () => {
       isMountedRef.current = false;
+      for (const url of blobUrlsRef.current.values()) {
+        URL.revokeObjectURL(url);
+      }
     };
   }, []);
 
@@ -55,6 +89,12 @@ export function ArticleInputPage() {
 
         const imported = (project.article?.importedImages ?? []) as ImageAsset[];
         setImages(imported);
+        setBlobUrls((prev) => {
+          for (const url of prev.values()) {
+            URL.revokeObjectURL(url);
+          }
+          return new Map();
+        });
 
         if (project.autoGenerationStatus?.running) {
           setIsAutoGenerating(true);
@@ -65,7 +105,10 @@ export function ArticleInputPage() {
         }
       } catch (err) {
         console.error('Failed to load project:', err);
-        setError(err instanceof Error ? err.message : 'プロジェクトの読み込みに失敗しました');
+        reportError(
+          err instanceof Error ? err.message : 'プロジェクトの読み込みに失敗しました',
+          '読み込みに失敗しました'
+        );
       }
     };
 
@@ -73,16 +116,50 @@ export function ArticleInputPage() {
     return () => {
       cancelled = true;
     };
+  }, [projectId, reportError]);
+
+  useEffect(() => {
+    if (!projectId) return;
+
+    let cancelled = false;
+    const tick = async () => {
+      try {
+        const latest = await window.electronAPI.project.load(projectId);
+        if (cancelled) return;
+        setProject(latest);
+
+        if (latest.autoGenerationStatus?.running) {
+          setIsAutoGenerating(true);
+          setAutoStatus(latest.autoGenerationStatus.step ?? '自動生成中...');
+        } else {
+          setIsAutoGenerating(false);
+          setAutoStatus(null);
+        }
+      } catch {
+        // noop
+      }
+    };
+
+    void tick();
+    const interval = setInterval(() => {
+      void tick();
+    }, 3000);
+
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
   }, [projectId]);
 
   const notifyCompletion = (message: string) => {
     if (!('Notification' in window)) {
-      alert(message);
+      toast.success(message, '自動生成完了');
       return;
     }
 
     if (Notification.permission === 'granted') {
       new Notification('自動生成完了', { body: message });
+      toast.success(message, '自動生成完了');
       return;
     }
 
@@ -91,13 +168,13 @@ export function ArticleInputPage() {
         if (permission === 'granted') {
           new Notification('自動生成完了', { body: message });
         } else {
-          alert(message);
+          toast.success(message, '自動生成完了');
         }
       });
       return;
     }
 
-    alert(message);
+    toast.success(message, '自動生成完了');
   };
 
   const setProjectSafe = (next: Project | null) => {
@@ -142,10 +219,10 @@ export function ArticleInputPage() {
     const isNewRun = patch.running && Boolean(patch.startedAt);
     const finishedAt =
       patch.running === false
-        ? patch.finishedAt ?? now
+        ? (patch.finishedAt ?? now)
         : isNewRun
           ? undefined
-          : patch.finishedAt ?? latestStatus?.finishedAt;
+          : (patch.finishedAt ?? latestStatus?.finishedAt);
     const mergedSteps = {
       ...(latestStatus?.steps ?? {}),
       ...(patch.steps ?? {}),
@@ -195,7 +272,12 @@ export function ArticleInputPage() {
     }
   };
 
-  const buildTtsOptions = (settings: { ttsEngine?: string; ttsVoice?: string; ttsSpeakingRate?: number; ttsPitch?: number }) => {
+  const buildTtsOptions = (settings: {
+    ttsEngine?: string;
+    ttsVoice?: string;
+    ttsSpeakingRate?: number;
+    ttsPitch?: number;
+  }) => {
     const voiceName = settings.ttsVoice || 'Charon';
     const match = voiceName.match(/^([a-z]{2}-[A-Z]{2})/);
     const languageCode = match?.[1] || 'ja-JP';
@@ -274,7 +356,7 @@ export function ArticleInputPage() {
       navigate(`/projects/${projectId}/script`);
     } catch (err) {
       console.error('Script generation failed:', err);
-      setError(err instanceof Error ? err.message : 'スクリプト生成に失敗しました');
+      reportError(err instanceof Error ? err.message : 'スクリプト生成に失敗しました');
     } finally {
       setIsGenerating(false);
     }
@@ -294,7 +376,7 @@ export function ArticleInputPage() {
         setProjectSafe(project);
         setAutoStatusSafe(project.autoGenerationStatus.step ?? '自動生成中...');
         setIsAutoGeneratingSafe(true);
-        setErrorSafe('既に自動生成中です');
+        reportInfo('既に自動生成中です。進行状況をそのまま表示します。', '既に実行中です');
         return;
       }
       const startedAt = new Date().toISOString();
@@ -320,9 +402,10 @@ export function ArticleInputPage() {
         cancelRequested: false,
         error: undefined,
         finishedAt: undefined,
-        steps: mode === 'restart'
-          ? { script: false, prompts: false, images: false, audio: false, video: false }
-          : undefined,
+        steps:
+          mode === 'restart'
+            ? { script: false, prompts: false, images: false, audio: false, video: false }
+            : undefined,
         clearLastVideoPath: mode === 'restart',
       });
       await ensureNotCancelled();
@@ -333,7 +416,8 @@ export function ArticleInputPage() {
         const script = total > 0;
         const partIdSet = new Set(parts.map((part) => part.id));
         const promptsCount = p.prompts
-          ? new Set(p.prompts.filter((prompt) => partIdSet.has(prompt.partId)).map((p) => p.partId)).size
+          ? new Set(p.prompts.filter((prompt) => partIdSet.has(prompt.partId)).map((p) => p.partId))
+              .size
           : 0;
         const prompts = script && promptsCount === total;
         const images = script && parts.every((part) => (part.panelImages?.length ?? 0) > 0);
@@ -361,146 +445,315 @@ export function ArticleInputPage() {
         await window.electronAPI.project.save(project);
         setProjectSafe(project);
         steps = computeStepState(project);
-        await updateAutoStatus(project, { running: true, step: 'スクリプト完了', steps: { script: true } });
+        await updateAutoStatus(project, {
+          running: true,
+          step: 'スクリプト完了',
+          steps: { script: true },
+        });
         await ensureNotCancelled();
       }
 
-      if (!steps.prompts) {
-        const partIdSet = new Set(project.parts.map((part) => part.id));
-        const promptsByPart = new Set(
-          project.prompts.filter((prompt) => partIdSet.has(prompt.partId)).map((p) => p.partId)
-        );
-        const missingParts = project.parts.filter((part) => !promptsByPart.has(part.id));
+      const needsImagePipeline = !steps.prompts || !steps.images;
+      const needsAudioPipeline = !steps.audio;
 
+      type ImagePipelineResult = {
+        promptsAdded: Project['prompts'];
+        imagesAdded: ImageAsset[];
+        partImageById: Map<string, string>;
+        usageRecords: Project['usage'];
+      };
+
+      type AudioPipelineResult = {
+        audioAdded: Project['audio'];
+        partAudioById: Map<string, Project['audio'][number]>;
+        usageRecords: Project['usage'];
+        errors: string[];
+      };
+
+      const runImagePipeline = async (baseProject: Project): Promise<ImagePipelineResult> => {
+        const usageRecords: Project['usage'] = [];
+        const partById = new Map(baseProject.parts.map((part) => [part.id, part]));
+        const existingPrompts = baseProject.prompts.filter((prompt) => partById.has(prompt.partId));
+        const promptsByPart = new Set(existingPrompts.map((prompt) => prompt.partId));
+        const missingParts = baseProject.parts.filter((part) => !promptsByPart.has(part.id));
+
+        let promptsAdded: Project['prompts'] = [];
         if (missingParts.length > 0) {
-          await updateAutoStatus(project, { running: true, step: '画像プロンプトを生成中...' });
           const promptResult = await window.electronAPI.ai.generateImagePrompts(
             missingParts,
-            project.article,
-            'news_broadcast'
+            baseProject.article
           );
           await ensureNotCancelled();
+          promptsAdded = promptResult.prompts;
           const promptUsage = createOpenAIUsageRecord('image_prompt_generate', promptResult.usage);
-          project.prompts = [...project.prompts, ...promptResult.prompts];
-          if (promptUsage) {
-            project.usage = [...(project.usage ?? []), promptUsage];
+          if (promptUsage) usageRecords.push(promptUsage);
+        }
+
+        const partImageById = new Map<string, string>();
+        let imagesAdded: ImageAsset[] = [];
+        if (!steps.images) {
+          const allPrompts = [...existingPrompts, ...promptsAdded];
+          const latestPromptByPart = new Map<string, (typeof allPrompts)[number]>();
+          for (const prompt of allPrompts) {
+            const current = latestPromptByPart.get(prompt.partId);
+            if (!current || prompt.createdAt >= current.createdAt) {
+              latestPromptByPart.set(prompt.partId, prompt);
+            }
           }
-          project.updatedAt = new Date().toISOString();
-          await window.electronAPI.project.save(project);
-          setProjectSafe(project);
-        }
-        steps = computeStepState(project);
-        await updateAutoStatus(project, { running: true, step: '画像プロンプト完了', steps: { prompts: true } });
-        await ensureNotCancelled();
-      }
 
-      if (!steps.images) {
-        await updateAutoStatus(project, { running: true, step: '画像を生成中...' });
-        const partById = new Map(project.parts.map((p) => [p.id, p]));
-        const latestPromptByPart = new Map<string, typeof project.prompts[number]>();
-        for (const prompt of project.prompts) {
-          if (!partById.has(prompt.partId)) continue;
-          const current = latestPromptByPart.get(prompt.partId);
-          if (!current || prompt.createdAt >= current.createdAt) {
-            latestPromptByPart.set(prompt.partId, prompt);
+          const imagesByPrompt = new Map<string, ImageAsset>();
+          for (const image of baseProject.images) {
+            if (image.metadata.promptId && !imagesByPrompt.has(image.metadata.promptId)) {
+              imagesByPrompt.set(image.metadata.promptId, image);
+            }
+          }
+
+          const promptsToGenerate: Project['prompts'] = [];
+          for (const part of baseProject.parts) {
+            if ((part.panelImages?.length ?? 0) > 0) continue;
+            const prompt = latestPromptByPart.get(part.id);
+            if (!prompt) continue;
+            const existingImage = imagesByPrompt.get(prompt.id);
+            if (existingImage) {
+              partImageById.set(part.id, existingImage.id);
+            } else {
+              promptsToGenerate.push(prompt);
+            }
+          }
+
+          if (promptsToGenerate.length > 0) {
+            if (!projectId) {
+              throw new Error('projectId が指定されていません');
+            }
+            imagesAdded = await window.electronAPI.image.generateBatch(promptsToGenerate, projectId);
+            await ensureNotCancelled();
+          }
+
+          const imageUsage = createGeminiImageUsageRecordFromAssets(
+            imagesAdded,
+            'image_generate_batch'
+          );
+          if (imageUsage) usageRecords.push(imageUsage);
+
+          const promptById = new Map(promptsToGenerate.map((prompt) => [prompt.id, prompt]));
+          for (const imageAsset of imagesAdded) {
+            const promptId = imageAsset.metadata.promptId;
+            if (!promptId) continue;
+            const generatedPrompt = promptById.get(promptId);
+            if (!generatedPrompt) continue;
+            partImageById.set(generatedPrompt.partId, imageAsset.id);
           }
         }
 
-        const imagesByPrompt = new Map<string, ImageAsset>();
-        for (const image of project.images) {
-          if (image.metadata.promptId && !imagesByPrompt.has(image.metadata.promptId)) {
-            imagesByPrompt.set(image.metadata.promptId, image);
-          }
-        }
+        return {
+          promptsAdded,
+          imagesAdded,
+          partImageById,
+          usageRecords,
+        };
+      };
 
-        const now = new Date().toISOString();
-        const nextPartsById = new Map(project.parts.map((p) => [p.id, p]));
-        const promptsToGenerate: typeof project.prompts = [];
-
-        for (const part of project.parts) {
-          if ((part.panelImages?.length ?? 0) > 0) continue;
-          const prompt = latestPromptByPart.get(part.id);
-          if (!prompt) continue;
-          const existingImage = imagesByPrompt.get(prompt.id);
-          if (existingImage) {
-            nextPartsById.set(part.id, {
-              ...part,
-              panelImages: [{ imageId: existingImage.id }],
-              updatedAt: now,
-            });
-          } else {
-            promptsToGenerate.push(prompt);
-          }
-        }
-
-        let imageAssets: ImageAsset[] = [];
-        if (promptsToGenerate.length > 0) {
-          imageAssets = await window.electronAPI.image.generateBatch(promptsToGenerate, projectId);
-          await ensureNotCancelled();
-        }
-
-        const imageUsage = createGeminiImageUsageRecord(
-          imageAssets.length,
-          'image_generate_batch'
-        );
-
-        const promptById = new Map(promptsToGenerate.map((p) => [p.id, p]));
-        for (const imageAsset of imageAssets) {
-          const promptId = imageAsset.metadata.promptId;
-          if (!promptId) continue;
-          const p = promptById.get(promptId);
-          if (!p) continue;
-          const part = nextPartsById.get(p.partId);
-          if (!part) continue;
-          if ((part.panelImages?.length ?? 0) > 0) continue;
-          nextPartsById.set(p.partId, { ...part, panelImages: [{ imageId: imageAsset.id }], updatedAt: now });
-        }
-
-        project.parts = project.parts.map((p) => nextPartsById.get(p.id) ?? p);
-        project.images = [...project.images, ...imageAssets];
-        if (imageUsage) {
-          project.usage = [...(project.usage ?? []), imageUsage];
-        }
-        project.updatedAt = now;
-        await window.electronAPI.project.save(project);
-        setProjectSafe(project);
-        steps = computeStepState(project);
-        await updateAutoStatus(project, { running: true, step: '画像生成完了', steps: { images: true } });
-        await ensureNotCancelled();
-      }
-
-      if (!steps.audio) {
-        await updateAutoStatus(project, { running: true, step: '音声を生成中...' });
+      const runAudioPipeline = async (baseProject: Project): Promise<AudioPipelineResult> => {
         const settings = await window.electronAPI.settings.get();
         await ensureNotCancelled();
         const ttsOptions = buildTtsOptions(settings);
-        const nextAudioAssets = [...project.audio];
-        const nextParts = project.parts.map((p) => ({ ...p }));
-        const audioUsageRecords = [];
+        const usageRecords: Project['usage'] = [];
+        const partAudioById = new Map<string, Project['audio'][number]>();
+        const audioAdded: Project['audio'] = [];
+        const errors: string[] = [];
+        const targets = baseProject.parts.filter((part) => !part.audio);
+        const AUDIO_GENERATION_CONCURRENCY = 5;
 
-        for (const part of nextParts) {
-          await ensureNotCancelled();
-          if (part.audio) continue;
-          const result = await window.electronAPI.tts.generate(part.scriptText, ttsOptions, projectId);
-          await ensureNotCancelled();
-          const usageRecord = createGeminiTtsUsageRecord('tts_generate', result.usage);
-          if (usageRecord) audioUsageRecords.push(usageRecord);
-          part.audio = result.audio;
-          part.updatedAt = new Date().toISOString();
-          nextAudioAssets.push(result.audio);
+        if (!projectId) {
+          throw new Error('projectId が指定されていません');
         }
 
-        if (audioUsageRecords.length > 0) {
-          project.usage = [...(project.usage ?? []), ...audioUsageRecords];
+        type AudioTaskResult =
+          | {
+              ok: true;
+              partId: string;
+              audio: Project['audio'][number];
+              usageRecord: Project['usage'][number] | null;
+            }
+          | {
+              ok: false;
+              error: string;
+            };
+
+        const taskResults: Array<AudioTaskResult | null> = Array(targets.length).fill(null);
+        const workerCount = Math.max(1, Math.min(AUDIO_GENERATION_CONCURRENCY, targets.length));
+        let cursor = 0;
+
+        await Promise.all(
+          Array.from({ length: workerCount }, async () => {
+            while (true) {
+              const taskIndex = cursor;
+              cursor += 1;
+              if (taskIndex >= targets.length) {
+                return;
+              }
+
+              const part = targets[taskIndex];
+              await ensureNotCancelled();
+              try {
+                const scriptText = part.scriptText?.trim() ?? '';
+                if (!scriptText) {
+                  throw new Error('スクリプトが空です');
+                }
+                const result = await window.electronAPI.tts.generate(scriptText, ttsOptions, projectId);
+                await ensureNotCancelled();
+                const usageRecord = createGeminiTtsUsageRecord('tts_generate', result.usage);
+                taskResults[taskIndex] = {
+                  ok: true,
+                  partId: part.id,
+                  audio: result.audio,
+                  usageRecord,
+                };
+              } catch (error) {
+                taskResults[taskIndex] = {
+                  ok: false,
+                  error: `パート${part.index + 1}: ${
+                    error instanceof Error ? error.message : String(error)
+                  }`,
+                };
+              }
+            }
+          })
+        );
+
+        for (const result of taskResults) {
+          if (!result) continue;
+          if (!result.ok) {
+            errors.push(result.error);
+            continue;
+          }
+          if (result.usageRecord) usageRecords.push(result.usageRecord);
+          partAudioById.set(result.partId, result.audio);
+          audioAdded.push(result.audio);
         }
-        project.audio = nextAudioAssets;
-        project.parts = nextParts;
-        project.updatedAt = new Date().toISOString();
+
+        return {
+          audioAdded,
+          partAudioById,
+          usageRecords,
+          errors,
+        };
+      };
+
+      if (needsImagePipeline || needsAudioPipeline) {
+        const runningStepLabel =
+          needsImagePipeline && needsAudioPipeline
+            ? '画像と音声を生成中...'
+            : needsImagePipeline
+              ? '画像を生成中...'
+              : '音声を生成中...';
+        await updateAutoStatus(project, { running: true, step: runningStepLabel });
+        await ensureNotCancelled();
+
+        const [imageSettled, audioSettled] = await Promise.allSettled([
+          needsImagePipeline ? runImagePipeline(project) : Promise.resolve(null),
+          needsAudioPipeline ? runAudioPipeline(project) : Promise.resolve(null),
+        ]);
+        await ensureNotCancelled();
+
+        const pipelineErrors: string[] = [];
+        const audioErrors: string[] = [];
+        const now = new Date().toISOString();
+
+        if (imageSettled.status === 'fulfilled' && imageSettled.value) {
+          const imageResult = imageSettled.value;
+          if (imageResult.promptsAdded.length > 0) {
+            project.prompts = [...project.prompts, ...imageResult.promptsAdded];
+          }
+          if (imageResult.imagesAdded.length > 0) {
+            project.images = [...project.images, ...imageResult.imagesAdded];
+          }
+          if (imageResult.usageRecords.length > 0) {
+            project.usage = [...project.usage, ...imageResult.usageRecords];
+          }
+          if (imageResult.partImageById.size > 0) {
+            project.parts = project.parts.map((part) => {
+              const imageId = imageResult.partImageById.get(part.id);
+              if (!imageId) return part;
+              if ((part.panelImages?.length ?? 0) > 0) return part;
+              return {
+                ...part,
+                panelImages: [{ imageId }],
+                updatedAt: now,
+              };
+            });
+          }
+        } else if (imageSettled.status === 'rejected') {
+          pipelineErrors.push(
+            `画像生成に失敗しました: ${
+              imageSettled.reason instanceof Error
+                ? imageSettled.reason.message
+                : String(imageSettled.reason)
+            }`
+          );
+        }
+
+        if (audioSettled.status === 'fulfilled' && audioSettled.value) {
+          const audioResult = audioSettled.value;
+          audioErrors.push(...audioResult.errors);
+          if (audioResult.audioAdded.length > 0) {
+            project.audio = [...project.audio, ...audioResult.audioAdded];
+          }
+          if (audioResult.usageRecords.length > 0) {
+            project.usage = [...project.usage, ...audioResult.usageRecords];
+          }
+          if (audioResult.partAudioById.size > 0) {
+            project.parts = project.parts.map((part) => {
+              const audio = audioResult.partAudioById.get(part.id);
+              if (!audio) return part;
+              return {
+                ...part,
+                audio,
+                updatedAt: now,
+              };
+            });
+          }
+        } else if (audioSettled.status === 'rejected') {
+          pipelineErrors.push(
+            `音声生成に失敗しました: ${
+              audioSettled.reason instanceof Error
+                ? audioSettled.reason.message
+                : String(audioSettled.reason)
+            }`
+          );
+        }
+
+        project.updatedAt = now;
         await window.electronAPI.project.save(project);
         setProjectSafe(project);
+
         steps = computeStepState(project);
-        await updateAutoStatus(project, { running: true, step: '音声生成完了', steps: { audio: true } });
+        const finishedStepLabel =
+          needsImagePipeline && needsAudioPipeline
+            ? '画像・音声生成完了'
+            : needsImagePipeline
+              ? '画像生成完了'
+              : '音声生成完了';
+        await updateAutoStatus(project, {
+          running: true,
+          step: finishedStepLabel,
+          steps: {
+            prompts: steps.prompts,
+            images: steps.images,
+            audio: steps.audio,
+          },
+        });
         await ensureNotCancelled();
+
+        if (audioErrors.length > 0) {
+          const head = audioErrors.slice(0, 3).join(' / ');
+          const tail = audioErrors.length > 3 ? `（他${audioErrors.length - 3}件）` : '';
+          throw new Error(`音声生成の一部に失敗しました: ${head}${tail}`);
+        }
+
+        if (pipelineErrors.length > 0) {
+          throw new Error(pipelineErrors.join(' / '));
+        }
       }
 
       steps = computeStepState(project);
@@ -529,22 +782,31 @@ export function ArticleInputPage() {
     } catch (err) {
       const message = err instanceof Error ? err.message : '自動生成に失敗しました';
       if (message.includes('キャンセル')) {
-        setErrorSafe('キャンセルしました');
+        reportInfo('自動生成をキャンセルしました。', 'キャンセル');
         if (projectId) {
           try {
             const latest = await window.electronAPI.project.load(projectId);
-            await updateAutoStatus(latest, { running: false, step: 'キャンセル', cancelRequested: false });
+            await updateAutoStatus(latest, {
+              running: false,
+              step: 'キャンセル',
+              cancelRequested: false,
+            });
           } catch {
             // ignore
           }
         }
       } else {
         console.error('Auto generation failed:', err);
-        setErrorSafe(message);
+        reportError(message, '自動生成に失敗しました');
         if (projectId) {
           try {
             const latest = await window.electronAPI.project.load(projectId);
-            await updateAutoStatus(latest, { running: false, step: 'エラー', error: message, cancelRequested: false });
+            await updateAutoStatus(latest, {
+              running: false,
+              step: 'エラー',
+              error: message,
+              cancelRequested: false,
+            });
           } catch {
             // ignore
           }
@@ -593,66 +855,121 @@ export function ArticleInputPage() {
   const autoRunning = Boolean(isAutoGenerating || project?.autoGenerationStatus?.running);
   const currentAutoStatus = autoStatus ?? project?.autoGenerationStatus?.step;
 
+  const handleImportedText = (title: string, text: string) => {
+    setArticleData((prev) => ({
+      ...prev,
+      title: prev.title && prev.title.trim().length > 0 ? prev.title : title,
+      bodyText: text,
+    }));
+  };
+
+  const handleImagesAdded = (added: ImageAsset[], addedBlobUrls: Map<string, string>) => {
+    setImages((prev) => [...prev, ...added]);
+    setBlobUrls((prev) => {
+      const next = new Map(prev);
+      for (const [id, url] of addedBlobUrls.entries()) {
+        next.set(id, url);
+      }
+      return next;
+    });
+  };
+
+  const handleImageRemoved = (imageId: string) => {
+    setImages((prev) => prev.filter((image) => image.id !== imageId));
+    setBlobUrls((prev) => {
+      const next = new Map(prev);
+      const url = next.get(imageId);
+      if (url) URL.revokeObjectURL(url);
+      next.delete(imageId);
+      return next;
+    });
+  };
+
   return (
-    <div className="flex-1 flex flex-col overflow-hidden">
-      <Header
-        title="記事"
-        subtitle={project?.name}
-      />
+    <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+      <Header title="記事" subtitle={project?.name} />
 
       {projectId && <WorkflowNav projectId={projectId} current="article" project={project} />}
 
-      <div className="flex-1 overflow-auto p-6">
-        <div className="max-w-4xl mx-auto space-y-8">
-          {/* エラー表示 */}
-          {error && (
-            <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg">
-              {error}
-            </div>
-          )}
-          {autoRunning && currentAutoStatus && (
-            <div className="bg-blue-50 border border-blue-200 text-blue-700 px-4 py-3 rounded-lg">
-              自動生成中: {currentAutoStatus}
-            </div>
-          )}
+      <div className="flex-1 overflow-auto p-5">
+        <div className="mx-auto grid w-full max-w-7xl gap-4 lg:grid-cols-[2fr_1fr]">
+          <div className="space-y-4">
+            {error && (
+              <ErrorDetailPanel message={error} onDismiss={() => setError(null)} />
+            )}
 
-          {/* 記事入力フォーム */}
-          <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
-            <h2 className="text-lg font-semibold text-gray-900 mb-4">スクリプト生成設定</h2>
-            <div className="flex flex-wrap items-center gap-4">
-              <label className="text-sm font-medium text-gray-700">パート数</label>
-              <input
-                type="number"
-                min={1}
-                max={20}
-                value={targetPartCount}
-                onChange={(e) => {
-                  const next = Number(e.target.value);
-                  if (!Number.isFinite(next)) return;
-                  setTargetPartCount(Math.min(20, Math.max(1, Math.round(next))));
-                }}
-                className="w-24 px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+            <Card title="スクリプト生成設定" subtitle="記事入力後のパート分割数を指定">
+              <div className="flex flex-wrap items-center gap-4">
+                <label className="text-sm font-medium text-slate-700">パート数</label>
+                <input
+                  type="number"
+                  min={1}
+                  max={20}
+                  value={targetPartCount}
+                  onChange={(e) => {
+                    const next = Number(e.target.value);
+                    if (!Number.isFinite(next)) return;
+                    setTargetPartCount(Math.min(20, Math.max(1, Math.round(next))));
+                  }}
+                  className="nv-input w-28"
+                />
+                <Badge tone="info">1〜20</Badge>
+              </div>
+              <p className="mt-2 text-xs text-slate-500">
+                画像を分けたい場合はパート数を増やしてください（後から編集可能）。
+              </p>
+            </Card>
+
+            <Card title="記事情報" subtitle="必須項目を入力してスクリプトを生成">
+              <ArticleInput
+                defaultValues={articleData}
+                onSubmit={handleSubmit}
+                onAutoSubmit={handleAutoResume}
+                onAutoRestart={handleAutoRestart}
+                onAutoCancel={handleAutoCancel}
+                isLoading={isGenerating}
+                isAutoLoading={autoRunning}
               />
-              <span className="text-sm text-gray-500">1〜20</span>
-            </div>
-            <p className="text-xs text-gray-500 mt-2">
-              画像を分けたい場合はパートを増やす運用を推奨します（後から編集も可能です）
-            </p>
+            </Card>
           </div>
 
-          <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
-            <h2 className="text-lg font-semibold text-gray-900 mb-4">記事情報</h2>
-            <ArticleInput
-              defaultValues={articleData}
-              onSubmit={handleSubmit}
-              onAutoSubmit={handleAutoResume}
-              onAutoRestart={handleAutoRestart}
-              onAutoCancel={handleAutoCancel}
-              isLoading={isGenerating}
-              isAutoLoading={autoRunning}
-            />
-          </div>
+          <div className="space-y-4">
+            <Card title="自動生成" subtitle="記事から動画までをまとめて進行">
+              <div className="space-y-3 text-sm text-slate-600">
+                <div className="flex flex-wrap items-center gap-2">
+                  <StatusChip
+                    tone={autoRunning ? 'info' : 'neutral'}
+                    label={autoRunning ? '実行中' : '待機中'}
+                  />
+                  <Badge tone="info">記事保存 → スクリプト → 画像 → 音声 → 動画</Badge>
+                </div>
+                <p className="text-xs text-slate-500">
+                  上部の Workflow が全体進捗を示します。このカードでは現在の自動生成状態だけを表示します。
+                </p>
+                <div className="rounded-[8px] border border-[var(--nv-color-border)] bg-slate-50 px-3 py-3 text-xs">
+                  {autoRunning && currentAutoStatus ? (
+                    <span className="text-blue-700">自動生成中: {currentAutoStatus}</span>
+                  ) : (
+                    <span className="text-slate-600">必要なときに「記事から動画まで自動生成」を実行できます。</span>
+                  )}
+                </div>
+              </div>
+            </Card>
 
+            <Card title="テキストインポート" subtitle="txt / md / docx を読み込み">
+              <FileImport onTextImported={handleImportedText} />
+            </Card>
+
+            <Card title="記事関連画像" subtitle="ドラッグ&ドロップで登録">
+              <ImageDropzone
+                images={images}
+                projectId={projectId}
+                onImagesAdded={handleImagesAdded}
+                onImageRemoved={handleImageRemoved}
+                blobUrlMap={blobUrls}
+              />
+            </Card>
+          </div>
         </div>
       </div>
     </div>

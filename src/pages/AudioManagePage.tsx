@@ -2,18 +2,25 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { Waveform } from '../components/audio';
 import { Header, WorkflowNav } from '../components/layout';
+import {
+  Badge,
+  Button,
+  Card,
+  EmptyState,
+  ErrorDetailPanel,
+  ProgressBar,
+  useConfirm,
+  useToast,
+} from '../components/ui';
 import type { AudioAsset, Project, UsageRecord } from '../schemas';
 import { toLocalFileUrl } from '../utils/toLocalFileUrl';
 import { createGeminiTtsUsageRecord } from '../utils/usage';
+import {
+  parseMarkIndex,
+  splitScriptIntoSegments,
+} from '../../shared/utils/ttsSegmentation';
 
 type TTSEngine = 'google_tts' | 'gemini_tts' | 'macos_tts';
-
-interface VoiceInfo {
-  name: string;
-  languageCodes: string[];
-  gender: 'MALE' | 'FEMALE' | 'NEUTRAL';
-  sampleRateHertz: number;
-}
 
 interface Settings {
   ttsEngine: TTSEngine;
@@ -34,58 +41,28 @@ function guessLanguageCode(voiceName: string): string {
   return match?.[1] || 'ja-JP';
 }
 
-function splitScriptIntoSegments(text: string): string[] {
-  const normalized = text.replace(/\r\n/g, '\n').trim();
-  if (!normalized) return [];
-
-  const segments: string[] = [];
-  let buffer = '';
-
-  const flush = () => {
-    const seg = buffer.replace(/\n+/g, ' ').trim();
-    buffer = '';
-    if (seg) segments.push(seg);
-  };
-
-  for (const ch of normalized) {
-    buffer += ch;
-    if (ch === '\n') {
-      flush();
-      continue;
-    }
-    if ('。！？!?'.includes(ch)) {
-      flush();
-      continue;
-    }
-    if (ch === '、' && buffer.length >= 40) {
-      flush();
-      continue;
-    }
-    if (buffer.length >= 80) {
-      flush();
-    }
+function formatTtsEngineLabel(engine: string): string {
+  switch (engine) {
+    case 'gemini_tts':
+      return 'Gemini TTS';
+    case 'google_tts':
+      return 'Google TTS';
+    case 'macos_tts':
+      return 'macOS TTS';
+    default:
+      return engine;
   }
-  flush();
-
-  return segments;
-}
-
-function parseMarkIndex(markName: string): number | null {
-  const match = markName.match(/^m(\d+)$/);
-  if (!match) return null;
-  const idx = Number(match[1]);
-  return Number.isFinite(idx) ? idx : null;
 }
 
 export function AudioManagePage() {
   const { projectId } = useParams<{ projectId: string }>();
   const navigate = useNavigate();
+  const { confirm } = useConfirm();
+  const toast = useToast();
 
   const [project, setProject] = useState<Project | null>(null);
   const [settings, setSettings] = useState<Settings>(defaultSettings);
   const [selectedPartId, setSelectedPartId] = useState<string | null>(null);
-  const [voices, setVoices] = useState<VoiceInfo[]>([]);
-  const [isLoadingVoices, setIsLoadingVoices] = useState(false);
   const projectRef = useRef<Project | null>(null);
 
   const [isLoading, setIsLoading] = useState(true);
@@ -103,6 +80,14 @@ export function AudioManagePage() {
   const cancelRef = useRef(false);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const syncListRef = useRef<HTMLDivElement | null>(null);
+
+  const reportError = useCallback(
+    (message: string, title?: string) => {
+      setError(message);
+      toast.error(message, title);
+    },
+    [toast]
+  );
 
   useEffect(() => {
     projectRef.current = project;
@@ -133,41 +118,14 @@ export function AudioManagePage() {
         }
       } catch (err) {
         console.error('Failed to load project/settings:', err);
-        setError(err instanceof Error ? err.message : '読み込みに失敗しました');
+        reportError(err instanceof Error ? err.message : '読み込みに失敗しました', '読み込みに失敗しました');
       } finally {
         setIsLoading(false);
       }
     };
 
     load();
-  }, [projectId]);
-
-  // 音声ボイス一覧の読み込み
-  useEffect(() => {
-    const loadVoices = async () => {
-      setIsLoadingVoices(true);
-      try {
-        const list = await window.electronAPI.tts.getVoices(settings.ttsEngine);
-        setVoices(list);
-        setSettings((prev) => {
-          if (list.length === 0) return prev;
-          if (list.some((v) => v.name === prev.ttsVoice)) return prev;
-          const preferred =
-            prev.ttsEngine === 'google_tts'
-              ? list.find((v) => v.languageCodes.some((lc) => lc.startsWith('ja'))) || list[0]
-              : list[0];
-          return { ...prev, ttsVoice: preferred.name };
-        });
-      } catch (err) {
-        console.warn('Failed to load voices:', err);
-        setVoices([]);
-      } finally {
-        setIsLoadingVoices(false);
-      }
-    };
-
-    loadVoices();
-  }, [settings.ttsEngine]);
+  }, [projectId, reportError]);
 
   const selectedPart = useMemo(() => {
     return project?.parts.find((p) => p.id === selectedPartId) || null;
@@ -210,17 +168,14 @@ export function AudioManagePage() {
       const prevAudioId = targetPart?.audio?.id;
       const nextUsage = usageRecord
         ? [...(currentProject.usage ?? []), usageRecord]
-        : currentProject.usage ?? [];
+        : (currentProject.usage ?? []);
 
       const updatedProject: Project = {
         ...currentProject,
         parts: currentProject.parts.map((p) =>
           p.id === partId ? { ...p, audio, updatedAt: now } : p
         ),
-        audio: [
-          ...currentProject.audio.filter((a) => a.id !== prevAudioId),
-          audio,
-        ],
+        audio: [...currentProject.audio.filter((a) => a.id !== prevAudioId), audio],
         usage: nextUsage,
         updatedAt: now,
       };
@@ -246,17 +201,23 @@ export function AudioManagePage() {
       await applyAudioToPart(selectedPart.id, result.audio, usageRecord);
     } catch (err) {
       console.error('Failed to generate audio:', err);
-      setError(err instanceof Error ? err.message : '音声生成に失敗しました');
+      reportError(err instanceof Error ? err.message : '音声生成に失敗しました');
     } finally {
       setIsGenerating(false);
     }
-  }, [applyAudioToPart, projectId, selectedPart, ttsOptions]);
+  }, [applyAudioToPart, projectId, reportError, selectedPart, ttsOptions]);
 
   const handleClearAudio = useCallback(async () => {
     if (!project || !selectedPart) return;
     if (!selectedPart.audio) return;
 
-    if (!confirm('このパートの音声の紐付けを解除しますか？（ファイルは削除しません）')) return;
+    const accepted = await confirm({
+      title: '音声の紐付けを解除しますか？',
+      description: '音声ファイル自体は削除せず、このパートからだけ解除します。',
+      confirmLabel: '解除',
+      confirmVariant: 'danger',
+    });
+    if (!accepted) return;
 
     try {
       const now = new Date().toISOString();
@@ -272,11 +233,12 @@ export function AudioManagePage() {
       };
 
       await saveProject(updatedProject);
+      toast.success('音声の紐付けを解除しました');
     } catch (err) {
       console.error('Failed to clear audio:', err);
-      setError(err instanceof Error ? err.message : '音声の解除に失敗しました');
+      reportError(err instanceof Error ? err.message : '音声の解除に失敗しました');
     }
-  }, [project, saveProject, selectedPart]);
+  }, [confirm, project, reportError, saveProject, selectedPart, toast]);
 
   const handleGenerateAll = useCallback(async () => {
     if (!projectId || !project) return;
@@ -287,7 +249,8 @@ export function AudioManagePage() {
       : project.parts.filter((p) => p.scriptText.trim());
 
     if (targets.length === 0) {
-      setError('生成対象のパートがありません');
+      setError(null);
+      toast.info('読み上げ対象の原稿がありません。', '生成対象はありません');
       return;
     }
 
@@ -306,7 +269,11 @@ export function AudioManagePage() {
           if (cancelRef.current) return;
 
           try {
-            const result = await window.electronAPI.tts.generate(part.scriptText, ttsOptions, projectId);
+            const result = await window.electronAPI.tts.generate(
+              part.scriptText,
+              ttsOptions,
+              projectId
+            );
             const usageRecord = createGeminiTtsUsageRecord('tts_generate', result.usage);
             // 保存は競合しやすいので直列化（ただし生成自体は無制限に並列）
             saveChain = saveChain.then(() => applyAudioToPart(part.id, result.audio, usageRecord));
@@ -323,21 +290,24 @@ export function AudioManagePage() {
       await saveChain;
 
       if (cancelRef.current) {
-        setError('キャンセルしました');
+        setError(null);
+        toast.info('音声生成をキャンセルしました。', 'キャンセル');
       } else if (errors.length > 0) {
         const head = errors.slice(0, 3).join(' / ');
         const tail = errors.length > 3 ? `（他${errors.length - 3}件）` : '';
-        setError(`一部の音声生成に失敗しました: ${head}${tail}`);
+        const message = `一部の音声生成に失敗しました: ${head}${tail}`;
+        setError(message);
+        toast.warning(message, '一部失敗');
       }
     } catch (err) {
       console.error('Failed to generate batch audio:', err);
-      setError(err instanceof Error ? err.message : '一括音声生成に失敗しました');
+      reportError(err instanceof Error ? err.message : '一括音声生成に失敗しました');
     } finally {
       setBatchProgress(null);
       setIsGeneratingAll(false);
       cancelRef.current = false;
     }
-  }, [applyAudioToPart, generateOnlyMissing, project, projectId, ttsOptions]);
+  }, [applyAudioToPart, generateOnlyMissing, project, projectId, reportError, toast, ttsOptions]);
 
   const syncSegments = useMemo(() => {
     if (!selectedPart) return [];
@@ -414,7 +384,10 @@ export function AudioManagePage() {
         const hit = syncTimepoints.find((tp) => tp.index === index);
         if (hit) targetTime = hit.timeSeconds;
       } else if (Number.isFinite(duration) && duration > 0) {
-        const totalChars = syncSegments.reduce((sum, seg) => sum + seg.replace(/\s+/g, '').length, 0);
+        const totalChars = syncSegments.reduce(
+          (sum, seg) => sum + seg.replace(/\s+/g, '').length,
+          0
+        );
         const beforeChars = syncSegments
           .slice(0, index)
           .reduce((sum, seg) => sum + seg.replace(/\s+/g, '').length, 0);
@@ -432,417 +405,312 @@ export function AudioManagePage() {
     if (activeSegmentIndex === null) return;
     const container = syncListRef.current;
     if (!container) return;
-    const el = container.querySelector(`[data-seg-index="${activeSegmentIndex}"]`) as HTMLElement | null;
+    const el = container.querySelector(
+      `[data-seg-index="${activeSegmentIndex}"]`
+    ) as HTMLElement | null;
     el?.scrollIntoView({ block: 'nearest' });
   }, [activeSegmentIndex, showSyncPreview]);
 
   if (isLoading) {
     return (
-      <div className="flex-1 flex items-center justify-center">
-        <p className="text-gray-500">読み込み中...</p>
+      <div className="flex flex-1 items-center justify-center">
+        <p className="text-slate-500">読み込み中...</p>
       </div>
     );
   }
 
   if (!project) {
     return (
-      <div className="flex-1 flex items-center justify-center">
-        <div className="text-center">
-          <p className="text-red-600 mb-4">{error || 'プロジェクトが見つかりません'}</p>
-          <button
-            onClick={() => navigate('/projects')}
-            className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
-          >
-            プロジェクト一覧に戻る
-          </button>
-        </div>
+      <div className="flex flex-1 items-center justify-center">
+        <EmptyState
+          title="プロジェクトを読み込めません"
+          description={error || 'プロジェクトが見つかりません'}
+          action={<Button onClick={() => navigate('/projects')}>プロジェクト一覧に戻る</Button>}
+        />
       </div>
     );
   }
 
   return (
-    <div className="flex-1 flex flex-col overflow-hidden">
-      <Header
-        title="音声"
-        subtitle={project.name}
-      />
+    <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+      <Header title="音声" subtitle={project.name} />
 
       {projectId && <WorkflowNav projectId={projectId} current="audio" project={project} />}
 
       {error && (
-        <div className="mx-6 mt-4 bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg">
-          {error}
+        <div className="px-4 pt-4">
+          <ErrorDetailPanel message={error} onDismiss={() => setError(null)} />
         </div>
       )}
 
-      <div className="flex-1 flex overflow-hidden">
-        {/* 左サイドバー: パートリスト */}
-        <div className="w-64 border-r border-gray-200 overflow-auto bg-gray-50">
-          <div className="p-4">
-            <h3 className="font-semibold text-gray-900 mb-2">パート一覧</h3>
-            <p className="text-xs text-gray-500 mb-4">
-              未生成: {missingAudioCount} / {project.parts.length}
-            </p>
-
-            <ul className="space-y-2">
-              {project.parts.map((part, index) => (
-                <li key={part.id}>
-                  <button
-                    onClick={() => setSelectedPartId(part.id)}
-                    className={`w-full text-left p-3 rounded-lg transition-colors ${
-                      selectedPartId === part.id
-                        ? 'bg-white shadow border border-blue-200'
-                        : 'hover:bg-white'
-                    }`}
-                  >
-                    <div className="flex items-center gap-2">
-                      <span className="text-xs font-medium text-gray-400">{index + 1}</span>
-                      <span className="text-sm font-medium text-gray-900 truncate">
-                        {part.title}
-                      </span>
-                    </div>
-                    <div className="flex items-center gap-2 mt-1">
-                      <span className={`text-xs ${part.audio ? 'text-green-600' : 'text-orange-600'}`}>
-                        {part.audio ? '✓ 生成済み' : '⚠ 未生成'}
-                      </span>
-                      {part.audio && (
-                        <span className="text-xs text-gray-400 truncate">
-                          {part.audio.ttsEngine}
-                        </span>
-                      )}
-                    </div>
-                  </button>
-                </li>
-              ))}
-            </ul>
-
-            <div className="mt-6 space-y-3">
-              <label className="flex items-center gap-2 text-sm text-gray-700">
+      <div className="px-4 pt-3">
+        <Card
+          title="一括音声生成"
+          subtitle={`未生成 ${missingAudioCount} / ${project.parts.length}`}
+          actions={
+            <div className="flex items-center gap-2">
+              <label className="inline-flex items-center gap-2 text-xs text-slate-600">
                 <input
                   type="checkbox"
                   checked={generateOnlyMissing}
                   onChange={(e) => setGenerateOnlyMissing(e.target.checked)}
                 />
-                未生成のみ一括生成
+                未生成のみ
               </label>
-
-              <button
+              <Button
+                variant="success"
                 onClick={handleGenerateAll}
                 disabled={isGeneratingAll || project.parts.length === 0}
-                className="w-full px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                {isGeneratingAll ? '一括生成中...' : '全パートの音声を生成'}
-              </button>
-
+                {isGeneratingAll ? '一括生成中...' : '全パート生成'}
+              </Button>
               {isGeneratingAll && (
-                <button
+                <Button
+                  variant="secondary"
                   onClick={() => {
                     cancelRef.current = true;
                   }}
-                  className="w-full px-4 py-2 text-sm text-gray-700 border border-gray-300 rounded-lg hover:bg-gray-100"
                 >
                   キャンセル
-                </button>
+                </Button>
               )}
             </div>
+          }
+        >
+          <div className="space-y-2">
+            {batchProgress ? (
+              <ProgressBar
+                value={batchProgress.current}
+                max={Math.max(1, batchProgress.total)}
+                tone="success"
+                label={`進捗 ${batchProgress.current}/${batchProgress.total}`}
+              />
+            ) : (
+              <p className="text-xs text-slate-500">生成待機中</p>
+            )}
+            <p className="text-xs text-slate-500">
+              音声ページでは読み上げ生成と確認に集中します。全体進捗は上部の Workflow を見れば十分です。
+            </p>
           </div>
-        </div>
+        </Card>
+      </div>
 
-        {/* メイン */}
-        <div className="flex-1 overflow-auto p-6">
-          {/* バッチ進捗 */}
-          {batchProgress && (
-            <div className="mb-6 bg-white border border-gray-200 rounded-lg p-4">
-              <div className="flex items-center justify-between mb-2">
-                <div className="text-sm font-medium text-gray-900">一括音声生成</div>
-                <div className="text-sm text-gray-600">
-                  {batchProgress.current}/{batchProgress.total}
-                </div>
-              </div>
-              <div className="w-full bg-gray-200 rounded-full h-2">
-                <div
-                  className="bg-green-600 h-2 rounded-full transition-all"
-                  style={{
-                    width: `${Math.min(
-                      100,
-                      (batchProgress.current / Math.max(1, batchProgress.total)) * 100
-                    )}%`,
-                  }}
-                />
-              </div>
-            </div>
-          )}
-
-          {/* 音声設定 */}
-          <div className="bg-white rounded-lg border border-gray-200 p-6 mb-6">
-            <h3 className="text-lg font-semibold text-gray-900 mb-4">音声設定</h3>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">TTSエンジン</label>
-                <select
-                  value={settings.ttsEngine}
-                  onChange={(e) =>
-                    setSettings((prev) => ({
-                      ...prev,
-                      ttsEngine: e.target.value as TTSEngine,
-                    }))
-                  }
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  disabled
+      <div className="grid min-h-0 flex-1 grid-cols-[280px_minmax(0,1fr)_360px] gap-4 overflow-hidden p-4">
+        <Card
+          title="パート一覧"
+          subtitle={`未生成 ${missingAudioCount}`}
+          className="overflow-hidden"
+        >
+          <ul className="nv-scrollbar max-h-[calc(100vh-300px)] space-y-2 overflow-auto pr-1">
+            {project.parts.map((part, index) => (
+              <li key={part.id}>
+                <button
+                  onClick={() => setSelectedPartId(part.id)}
+                  className={`w-full rounded-[8px] border px-3 py-2 text-left transition-colors ${
+                    selectedPartId === part.id
+                      ? 'border-[var(--nv-color-accent)] bg-blue-50'
+                      : 'border-[var(--nv-color-border)] bg-white hover:bg-slate-50'
+                  }`}
                 >
-                  <option value="gemini_tts">gemini-2.5-pro-preview-tts</option>
-                </select>
-              </div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs text-slate-400">{index + 1}</span>
+                    <span className="truncate text-sm font-semibold text-slate-900">
+                      {part.title}
+                    </span>
+                  </div>
+                  <div className="mt-1 flex items-center gap-1 text-[11px]">
+                    <Badge tone={part.audio ? 'success' : 'warning'}>
+                      {part.audio ? '生成済み' : '未生成'}
+                    </Badge>
+                    {part.audio && (
+                      <Badge tone="neutral">{formatTtsEngineLabel(part.audio.ttsEngine)}</Badge>
+                    )}
+                  </div>
+                </button>
+              </li>
+            ))}
+          </ul>
+        </Card>
 
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">話速</label>
-                <div className="flex items-center gap-2">
-                  <input
-                    type="range"
-                    min="0.5"
-                    max="2.0"
-                    step="0.1"
-                    value={settings.ttsSpeakingRate}
-                    onChange={(e) =>
-                      setSettings((prev) => ({
-                        ...prev,
-                        ttsSpeakingRate: Number(e.target.value),
-                      }))
-                    }
-                    className="flex-1"
-                    disabled
-                  />
-                  <span className="text-sm text-gray-600 w-12 text-right">
-                    {settings.ttsSpeakingRate.toFixed(1)}x
+        <div className="space-y-4 overflow-auto">
+          <Card
+            title="既定の音声設定"
+            subtitle="変更は設定画面で行います"
+            actions={
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() =>
+                  navigate('/settings', {
+                    state: { returnTo: projectId ? `/projects/${projectId}/audio` : '/projects' },
+                  })
+                }
+              >
+                設定を開く
+              </Button>
+            }
+          >
+            <div className="grid grid-cols-1 gap-3">
+              <div className="rounded-[10px] border border-[var(--nv-color-border)] bg-slate-50 p-3">
+                <div className="flex flex-wrap items-center gap-2">
+                  <Badge tone="info">Gemini TTS</Badge>
+                  <span className="text-sm font-semibold text-slate-900">
+                    gemini-2.5-pro-preview-tts
                   </span>
                 </div>
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">ピッチ</label>
-                <input
-                  type="number"
-                  min={-20}
-                  max={20}
-                  value={settings.ttsPitch}
-                  onChange={(e) =>
-                    setSettings((prev) => ({
-                      ...prev,
-                      ttsPitch: Number(e.target.value),
-                    }))
-                  }
-                  className="w-28 px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  disabled
-                />
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">ボイス</label>
-                {voices.length > 0 ? (
-                  <select
-                    value={settings.ttsVoice}
-                    onChange={(e) =>
-                      setSettings((prev) => ({
-                        ...prev,
-                        ttsVoice: e.target.value,
-                      }))
-                    }
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    disabled={isLoadingVoices}
-                  >
-                    {voices
-                      .filter((v) =>
-                        settings.ttsEngine === 'google_tts'
-                          ? v.languageCodes.some((lc) => lc.startsWith('ja'))
-                          : true
-                      )
-                      .slice(0, 200)
-                      .map((v) => (
-                        <option key={v.name} value={v.name}>
-                          {v.name}
-                        </option>
-                      ))}
-                  </select>
-                ) : (
-                  <input
-                    value={settings.ttsVoice}
-                    onChange={(e) => setSettings((prev) => ({ ...prev, ttsVoice: e.target.value }))}
-                    placeholder={isLoadingVoices ? '読み込み中...' : 'ボイス名を入力'}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  />
-                )}
-                <p className="text-xs text-gray-500 mt-1">
-                  Gemini TTS: 設定画面の「Google AI APIキー（AI Studio）」が必要です（話速/ピッチは未対応）
+                <p className="mt-2 text-xs text-slate-500">
+                  現在のアプリではこのエンジンを使用します。話速とピッチの UI 調整は未対応です。
                 </p>
               </div>
-            </div>
-          </div>
-
-          {/* 選択パート */}
-          {selectedPart ? (
-            <div className="space-y-6">
-              <div className="bg-white rounded-lg border border-gray-200 p-6">
-                <div className="flex items-start justify-between gap-4">
-                  <div className="min-w-0">
-                    <h3 className="text-lg font-semibold text-gray-900">
-                      {selectedPart.title}
-                    </h3>
-                    <p className="text-sm text-gray-500 mt-1">{selectedPart.summary}</p>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <button
-                      onClick={handleGenerateForSelected}
-                      disabled={isGenerating || isGeneratingAll}
-                      className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
-                    >
-                      {isGenerating ? '生成中...' : selectedPart.audio ? '再生成' : 'このパートを生成'}
-                    </button>
-                    <button
-                      onClick={handleClearAudio}
-                      disabled={!selectedPart.audio || isGenerating || isGeneratingAll}
-                      className="px-4 py-2 text-sm text-gray-700 border border-gray-300 rounded-lg hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed"
-                    >
-                      解除
-                    </button>
-                  </div>
-                </div>
-
-                <div className="mt-4">
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    読み上げ原稿
-                  </label>
-                  <div className="p-3 bg-gray-50 border border-gray-200 rounded-lg text-sm text-gray-700 whitespace-pre-wrap max-h-56 overflow-auto">
-                    {selectedPart.scriptText}
-                  </div>
+              <div className="rounded-[10px] border border-[var(--nv-color-border)] bg-slate-50 p-3 text-xs text-slate-600">
+                <div className="text-xs font-semibold text-slate-700">既定ボイス</div>
+                <div className="mt-2 text-sm font-semibold text-slate-900">{settings.ttsVoice}</div>
+                <div className="mt-2">既定話速: {settings.ttsSpeakingRate.toFixed(1)}x</div>
+                <div className="mt-1 text-slate-500">
+                  このページでは既定値を参照して音声生成を実行します。
                 </div>
               </div>
+            </div>
+          </Card>
 
-              {/* プレビュー */}
-              <div className="bg-white rounded-lg border border-gray-200 p-6">
-                <h3 className="text-lg font-semibold text-gray-900 mb-4">音声プレビュー</h3>
+          {selectedPart ? (
+            <Card
+              title={selectedPart.title}
+              subtitle={selectedPart.summary}
+              actions={
+                <div className="flex items-center gap-2">
+                  <Button
+                    onClick={handleGenerateForSelected}
+                    disabled={isGenerating || isGeneratingAll}
+                  >
+                    {isGenerating ? '生成中...' : selectedPart.audio ? '再生成' : '生成'}
+                  </Button>
+                  <Button
+                    variant="secondary"
+                    onClick={handleClearAudio}
+                    disabled={!selectedPart.audio || isGenerating || isGeneratingAll}
+                  >
+                    解除
+                  </Button>
+                </div>
+              }
+            >
+              <label className="mb-2 block text-xs font-semibold text-slate-600">
+                読み上げ原稿
+              </label>
+              <div className="max-h-64 overflow-auto rounded-[8px] border border-[var(--nv-color-border)] bg-slate-50 p-3 text-sm text-slate-700 whitespace-pre-wrap">
+                {selectedPart.scriptText}
+              </div>
+            </Card>
+          ) : (
+            <EmptyState title="パートを選択してください" />
+          )}
+        </div>
 
-                  {selectedPart.audio ? (
-                    <div className="space-y-3">
-                      <audio
-                        ref={audioRef}
-                        controls
-                        src={toLocalFileUrl(selectedPart.audio.filePath)}
-                        className="w-full"
-                        onLoadedMetadata={(e) => {
-                          const duration = e.currentTarget.duration;
-                          setAudioDurationSec(
-                            typeof duration === 'number' && Number.isFinite(duration) ? duration : null
-                          );
-                          setPlaybackTimeSec(0);
-                        }}
-                        onDurationChange={(e) => {
-                          const duration = e.currentTarget.duration;
-                          setAudioDurationSec(
-                            typeof duration === 'number' && Number.isFinite(duration) ? duration : null
-                          );
-                        }}
-                        onTimeUpdate={(e) => {
-                          const t = e.currentTarget.currentTime;
-                          if (typeof t === 'number' && Number.isFinite(t)) setPlaybackTimeSec(t);
-                        }}
-                      />
-                      <div className="flex items-center gap-4 text-sm text-gray-700">
-                        <label className="inline-flex items-center gap-2 cursor-pointer select-none">
-                          <input
-                            type="checkbox"
-                            checked={showSyncPreview}
-                            onChange={(e) => setShowSyncPreview(e.target.checked)}
-                          />
-                          同期プレビュー
-                        </label>
-                        <label className="inline-flex items-center gap-2 cursor-pointer select-none">
-                          <input
-                            type="checkbox"
-                            checked={showWaveform}
-                            onChange={(e) => setShowWaveform(e.target.checked)}
-                          />
-                          波形
-                        </label>
-                          {showSyncPreview && (
-                            <span
-                              className={`text-xs px-2 py-0.5 rounded-full ${
-                                syncTimepoints ? 'bg-green-50 text-green-700' : 'bg-gray-100 text-gray-600'
-                              }`}
-                            >
-                              {syncTimepoints ? '精密（タイムポイント）' : '推定'}
-                            </span>
-                          )}
-                        </div>
-
-                        {showWaveform && (
-                          <Waveform
-                            src={toLocalFileUrl(selectedPart.audio.filePath)}
-                            currentTimeSec={playbackTimeSec}
-                            durationSec={audioDurationSec ?? selectedPart.audio.durationSec}
-                            onSeek={(timeSec) => {
-                              if (audioRef.current) audioRef.current.currentTime = timeSec;
-                            }}
-                          />
-                        )}
-  
-                        {showSyncPreview && syncSegments.length > 0 && (
-                          <div className="mt-2">
-                            <div className="text-xs text-gray-500 mb-2">
-                            行をクリックすると該当位置へシークします。
-                          </div>
-                          <div
-                            ref={syncListRef}
-                            className="border border-gray-200 rounded-lg bg-gray-50 max-h-56 overflow-auto"
-                          >
-                            {syncSegments.map((seg, idx) => {
-                              const active = idx === activeSegmentIndex;
-                              return (
-                                <button
-                                  key={idx}
-                                  type="button"
-                                  data-seg-index={idx}
-                                  onClick={() => seekToSegment(idx)}
-                                  className={`w-full text-left px-3 py-2 text-sm border-b last:border-b-0 ${
-                                    active
-                                      ? 'bg-blue-100 text-blue-900'
-                                      : 'hover:bg-white text-gray-700'
-                                  }`}
-                                >
-                                  <span className="inline-block w-7 text-right mr-2 text-xs text-gray-400">
-                                    {idx + 1}
-                                  </span>
-                                  {seg}
-                                </button>
-                              );
-                            })}
-                          </div>
-                        </div>
-                      )}
-                      <div className="text-sm text-gray-700">
-                        <div>
-                          <span className="text-gray-500">エンジン:</span> {selectedPart.audio.ttsEngine}
-                        </div>
-                      <div>
-                        <span className="text-gray-500">ボイス:</span> {selectedPart.audio.voiceId}
-                      </div>
-                      <div>
-                        <span className="text-gray-500">推定長:</span> {selectedPart.audio.durationSec}s
-                      </div>
-                      <div className="text-xs text-gray-500 break-all mt-2">
-                        {selectedPart.audio.filePath}
-                      </div>
-                    </div>
-                  </div>
-                ) : (
-                  <div className="text-sm text-gray-500">まだ音声が生成されていません</div>
+        <Card title="音声プレビュー" subtitle="波形・同期確認" className="overflow-auto">
+          {selectedPart?.audio ? (
+            <div className="space-y-3">
+              <audio
+                ref={audioRef}
+                controls
+                src={toLocalFileUrl(selectedPart.audio.filePath)}
+                className="w-full"
+                onLoadedMetadata={(e) => {
+                  const duration = e.currentTarget.duration;
+                  setAudioDurationSec(
+                    typeof duration === 'number' && Number.isFinite(duration) ? duration : null
+                  );
+                  setPlaybackTimeSec(0);
+                }}
+                onDurationChange={(e) => {
+                  const duration = e.currentTarget.duration;
+                  setAudioDurationSec(
+                    typeof duration === 'number' && Number.isFinite(duration) ? duration : null
+                  );
+                }}
+                onTimeUpdate={(e) => {
+                  const t = e.currentTarget.currentTime;
+                  if (typeof t === 'number' && Number.isFinite(t)) setPlaybackTimeSec(t);
+                }}
+              />
+              <div className="flex flex-wrap items-center gap-3 text-xs text-slate-700">
+                <label className="inline-flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    checked={showSyncPreview}
+                    onChange={(e) => setShowSyncPreview(e.target.checked)}
+                  />
+                  同期プレビュー
+                </label>
+                <label className="inline-flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    checked={showWaveform}
+                    onChange={(e) => setShowWaveform(e.target.checked)}
+                  />
+                  波形
+                </label>
+                {showSyncPreview && (
+                  <Badge tone={syncTimepoints ? 'success' : 'neutral'}>
+                    {syncTimepoints ? '精密（タイムポイント）' : '推定'}
+                  </Badge>
                 )}
+              </div>
+
+              {showWaveform && (
+                <Waveform
+                  src={toLocalFileUrl(selectedPart.audio.filePath)}
+                  currentTimeSec={playbackTimeSec}
+                  durationSec={audioDurationSec ?? selectedPart.audio.durationSec}
+                  onSeek={(timeSec) => {
+                    if (audioRef.current) audioRef.current.currentTime = timeSec;
+                  }}
+                />
+              )}
+
+              {showSyncPreview && syncSegments.length > 0 && (
+                <div className="space-y-2">
+                  <p className="text-xs text-slate-500">行クリックで該当位置へシーク</p>
+                  <div
+                    ref={syncListRef}
+                    className="max-h-56 overflow-auto rounded-[8px] border border-[var(--nv-color-border)] bg-slate-50"
+                  >
+                    {syncSegments.map((seg, idx) => {
+                      const active = idx === activeSegmentIndex;
+                      return (
+                        <button
+                          key={idx}
+                          type="button"
+                          data-seg-index={idx}
+                          onClick={() => seekToSegment(idx)}
+                          className={`w-full border-b px-3 py-2 text-left text-sm last:border-b-0 ${
+                            active ? 'bg-blue-100 text-blue-900' : 'text-slate-700 hover:bg-white'
+                          }`}
+                        >
+                          <span className="mr-2 inline-block w-7 text-right text-xs text-slate-400">
+                            {idx + 1}
+                          </span>
+                          {seg}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              <div className="space-y-1 text-xs text-slate-600">
+                <div>エンジン: {formatTtsEngineLabel(selectedPart.audio.ttsEngine)}</div>
+                <div>ボイス: {selectedPart.audio.voiceId}</div>
+                <div>推定長: {selectedPart.audio.durationSec}s</div>
+                <div className="break-all text-[11px] text-slate-500">
+                  {selectedPart.audio.filePath}
+                </div>
               </div>
             </div>
           ) : (
-            <div className="text-gray-500">パートを選択してください</div>
+            <EmptyState title="まだ音声が生成されていません" />
           )}
-        </div>
+        </Card>
       </div>
     </div>
   );

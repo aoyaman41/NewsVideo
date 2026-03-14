@@ -17,6 +17,17 @@ export const imageAssetSchema = z.object({
     createdAt: z.string().datetime(),
     promptId: z.string().uuid().optional(),
     tags: z.array(z.string()),
+    generation: z
+      .object({
+        model: z.string(),
+        resolution: z.enum(['fhd', '2k', '4k']),
+        imageSizeTier: z.enum(['1K', '2K', '4K']),
+        aspectRatio: z.enum(['16:9', '1:1', '9:16']),
+        inputTokens: z.number().int().nonnegative().optional(),
+        outputTokens: z.number().int().nonnegative().optional(),
+        totalTokens: z.number().int().nonnegative().optional(),
+      })
+      .optional(),
   }),
 });
 
@@ -89,7 +100,11 @@ export const usageRecordSchema = z.object({
   operation: z.string(),
   inputTokens: z.number().int().nonnegative().optional(),
   outputTokens: z.number().int().nonnegative().optional(),
+  cachedInputTokens: z.number().int().nonnegative().optional(),
   imageCount: z.number().int().nonnegative().optional(),
+  imageResolution: z.enum(['fhd', '2k', '4k']).optional(),
+  imageSizeTier: z.enum(['1K', '2K', '4K']).optional(),
+  imageAspectRatio: z.enum(['16:9', '1:1', '9:16']).optional(),
   createdAt: z.string().datetime(),
 });
 
@@ -179,9 +194,15 @@ export type Project = z.infer<typeof projectSchema>;
 
 // 記事入力フォーム
 export const articleInputSchema = z.object({
-  title: z.string().min(1, '記事タイトルを入力してください').max(200, 'タイトルは200文字以内で入力してください'),
+  title: z
+    .string()
+    .min(1, '記事タイトルを入力してください')
+    .max(200, 'タイトルは200文字以内で入力してください'),
   source: z.string().max(500, '出典は500文字以内で入力してください').optional(),
-  bodyText: z.string().min(10, '記事本文は10文字以上入力してください').max(50000, '記事本文は50000文字以内で入力してください'),
+  bodyText: z
+    .string()
+    .min(10, '記事本文は10文字以上入力してください')
+    .max(50000, '記事本文は50000文字以内で入力してください'),
 });
 
 export type ArticleInput = z.infer<typeof articleInputSchema>;
@@ -197,8 +218,15 @@ export type ScriptOptions = z.infer<typeof scriptOptionsSchema>;
 
 // パート編集フォーム
 export const partEditSchema = z.object({
-  title: z.string().min(1, 'パートタイトルを入力してください').max(100, 'タイトルは100文字以内で入力してください'),
-  scriptText: z.string().min(1, 'スクリプトを入力してください').max(5000, 'スクリプトは5000文字以内で入力してください'),
+  title: z
+    .string()
+    .min(1, 'パートタイトルを入力してください')
+    .max(100, 'タイトルは100文字以内で入力してください'),
+  summary: z.string().max(500, '要約は500文字以内で入力してください').optional(),
+  scriptText: z
+    .string()
+    .min(1, 'スクリプトを入力してください')
+    .max(5000, 'スクリプトは5000文字以内で入力してください'),
 });
 
 export type PartEdit = z.infer<typeof partEditSchema>;

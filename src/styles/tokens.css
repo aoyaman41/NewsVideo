@@ -1,0 +1,25 @@
+:root {
+  --nv-color-brand: #0b3b6e;
+  --nv-color-accent: #145da0;
+  --nv-color-success: #0f766e;
+  --nv-color-warning: #b45309;
+  --nv-color-danger: #b91c1c;
+  --nv-color-surface: #ffffff;
+  --nv-color-canvas: #f2f4f7;
+  --nv-color-border: #d0d7e2;
+  --nv-color-text: #0f172a;
+  --nv-color-muted: #475569;
+
+  --nv-radius-sm: 8px;
+  --nv-radius-md: 12px;
+
+  --nv-shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.08);
+  --nv-shadow-md: 0 8px 24px rgba(15, 23, 42, 0.1);
+
+  --nv-duration-fast: 80ms;
+  --nv-duration-base: 120ms;
+  --nv-ease-standard: ease;
+
+  --nv-font-ui: 'Hiragino Sans', 'Yu Gothic UI', 'Noto Sans JP', sans-serif;
+  --nv-font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+}

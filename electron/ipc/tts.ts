@@ -4,8 +4,11 @@ import { execFile } from 'child_process';
 import { promisify } from 'util';
 import * as fs from 'fs/promises';
 import * as path from 'path';
+import { GoogleGenAI } from '@google/genai';
+import { splitScriptIntoSegments } from '../../shared/utils/ttsSegmentation';
 
 const execFileAsync = promisify(execFile);
+const TTS_API_TIMEOUT_MS = 60_000;
 
 type TTSEngine = 'google_tts' | 'gemini_tts' | 'macos_tts';
 
@@ -60,6 +63,29 @@ type ApiKeyService = 'google_tts' | 'google_ai';
 
 const getSecretsPath = () => path.join(app.getPath('userData'), 'secrets.enc');
 const getProjectsPath = () => path.join(app.getPath('userData'), 'projects');
+
+function isAbortLikeError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  return error.name === 'AbortError' || error.name === 'TimeoutError';
+}
+
+async function fetchWithTimeout(
+  input: string,
+  init: RequestInit,
+  timeoutMs: number = TTS_API_TIMEOUT_MS
+): Promise<Response> {
+  try {
+    return await fetch(input, {
+      ...init,
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+  } catch (error) {
+    if (isAbortLikeError(error)) {
+      throw new Error(`TTS APIの応答がタイムアウトしました（${Math.floor(timeoutMs / 1000)}秒）`);
+    }
+    throw error;
+  }
+}
 
 async function readApiKey(service: ApiKeyService): Promise<string | null> {
   if (!safeStorage.isEncryptionAvailable()) {
@@ -147,42 +173,6 @@ function escapeSsmlText(text: string): string {
     .replace(/'/g, '&apos;');
 }
 
-function splitScriptIntoSegments(text: string): string[] {
-  const normalized = text.replace(/\r\n/g, '\n').trim();
-  if (!normalized) return [];
-
-  const segments: string[] = [];
-  let buffer = '';
-
-  const flush = () => {
-    const seg = buffer.replace(/\n+/g, ' ').trim();
-    buffer = '';
-    if (seg) segments.push(seg);
-  };
-
-  for (const ch of normalized) {
-    buffer += ch;
-    if (ch === '\n') {
-      flush();
-      continue;
-    }
-    if ('。！？!?'.includes(ch)) {
-      flush();
-      continue;
-    }
-    if (ch === '、' && buffer.length >= 40) {
-      flush();
-      continue;
-    }
-    if (buffer.length >= 80) {
-      flush();
-    }
-  }
-  flush();
-
-  return segments;
-}
-
 function buildSsmlWithMarks(segments: string[]): string {
   const body = segments
     .map((seg, i) => `<mark name="m${i}"/>${escapeSsmlText(seg)}`)
@@ -241,13 +231,17 @@ async function synthesizeGoogleTts(
     ...(enableSync ? { enableTimePointing: ['SSML_MARK'] } : {}),
   };
 
-  const response = await withRetry(async () => {
-    return fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(requestBody),
-    });
-  });
+  const response = await withRetry(
+    async () => {
+      return fetchWithTimeout(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(requestBody),
+      });
+    },
+    2,
+    1000
+  );
 
   const data = (await response.json().catch(() => ({}))) as {
     audioContent?: string;
@@ -325,62 +319,30 @@ async function synthesizeGeminiTts(
     throw new Error('読み上げテキストが空です');
   }
 
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_TTS_MODEL_ID}:generateContent`;
-  const requestBody: Record<string, unknown> = {
-    model: GEMINI_TTS_MODEL_ID,
-    contents: [
-      {
-        role: 'user',
-        parts: [{ text: `${DEFAULT_GEMINI_TTS_PROMPT}\n\n${promptText}` }],
-      },
-    ],
-    generationConfig: {
-      responseModalities: ['AUDIO'],
-      speechConfig: {
-        voiceConfig: {
-          prebuiltVoiceConfig: { voiceName },
+  const ai = new GoogleGenAI({ apiKey });
+
+  const response = await withRetry(
+    async () => {
+      return ai.models.generateContent({
+        model: GEMINI_TTS_MODEL_ID,
+        contents: `${DEFAULT_GEMINI_TTS_PROMPT}\n\n${promptText}`,
+        config: {
+          responseModalities: ['AUDIO'],
+          speechConfig: {
+            voiceConfig: {
+              prebuiltVoiceConfig: { voiceName },
+            },
+          },
         },
-      },
+      });
     },
-  };
+    2,
+    1000
+  );
 
-  const response = await withRetry(async () => {
-    return fetch(url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-goog-api-key': apiKey,
-      },
-      body: JSON.stringify(requestBody),
-    });
-  });
-
-  const data = (await response.json().catch(() => ({}))) as {
-    candidates?: Array<{
-      content?: {
-        parts?: Array<{
-          inlineData?: { data?: string; mimeType?: string };
-          text?: string;
-        }>;
-      };
-    }>;
-    usageMetadata?: {
-      promptTokenCount?: number;
-      candidatesTokenCount?: number;
-      totalTokenCount?: number;
-    };
-    error?: { message?: string };
-  };
-
-  if (!response.ok) {
-    throw new Error(
-      data.error?.message || `Gemini TTS APIエラー: ${response.status} ${response.statusText}`
-    );
-  }
-
-  const parts = data.candidates?.[0]?.content?.parts || [];
+  const parts = response.candidates?.[0]?.content?.parts || [];
   const audioPart = parts.find((p) => p.inlineData?.data);
-  const base64 = audioPart?.inlineData?.data;
+  const base64 = audioPart?.inlineData?.data || response.data;
   if (!base64) {
     throw new Error('Gemini TTSの応答に音声データが含まれていません');
   }
@@ -416,11 +378,14 @@ async function synthesizeGeminiTts(
     },
     generatedAt: now,
   };
-  const usage = data.usageMetadata
+  const usage = response.usageMetadata
     ? {
-        inputTokens: data.usageMetadata.promptTokenCount ?? 0,
-        outputTokens: data.usageMetadata.candidatesTokenCount ?? 0,
-        totalTokens: data.usageMetadata.totalTokenCount,
+        inputTokens: response.usageMetadata.promptTokenCount ?? 0,
+        outputTokens:
+          response.usageMetadata.responseTokenCount ??
+          response.usageMetadata.candidatesTokenCount ??
+          0,
+        totalTokens: response.usageMetadata.totalTokenCount,
         model: GEMINI_TTS_MODEL_ID,
       }
     : null;

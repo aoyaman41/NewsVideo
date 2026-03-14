@@ -1,0 +1,54 @@
+.nv-surface {
+  background: var(--nv-color-surface);
+  border: 1px solid var(--nv-color-border);
+  border-radius: var(--nv-radius-md);
+  box-shadow: var(--nv-shadow-sm);
+}
+
+.nv-surface-muted {
+  background: #f8fafc;
+  border: 1px solid var(--nv-color-border);
+  border-radius: var(--nv-radius-sm);
+}
+
+.nv-input {
+  width: 100%;
+  border: 1px solid var(--nv-color-border);
+  border-radius: var(--nv-radius-sm);
+  background: #fff;
+  color: var(--nv-color-text);
+  padding: 10px 12px;
+  transition:
+    border-color var(--nv-duration-fast) var(--nv-ease-standard),
+    box-shadow var(--nv-duration-fast) var(--nv-ease-standard),
+    background-color var(--nv-duration-fast) var(--nv-ease-standard);
+}
+
+.nv-input:focus-visible {
+  outline: none;
+  border-color: var(--nv-color-accent);
+  box-shadow: 0 0 0 3px rgba(20, 93, 160, 0.2);
+}
+
+.nv-focus-ring:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(20, 93, 160, 0.25);
+}
+
+.nv-scrollbar {
+  scrollbar-width: thin;
+  scrollbar-color: #94a3b8 #e2e8f0;
+}
+
+.nv-grid-page {
+  display: grid;
+  gap: 16px;
+}
+
+.nv-section-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: #334155;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}

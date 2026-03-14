@@ -14,6 +14,7 @@ import {
   verticalListSortingStrategy,
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
+import { Badge, Button, StatusChip, useConfirm } from '../ui';
 import type { Part } from '../../schemas';
 
 interface PartListProps {
@@ -21,7 +22,7 @@ interface PartListProps {
   selectedPartId: string | null;
   onSelectPart: (partId: string) => void;
   onAddPart: () => void;
-  onDeletePart: (partId: string) => void;
+  onDeletePart: (partId: string) => Promise<void> | void;
   onReorderParts: (fromIndex: number, toIndex: number) => void;
 }
 
@@ -61,59 +62,48 @@ function SortablePartItem({
     <li
       ref={setNodeRef}
       style={style}
-      className={`group relative cursor-pointer transition-colors ${
+      className={`group relative cursor-pointer rounded-[10px] border transition-colors ${
         isSelected
-          ? 'bg-blue-50 border-l-4 border-blue-600'
-          : 'hover:bg-gray-50 border-l-4 border-transparent'
-      } ${isDragging ? 'z-50 shadow-lg' : ''}`}
+          ? 'border-[var(--nv-color-accent)] bg-blue-50 shadow-[var(--nv-shadow-sm)]'
+          : 'border-[var(--nv-color-border)] bg-white hover:bg-slate-50'
+      } ${isDragging ? 'z-50 shadow-[var(--nv-shadow-md)]' : ''}`}
       onClick={onSelect}
     >
-      <div className="p-3 flex items-start gap-2">
-        {/* ドラッグハンドル */}
+      <div className="flex items-start gap-3 p-3">
         <button
-          className="mt-1 p-1 text-gray-400 hover:text-gray-600 cursor-grab active:cursor-grabbing touch-none"
+          className="mt-0.5 rounded-[8px] p-1 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600 cursor-grab active:cursor-grabbing touch-none"
           {...attributes}
           {...listeners}
           onClick={(e) => e.stopPropagation()}
+          aria-label="並び替え"
         >
           <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
             <path d="M7 2a2 2 0 1 0 0 4 2 2 0 0 0 0-4zM7 8a2 2 0 1 0 0 4 2 2 0 0 0 0-4zM7 14a2 2 0 1 0 0 4 2 2 0 0 0 0-4zM13 2a2 2 0 1 0 0 4 2 2 0 0 0 0-4zM13 8a2 2 0 1 0 0 4 2 2 0 0 0 0-4zM13 14a2 2 0 1 0 0 4 2 2 0 0 0 0-4z" />
           </svg>
         </button>
 
-        <div className="flex-1 min-w-0">
+        <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
-            <span className="text-xs font-medium text-gray-400">
-              {index + 1}
-            </span>
-            <h4 className="text-sm font-medium text-gray-900 truncate">
-              {part.title}
-            </h4>
+            <Badge tone={isSelected ? 'info' : 'neutral'}>{index + 1}</Badge>
+            <h4 className="truncate text-sm font-semibold text-slate-900">{part.title}</h4>
           </div>
-          <p className="text-xs text-gray-500 mt-1 line-clamp-2">
+          <p className="mt-1 line-clamp-2 text-xs text-slate-500">
             {part.summary || part.scriptText.substring(0, 50) + '...'}
           </p>
-          <div className="flex items-center gap-2 mt-2">
-            <span className="text-xs text-gray-400">
-              {formatDuration(part.durationEstimateSec)}
-            </span>
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            <Badge tone="neutral">{formatDuration(part.durationEstimateSec)}</Badge>
             {part.scriptModifiedByUser && (
-              <span className="text-xs bg-yellow-100 text-yellow-700 px-1 rounded">
-                編集済み
-              </span>
+              <StatusChip tone="warning" label="編集済み" />
             )}
           </div>
         </div>
 
-        {/* 削除ボタン */}
         <button
-          onClick={(e) => {
+          onClick={async (e) => {
             e.stopPropagation();
-            if (confirm(`パート「${part.title}」を削除しますか？`)) {
-              onDelete();
-            }
+            await onDelete();
           }}
-          className="p-1 text-gray-400 hover:text-red-600 opacity-0 group-hover:opacity-100 transition-opacity"
+          className="rounded-[8px] p-1 text-slate-400 opacity-0 transition-all hover:bg-red-50 hover:text-red-600 group-hover:opacity-100"
           title="削除"
         >
           <svg
@@ -143,6 +133,7 @@ export function PartList({
   onDeletePart,
   onReorderParts,
 }: PartListProps) {
+  const { confirm } = useConfirm();
   const sensors = useSensors(
     useSensor(PointerSensor, {
       activationConstraint: {
@@ -172,16 +163,17 @@ export function PartList({
 
   return (
     <div className="flex flex-col h-full">
-      {/* ヘッダー */}
-      <div className="p-4 border-b border-gray-200">
+      <div className="border-b border-[var(--nv-color-border)] p-4">
         <div className="flex items-center justify-between">
-          <h3 className="font-semibold text-gray-900">パート一覧</h3>
-          <button
-            onClick={onAddPart}
-            className="p-1 text-blue-600 hover:bg-blue-50 rounded transition-colors"
-            title="パートを追加"
-          >
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <div>
+            <h3 className="font-semibold text-slate-900">パート一覧</h3>
+            <p className="mt-1 text-xs text-slate-500">
+              {parts.length} パート / 合計{' '}
+              {formatDuration(parts.reduce((sum, p) => sum + p.durationEstimateSec, 0))}
+            </p>
+          </div>
+          <Button size="sm" variant="secondary" onClick={onAddPart}>
+            <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path
                 strokeLinecap="round"
                 strokeLinejoin="round"
@@ -189,18 +181,14 @@ export function PartList({
                 d="M12 4v16m8-8H4"
               />
             </svg>
-          </button>
+            追加
+          </Button>
         </div>
-        <p className="text-sm text-gray-500 mt-1">
-          {parts.length} パート / 合計{' '}
-          {formatDuration(parts.reduce((sum, p) => sum + p.durationEstimateSec, 0))}
-        </p>
       </div>
 
-      {/* パートリスト */}
-      <div className="flex-1 overflow-auto">
+      <div className="nv-scrollbar flex-1 overflow-auto p-3">
         {parts.length === 0 ? (
-          <div className="p-4 text-center text-gray-500">
+          <div className="rounded-[10px] border border-dashed border-[var(--nv-color-border)] p-6 text-center text-sm text-slate-500">
             パートがありません
           </div>
         ) : (
@@ -213,7 +201,7 @@ export function PartList({
               items={parts.map((p) => p.id)}
               strategy={verticalListSortingStrategy}
             >
-              <ul className="divide-y divide-gray-200">
+              <ul className="space-y-2">
                 {parts.map((part, index) => (
                   <SortablePartItem
                     key={part.id}
@@ -221,7 +209,16 @@ export function PartList({
                     index={index}
                     isSelected={selectedPartId === part.id}
                     onSelect={() => onSelectPart(part.id)}
-                    onDelete={() => onDeletePart(part.id)}
+                    onDelete={async () => {
+                      const accepted = await confirm({
+                        title: 'パートを削除しますか？',
+                        description: `「${part.title}」を削除します。関連する原稿と設定もこの一覧から外れます。`,
+                        confirmLabel: '削除',
+                        confirmVariant: 'danger',
+                      });
+                      if (!accepted) return;
+                      await onDeletePart(part.id);
+                    }}
                     formatDuration={formatDuration}
                   />
                 ))}

@@ -1,6 +1,5 @@
 import { useCallback } from 'react';
 import { useDropzone } from 'react-dropzone';
-import mammoth from 'mammoth';
 
 interface FileImportProps {
   onTextImported: (title: string, text: string) => void;
@@ -17,6 +16,7 @@ export function FileImport({ onTextImported }: FileImportProps) {
         onTextImported(fileName, text);
       } else if (file.name.endsWith('.docx')) {
         // DOCXファイル
+        const mammoth = await import('mammoth');
         const arrayBuffer = await file.arrayBuffer();
         const result = await mammoth.extractRawText({ arrayBuffer });
         onTextImported(fileName, result.value);

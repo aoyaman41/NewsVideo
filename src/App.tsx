@@ -1,28 +1,49 @@
+import { Suspense, lazy } from 'react';
 import { HashRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { MainLayout } from './components/layout';
-import { ProjectListPage } from './pages/ProjectListPage';
-import { SettingsPage } from './pages/SettingsPage';
-import { ArticleInputPage } from './pages/ArticleInputPage';
-import { ScriptEditPage } from './pages/ScriptEditPage';
-import { ImageManagePage } from './pages/ImageManagePage';
-import { AudioManagePage } from './pages/AudioManagePage';
-import { VideoManagePage } from './pages/VideoManagePage';
+import { FeedbackProvider } from './components/ui';
+
+const ProjectListPage = lazy(async () => ({
+  default: (await import('./pages/ProjectListPage')).ProjectListPage,
+}));
+const SettingsPage = lazy(async () => ({
+  default: (await import('./pages/SettingsPage')).SettingsPage,
+}));
+const ArticleInputPage = lazy(async () => ({
+  default: (await import('./pages/ArticleInputPage')).ArticleInputPage,
+}));
+const ScriptEditPage = lazy(async () => ({
+  default: (await import('./pages/ScriptEditPage')).ScriptEditPage,
+}));
+const ImageManagePage = lazy(async () => ({
+  default: (await import('./pages/ImageManagePage')).ImageManagePage,
+}));
+const AudioManagePage = lazy(async () => ({
+  default: (await import('./pages/AudioManagePage')).AudioManagePage,
+}));
+const VideoManagePage = lazy(async () => ({
+  default: (await import('./pages/VideoManagePage')).VideoManagePage,
+}));
 
 function App() {
   return (
     <HashRouter>
-      <Routes>
-        <Route path="/" element={<Navigate to="/projects" replace />} />
-        <Route element={<MainLayout />}>
-          <Route path="/projects" element={<ProjectListPage />} />
-          <Route path="/projects/:projectId/article" element={<ArticleInputPage />} />
-          <Route path="/projects/:projectId/script" element={<ScriptEditPage />} />
-          <Route path="/projects/:projectId/image" element={<ImageManagePage />} />
-          <Route path="/projects/:projectId/audio" element={<AudioManagePage />} />
-          <Route path="/projects/:projectId/video" element={<VideoManagePage />} />
-          <Route path="/settings" element={<SettingsPage />} />
-        </Route>
-      </Routes>
+      <FeedbackProvider>
+        <Suspense fallback={<div className="p-6 text-sm text-slate-500">ページを読み込み中...</div>}>
+          <Routes>
+            <Route path="/" element={<Navigate to="/projects" replace />} />
+            <Route element={<MainLayout />}>
+              <Route path="/projects" element={<ProjectListPage />} />
+              <Route path="/projects/:projectId/article" element={<ArticleInputPage />} />
+              <Route path="/projects/:projectId/script" element={<ScriptEditPage />} />
+              <Route path="/projects/:projectId/image" element={<ImageManagePage />} />
+              <Route path="/projects/:projectId/audio" element={<AudioManagePage />} />
+              <Route path="/projects/:projectId/video" element={<VideoManagePage />} />
+              <Route path="/settings" element={<SettingsPage />} />
+            </Route>
+          </Routes>
+        </Suspense>
+      </FeedbackProvider>
     </HashRouter>
   );
 }
