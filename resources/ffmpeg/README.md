@@ -14,3 +14,4 @@ PATH=/usr/local/bin:$PATH npm run prepare:ffmpeg:mac
 - `resources/ffmpeg/ffmpeg`
 - `resources/ffmpeg/ffprobe`
 
+ライセンスと再配布メモは、リポジトリ直下の [THIRD_PARTY_NOTICES.md](../../THIRD_PARTY_NOTICES.md) を参照してください。

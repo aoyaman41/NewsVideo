@@ -114,4 +114,5 @@ npm test
 
 ## License
 
-現時点のライセンス表記は [package.json](package.json) にある `ISC` です。正式な `LICENSE` ファイルの追加は [Issue #3](https://github.com/aoyaman41/NewsVideo/issues/3) で進めています。
+- NewsVideo のソースコードライセンス: [LICENSE](LICENSE)
+- 同梱する第三者コンポーネントの注意書き: [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)
