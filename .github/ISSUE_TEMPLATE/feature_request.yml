@@ -1,0 +1,56 @@
+name: Feature request
+description: 機能要望用テンプレート
+title: "[Feature] "
+labels:
+  - enhancement
+body:
+  - type: markdown
+    attributes:
+      value: |
+        何を解決したいか、現在どこで詰まっているかを先に書いてもらえると判断しやすくなります。
+  - type: input
+    id: summary
+    attributes:
+      label: 要望の要約
+      placeholder: "例: 動画画面で書き出し前に全体プレビューを見たい"
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: 背景 / 解決したい問題
+      description: いま何が困るのかを書いてください
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: 提案内容
+      description: 望んでいる挙動や UI を書いてください
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: 代替案や現在の回避策
+  - type: dropdown
+    id: scope
+    attributes:
+      label: 影響範囲
+      options:
+        - 記事 / スクリプト
+        - 画像
+        - 音声
+        - 動画
+        - 設定 / 配布
+        - ドキュメント
+        - その他
+    validations:
+      required: true
+  - type: textarea
+    id: use-case
+    attributes:
+      label: 想定ユースケース
+      description: 誰が、どんな場面で使うかを書いてください
+    validations:
+      required: true
