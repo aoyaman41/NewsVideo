@@ -26,6 +26,9 @@ lerna-debug.log*
 *.sw?
 
 # Local env files
+.env
+.env.*
+!.env.example
 .env.local
 .env.*.local
 
