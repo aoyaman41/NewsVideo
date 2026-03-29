@@ -91,6 +91,7 @@ npm test
 
 - 4画面をつないだ短いデモ: [workflow-demo.gif](.github/assets/public-beta/workflow-demo.gif)
 - 公開用のサンプル入力 / 出力まとめ: [docs/サンプル出力.md](docs/サンプル出力.md)
+- リリース前の最低限チェック: [docs/リリース前スモークテスト.md](docs/リリース前スモークテスト.md)
 - 最新の配布物: [GitHub Releases](https://github.com/aoyaman41/NewsVideo/releases/latest)
 - 検証用の入力例: [docs/サンプル記事.md](docs/サンプル記事.md)
 - 公開用素材の再生成: `npm run docs:public-assets`
@@ -127,6 +128,7 @@ npm test
 
 - 現行実装ガイド: [docs/現行実装ガイド.md](docs/現行実装ガイド.md)
 - クイックスタート: [docs/クイックスタート.md](docs/クイックスタート.md)
+- リリース前スモークテスト: [docs/リリース前スモークテスト.md](docs/リリース前スモークテスト.md)
 - 公開リリース手順: [docs/公開リリース手順.md](docs/公開リリース手順.md)
 - 対応環境と制約: [docs/対応環境と制約.md](docs/対応環境と制約.md)
 - バグ報告 / 要望 / 使い方の質問: [GitHub Issues](https://github.com/aoyaman41/NewsVideo/issues/new/choose)
