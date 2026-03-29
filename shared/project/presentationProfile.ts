@@ -70,7 +70,7 @@ const presetDefaults: Record<PresentationProfilePreset, PresentationProfile> = {
   },
 };
 
-const presetClosingLines: Record<PresentationProfilePreset, string> = {
+export const PRESENTATION_PROFILE_PRESET_CLOSING_LINES: Record<PresentationProfilePreset, string> = {
   news: '以上、ニュースをお届けしました',
   explain: '以上、ポイントを解説しました',
   report: '以上、報告をお伝えしました',
@@ -143,6 +143,6 @@ export function resolvePresentationClosingLine(profile: PresentationProfile): st
       return profile.closingLineText.trim() || null;
     case 'preset':
     default:
-      return presetClosingLines[profile.preset];
+      return PRESENTATION_PROFILE_PRESET_CLOSING_LINES[profile.preset];
   }
 }

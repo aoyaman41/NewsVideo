@@ -322,6 +322,7 @@ interface ScriptOptions {
   targetPartCount?: number;
   tone?: 'formal' | 'casual' | 'news';
   targetDurationPerPartSec?: number;
+  closingLine?: string | null;
 }
 
 interface CommentTarget {

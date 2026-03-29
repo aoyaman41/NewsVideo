@@ -22,6 +22,7 @@ import {
   type OpenAIReasoningEffort,
   type TextCompletionModel,
 } from '../../shared/constants/models';
+import { PRESENTATION_PROFILE_PRESET_CLOSING_LINES } from '../../shared/project/presentationProfile';
 import { DEFAULT_SETTINGS, normalizeSettings } from '../../shared/settings/appSettings';
 import { sanitizeImagePromptForRendering } from '../../shared/utils/imagePromptSanitizer';
 
@@ -372,6 +373,7 @@ interface ScriptOptions {
   targetPartCount?: number;
   tone?: 'formal' | 'casual' | 'news';
   targetDurationPerPartSec?: number;
+  closingLine?: string | null;
 }
 
 // 生成されたパートの型
@@ -401,8 +403,12 @@ function createScriptGenerationPrompt(article: Article, options: ScriptOptions):
   const tone = options.tone || 'news';
   const targetPartCount = options.targetPartCount || 5;
   const targetDuration = options.targetDurationPerPartSec || 30;
+  const closingLine = typeof options.closingLine === 'string' ? options.closingLine.trim() : '';
+  const closingInstruction = closingLine
+    ? `5. 最後のパートの末尾に「${closingLine}」を入れてください`
+    : '5. 最後のパートの末尾に定型の締め文を入れないでください';
 
-  return `あなたは報道動画のスクリプトライターです。以下の記事を、${targetPartCount}個のパートに分割し、各パートのナレーションスクリプトを作成してください。
+  return `あなたは情報動画のスクリプトライターです。以下の記事を、${targetPartCount}個のパートに分割し、各パートのナレーションスクリプトを作成してください。
 
 ## 記事情報
 タイトル: ${article.title}
@@ -416,7 +422,7 @@ ${article.bodyText}
 2. 各パートは約${targetDuration}秒（日本語で約${Math.round(targetDuration * 4)}文字）のナレーションになるようにしてください
 3. 視聴者が理解しやすいよう、論理的な流れで構成してください
 4. 重要な情報を漏らさないようにしてください
-5. 最後のパートの末尾に「以上、ニュースをお届けしました」を入れてください
+${closingInstruction}
 
 ## 出力形式
 以下のJSON形式で出力してください：
@@ -435,6 +441,41 @@ ${article.bodyText}
 JSONのみを出力してください。説明や補足は不要です。`;
 }
 
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function trimTrailingClosingLine(text: string, closingLine: string): string {
+  const pattern = new RegExp(`(?:\\s|\\u3000|\\n)*${escapeRegExp(closingLine)}[。！!？?\\s\\u3000]*$`);
+  return text.replace(pattern, '').trimEnd();
+}
+
+function normalizeClosingLine(scriptText: string, closingLine: string | null): string {
+  const knownClosingLines = Array.from(
+    new Set(Object.values(PRESENTATION_PROFILE_PRESET_CLOSING_LINES))
+  );
+  const baseScript = knownClosingLines.reduce(
+    (current, line) => trimTrailingClosingLine(current, line),
+    scriptText.trimEnd()
+  );
+
+  if (!closingLine) {
+    return baseScript;
+  }
+
+  const nextClosingLine = closingLine.trim();
+  if (!nextClosingLine) {
+    return baseScript;
+  }
+
+  if (baseScript.endsWith(nextClosingLine)) {
+    return baseScript;
+  }
+
+  const separator = baseScript.endsWith('\n') || baseScript.length === 0 ? '' : '\n';
+  return `${baseScript}${separator}${nextClosingLine}`;
+}
+
 // スクリプト生成ハンドラ
 ipcMain.handle(
   'ai:generateScript',
@@ -446,7 +487,7 @@ ipcMain.handle(
     const generationConfig = await readTextGenerationConfig('script');
     const selectedModel = generationConfig.model;
     const scriptSystemPrompt =
-      'あなたは報道動画のスクリプトライターです。与えられた記事を読みやすいナレーションスクリプトに変換します。';
+      'あなたは情報動画のスクリプトライターです。与えられた記事を読みやすいナレーションスクリプトに変換します。';
     const scriptUserPrompt = createScriptGenerationPrompt(article, options);
 
     let parsed: {
@@ -500,7 +541,10 @@ ipcMain.handle(
       usage = geminiResult.usage;
     }
     const now = new Date().toISOString();
-    const closingLine = '以上、ニュースをお届けしました';
+    const closingLine =
+      typeof options.closingLine === 'string' && options.closingLine.trim().length > 0
+        ? options.closingLine.trim()
+        : null;
 
     // パートデータを整形
     const parts: GeneratedPart[] = parsed.parts.map(
@@ -525,10 +569,10 @@ ipcMain.handle(
     if (parts.length > 0) {
       const lastIndex = parts.length - 1;
       const last = parts[lastIndex];
-      if (!last.scriptText.includes(closingLine)) {
-        const separator = last.scriptText.endsWith('\n') ? '' : '\n';
-        parts[lastIndex] = { ...last, scriptText: `${last.scriptText}${separator}${closingLine}` };
-      }
+      parts[lastIndex] = {
+        ...last,
+        scriptText: normalizeClosingLine(last.scriptText, closingLine),
+      };
     }
 
     return {
