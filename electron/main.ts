@@ -3,7 +3,7 @@ import * as fs from 'node:fs';
 import * as fsPromises from 'node:fs/promises';
 import { Readable } from 'node:stream';
 import path from 'path';
-import { fileURLToPath } from 'url';
+import { fileURLToPath, pathToFileURL } from 'url';
 
 // ESM環境での __dirname 相当を取得
 const __filename = fileURLToPath(import.meta.url);
@@ -12,6 +12,14 @@ const __dirname = path.dirname(__filename);
 // 開発環境かどうか
 const isDev = !app.isPackaged;
 const shouldOpenDevTools = isDev && process.env.NEWSVIDEO_OPEN_DEVTOOLS === '1';
+const rendererUrlOverride = process.env.NEWSVIDEO_RENDERER_URL?.trim();
+const startPathOverride = normalizeRoutePath(process.env.NEWSVIDEO_START_PATH);
+const userDataDirOverride = process.env.NEWSVIDEO_USER_DATA_DIR?.trim();
+const shouldShowWindowImmediately = process.env.NEWSVIDEO_SHOW_WINDOW_IMMEDIATELY === '1';
+
+if (userDataDirOverride) {
+  app.setPath('userData', path.resolve(userDataDirOverride));
+}
 
 // カスタムプロトコル 'local-file' を登録
 protocol.registerSchemesAsPrivileged([
@@ -29,6 +37,18 @@ protocol.registerSchemesAsPrivileged([
 ]);
 
 let mainWindow: BrowserWindow | null = null;
+
+function normalizeRoutePath(rawPath: string | undefined): string | null {
+  if (!rawPath) return null;
+  const trimmed = rawPath.trim();
+  if (!trimmed) return null;
+  return trimmed.startsWith('/') ? trimmed : `/${trimmed}`;
+}
+
+function appendHash(baseUrl: string, routePath: string | null): string {
+  if (!routePath) return baseUrl;
+  return `${baseUrl}#${routePath}`;
+}
 
 function toWebReadableStream(nodeStream: fs.ReadStream): ReadableStream<Uint8Array> {
   return Readable.toWeb(nodeStream) as ReadableStream<Uint8Array>;
@@ -102,20 +122,31 @@ function createWindow(): void {
     show: false,
   });
 
+  const revealWindow = () => {
+    if (!mainWindow || mainWindow.isDestroyed() || mainWindow.isVisible()) return;
+    mainWindow.show();
+  };
+
   // 開発環境ではViteのdev serverに接続
-  if (isDev) {
+  if (rendererUrlOverride) {
+    mainWindow.loadURL(appendHash(rendererUrlOverride, startPathOverride));
+  } else if (isDev) {
     const port = process.env.VITE_DEV_SERVER_URL || 'http://localhost:5173';
-    mainWindow.loadURL(port);
+    mainWindow.loadURL(appendHash(port, startPathOverride));
     if (shouldOpenDevTools) {
       mainWindow.webContents.openDevTools();
     }
   } else {
-    mainWindow.loadFile(path.join(__dirname, '../dist/index.html'));
+    const indexUrl = pathToFileURL(path.join(__dirname, '../dist/index.html')).toString();
+    mainWindow.loadURL(appendHash(indexUrl, startPathOverride));
   }
 
-  mainWindow.once('ready-to-show', () => {
-    mainWindow?.show();
-  });
+  if (shouldShowWindowImmediately) {
+    revealWindow();
+  }
+
+  mainWindow.once('ready-to-show', revealWindow);
+  mainWindow.webContents.once('did-finish-load', revealWindow);
 
   mainWindow.on('closed', () => {
     mainWindow = null;
