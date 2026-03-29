@@ -17,6 +17,26 @@ export type PresentationProfile = {
   targetDurationPerPartSec: number;
 };
 
+export const PRESENTATION_PROFILE_PRESET_LABELS: Record<PresentationProfilePreset, string> = {
+  news: 'ニュース',
+  explain: '解説',
+  report: '報告',
+  short: 'ショート',
+};
+
+export const PRESENTATION_PROFILE_PRESET_DESCRIPTIONS: Record<PresentationProfilePreset, string> = {
+  news: '客観的で明瞭なニュース番組向けの既定値',
+  explain: '落ち着いた解説動画向けの長めの既定値',
+  report: '社内報告や業務報告向けの端的な既定値',
+  short: '短尺ダイジェスト向けの軽い既定値',
+};
+
+export const CLOSING_LINE_MODE_LABELS: Record<ClosingLineMode, string> = {
+  preset: 'プリセットを使う',
+  none: '入れない',
+  custom: 'カスタム',
+};
+
 const TARGET_DURATION_RANGE = { min: 10, max: 300 } as const;
 
 const presetDefaults: Record<PresentationProfilePreset, PresentationProfile> = {

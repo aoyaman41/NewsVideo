@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { Header, WorkflowNav } from '../components/layout';
 import { ArticleInput, FileImport, ImageDropzone } from '../components/article';
@@ -7,6 +7,7 @@ import type {
   ArticleInput as ArticleInputType,
   AutoGenerationStatus,
   ImageAsset,
+  PresentationProfile,
   Project,
 } from '../schemas';
 import {
@@ -14,6 +15,16 @@ import {
   createGeminiTtsUsageRecord,
   createOpenAIUsageRecord,
 } from '../utils/usage';
+import {
+  CLOSING_LINE_MODE_LABELS,
+  PRESENTATION_PROFILE_PRESET_DESCRIPTIONS,
+  PRESENTATION_PROFILE_PRESET_LABELS,
+  PRESENTATION_PROFILE_PRESETS,
+  getDefaultPresentationProfile,
+  normalizePresentationProfile,
+  resolvePresentationClosingLine,
+  type PresentationProfilePreset,
+} from '../../shared/project/presentationProfile';
 
 export function ArticleInputPage() {
   const { projectId } = useParams<{ projectId: string }>();
@@ -33,9 +44,15 @@ export function ArticleInputPage() {
   const [autoStatus, setAutoStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [targetPartCount, setTargetPartCount] = useState<number>(5);
+  const [presentationProfile, setPresentationProfile] = useState<PresentationProfile>(
+    getDefaultPresentationProfile()
+  );
   const autoCancelRef = useRef(false);
   const isMountedRef = useRef(true);
   const blobUrlsRef = useRef<Map<string, string>>(new Map());
+  const savedPresentationProfileRef = useRef<string>(
+    JSON.stringify(getDefaultPresentationProfile())
+  );
 
   const reportError = useCallback(
     (message: string, title?: string) => {
@@ -82,6 +99,9 @@ export function ArticleInputPage() {
           source: project.article?.source ?? '',
           bodyText: project.article?.bodyText ?? '',
         });
+        const normalizedProfile = normalizePresentationProfile(project.presentationProfile);
+        setPresentationProfile(normalizedProfile);
+        savedPresentationProfileRef.current = JSON.stringify(normalizedProfile);
         if (project.parts?.length) {
           const nextCount = Math.min(20, Math.max(1, project.parts.length));
           setTargetPartCount(nextCount);
@@ -117,6 +137,35 @@ export function ArticleInputPage() {
       cancelled = true;
     };
   }, [projectId, reportError]);
+
+  useEffect(() => {
+    if (!project) return;
+
+    const serialized = JSON.stringify(presentationProfile);
+    if (serialized === savedPresentationProfileRef.current) return;
+
+    const timeoutId = window.setTimeout(async () => {
+      try {
+        const updatedAt = new Date().toISOString();
+        const updatedProject: Project = {
+          ...project,
+          presentationProfile,
+          updatedAt,
+        };
+        await window.electronAPI.project.save(updatedProject);
+        savedPresentationProfileRef.current = serialized;
+        setProjectSafe(updatedProject);
+      } catch (err) {
+        console.error('Failed to save presentation profile:', err);
+        reportError(
+          err instanceof Error ? err.message : '表現設定の保存に失敗しました',
+          '表現設定の保存に失敗しました'
+        );
+      }
+    }, 250);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [presentationProfile, project, reportError]);
 
   useEffect(() => {
     if (!projectId) return;
@@ -319,6 +368,22 @@ export function ArticleInputPage() {
     };
   };
 
+  const applyPresentationPreset = (preset: PresentationProfilePreset) => {
+    const presetDefaults = getDefaultPresentationProfile(preset);
+    setPresentationProfile((prev) => ({
+      ...prev,
+      preset,
+      tone: presetDefaults.tone,
+      targetDurationPerPartSec: presetDefaults.targetDurationPerPartSec,
+    }));
+  };
+
+  const closingLinePreview = useMemo(
+    () => resolvePresentationClosingLine(presentationProfile),
+    [presentationProfile]
+  );
+  const presetDescription = PRESENTATION_PROFILE_PRESET_DESCRIPTIONS[presentationProfile.preset];
+
   const handleSubmit = async (data: ArticleInputType) => {
     if (!projectId) return;
 
@@ -334,13 +399,15 @@ export function ArticleInputPage() {
         bodyText: data.bodyText,
         importedImages: images,
       };
+      project.presentationProfile = presentationProfile;
       project.updatedAt = new Date().toISOString();
       await window.electronAPI.project.save(project);
 
       // スクリプト生成を実行
       const result = await window.electronAPI.ai.generateScript(project.article, {
-        tone: 'news',
+        tone: presentationProfile.tone,
         targetPartCount,
+        targetDurationPerPartSec: presentationProfile.targetDurationPerPartSec,
       });
       const usageRecord = createOpenAIUsageRecord('script_generate', result.usage);
 
@@ -395,6 +462,7 @@ export function ArticleInputPage() {
         bodyText: data.bodyText,
         importedImages: images,
       };
+      project.presentationProfile = presentationProfile;
       await updateAutoStatus(project, {
         running: true,
         step: '記事を保存中...',
@@ -432,8 +500,9 @@ export function ArticleInputPage() {
       if (!steps.script) {
         await updateAutoStatus(project, { running: true, step: 'スクリプトを生成中...' });
         const scriptResult = await window.electronAPI.ai.generateScript(project.article, {
-          tone: 'news',
+          tone: presentationProfile.tone,
           targetPartCount,
+          targetDurationPerPartSec: presentationProfile.targetDurationPerPartSec,
         });
         await ensureNotCancelled();
         const scriptUsage = createOpenAIUsageRecord('script_generate', scriptResult.usage);
@@ -898,26 +967,122 @@ export function ArticleInputPage() {
               <ErrorDetailPanel message={error} onDismiss={() => setError(null)} />
             )}
 
-            <Card title="スクリプト生成設定" subtitle="記事入力後のパート分割数を指定">
-              <div className="flex flex-wrap items-center gap-4">
-                <label className="text-sm font-medium text-slate-700">パート数</label>
-                <input
-                  type="number"
-                  min={1}
-                  max={20}
-                  value={targetPartCount}
-                  onChange={(e) => {
-                    const next = Number(e.target.value);
-                    if (!Number.isFinite(next)) return;
-                    setTargetPartCount(Math.min(20, Math.max(1, Math.round(next))));
-                  }}
-                  className="nv-input w-28"
-                />
-                <Badge tone="info">1〜20</Badge>
+            <Card title="スクリプト生成設定" subtitle="記事入力後の分割数と話し方を指定">
+              <div className="grid gap-4 md:grid-cols-2">
+                <div>
+                  <label className="mb-1 block text-xs font-semibold text-slate-600">
+                    配信スタイル
+                  </label>
+                  <select
+                    value={presentationProfile.preset}
+                    onChange={(e) => applyPresentationPreset(e.target.value as PresentationProfilePreset)}
+                    className="nv-input"
+                  >
+                    {PRESENTATION_PROFILE_PRESETS.map((preset) => (
+                      <option key={preset} value={preset}>
+                        {PRESENTATION_PROFILE_PRESET_LABELS[preset]}
+                      </option>
+                    ))}
+                  </select>
+                  <p className="mt-2 text-xs text-slate-500">{presetDescription}</p>
+                </div>
+
+                <div>
+                  <label className="mb-1 block text-xs font-semibold text-slate-600">
+                    パート数
+                  </label>
+                  <div className="flex flex-wrap items-center gap-3">
+                    <input
+                      type="number"
+                      min={1}
+                      max={20}
+                      value={targetPartCount}
+                      onChange={(e) => {
+                        const next = Number(e.target.value);
+                        if (!Number.isFinite(next)) return;
+                        setTargetPartCount(Math.min(20, Math.max(1, Math.round(next))));
+                      }}
+                      className="nv-input w-28"
+                    />
+                    <Badge tone="info">1〜20</Badge>
+                  </div>
+                  <p className="mt-2 text-xs text-slate-500">
+                    画像を分けたい場合はパート数を増やしてください（後から編集可能）。
+                  </p>
+                </div>
+
+                <div>
+                  <label className="mb-1 block text-xs font-semibold text-slate-600">
+                    1パートの目安秒数
+                  </label>
+                  <div className="flex flex-wrap items-center gap-3">
+                    <input
+                      type="number"
+                      min={10}
+                      max={300}
+                      value={presentationProfile.targetDurationPerPartSec}
+                      onChange={(e) => {
+                        const next = Number(e.target.value);
+                        if (!Number.isFinite(next)) return;
+                        setPresentationProfile((prev) => ({
+                          ...prev,
+                          targetDurationPerPartSec: Math.min(300, Math.max(10, Math.round(next))),
+                        }));
+                      }}
+                      className="nv-input w-28"
+                    />
+                    <Badge tone="neutral">10〜300秒</Badge>
+                  </div>
+                  <p className="mt-2 text-xs text-slate-500">
+                    プリセット初期値は自動で入ります。必要なら上書きできます。
+                  </p>
+                </div>
+
+                <div>
+                  <label className="mb-1 block text-xs font-semibold text-slate-600">
+                    締め文
+                  </label>
+                  <select
+                    value={presentationProfile.closingLineMode}
+                    onChange={(e) =>
+                      setPresentationProfile((prev) => ({
+                        ...prev,
+                        closingLineMode: e.target.value as PresentationProfile['closingLineMode'],
+                      }))
+                    }
+                    className="nv-input"
+                  >
+                    {Object.entries(CLOSING_LINE_MODE_LABELS).map(([mode, label]) => (
+                      <option key={mode} value={mode}>
+                        {label}
+                      </option>
+                    ))}
+                  </select>
+                  <p className="mt-2 text-xs text-slate-500">
+                    現在の出力予定: {closingLinePreview ?? '締め文なし'}
+                  </p>
+                </div>
               </div>
-              <p className="mt-2 text-xs text-slate-500">
-                画像を分けたい場合はパート数を増やしてください（後から編集可能）。
-              </p>
+
+              {presentationProfile.closingLineMode === 'custom' && (
+                <div className="mt-4">
+                  <label className="mb-1 block text-xs font-semibold text-slate-600">
+                    カスタム締め文
+                  </label>
+                  <input
+                    type="text"
+                    value={presentationProfile.closingLineText}
+                    onChange={(e) =>
+                      setPresentationProfile((prev) => ({
+                        ...prev,
+                        closingLineText: e.target.value,
+                      }))
+                    }
+                    className="nv-input"
+                    placeholder="ご視聴ありがとうございました"
+                  />
+                </div>
+              )}
             </Card>
 
             <Card title="記事情報" subtitle="必須項目を入力してスクリプトを生成">
