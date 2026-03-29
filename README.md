@@ -131,7 +131,8 @@ npm test
 - 個別環境の無償セットアップ支援や商用サポートは行いません
 - AI 生成機能を使うにはインターネット接続とユーザー自身の API キーが必要です
 - 画像スタイルは現在 `infographic` 固定です
-- 現行の配布フローでは `Developer ID` 署名と `notarization` を整備していません
+- 現行の配布フローでは `Developer ID` 署名と `notarization` を意図的に見送っています
+- 理由: 個人開発 OSS の現状では Apple Developer Program の年額コストと運用負荷に見合わないためです
 - 詳細は [docs/対応環境と制約.md](docs/対応環境と制約.md) にまとめています
 
 ## データ取り扱いの概要

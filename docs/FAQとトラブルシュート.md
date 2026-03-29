@@ -13,12 +13,19 @@
 
 - 配布版は `macOS / Apple Silicon (arm64)` 向けです
 - 現在の Public Beta 配布物は `Developer ID` 署名 / `notarization` なしです
+- これは未着手ではなく、個人開発 OSS の配布規模では年額コストと運用負荷に見合わないため、現時点で意図的に見送っています
 
 ### 対処
 
 - まず [macOSインストールとGatekeeper](./macOSインストールとGatekeeper.md) の手順を確認してください
 - `Applications` にコピーしたうえで、`control`-click または右クリックから `開く` を試してください
 - 管理対象 Mac や厳しいセキュリティポリシーの端末では実行できない場合があります
+
+## なぜ `Developer ID` 署名 / `notarization` をしていないのか
+
+- 個人開発の `OSS Public Beta` として公開しており、現時点では Apple Developer Program の年額コストと運用負荷に見合わないと判断しています
+- その代わり、未署名 / 未 notarize であることと Gatekeeper 回避手順を先に明示しています
+- 署名済み配布が必須の環境では、この Public Beta は現時点では向きません
 
 ## API キーの接続テストに失敗する
 
