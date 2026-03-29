@@ -3,6 +3,10 @@ import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { logger } from '../utils/logger';
+import {
+  getDefaultPresentationProfile,
+  normalizePresentationProfile,
+} from '../../shared/project/presentationProfile';
 
 // プロジェクトの保存先ディレクトリ
 const getProjectsDir = () => path.join(app.getPath('userData'), 'projects');
@@ -194,7 +198,8 @@ ipcMain.handle('project:create', async (_, name: string): Promise<ProjectMeta> =
     const projectMeta = {
       id,
       name,
-      schemaVersion: 'v1.1',
+      schemaVersion: 'v1.2',
+      presentationProfile: getDefaultPresentationProfile(),
       createdAt: now,
       updatedAt: now,
     };
@@ -270,6 +275,7 @@ ipcMain.handle('project:load', async (_, projectId: string) => {
             prompts,
             audio,
             usage,
+            presentationProfile: normalizePresentationProfile(meta.presentationProfile),
           };
         }
       } catch {
@@ -296,6 +302,7 @@ ipcMain.handle(
       prompts: unknown;
       audio: unknown;
       usage?: unknown;
+      presentationProfile?: unknown;
       thumbnail?: unknown;
       autoGenerationStatus?: unknown;
     }
@@ -324,6 +331,7 @@ ipcMain.handle(
     const meta = JSON.parse(metaContent);
     meta.name = project.name;
     meta.updatedAt = now;
+    meta.presentationProfile = normalizePresentationProfile(project.presentationProfile ?? meta.presentationProfile);
     meta.thumbnail = project.thumbnail;
     meta.autoGenerationStatus = project.autoGenerationStatus;
 

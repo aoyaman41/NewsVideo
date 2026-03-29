@@ -1,4 +1,10 @@
 import { z } from 'zod';
+import {
+  CLOSING_LINE_MODES,
+  PRESENTATION_PROFILE_PRESETS,
+  SCRIPT_TONES,
+  getDefaultPresentationProfile,
+} from '../../shared/project/presentationProfile';
 
 // ============================================
 // 基本型スキーマ
@@ -162,6 +168,16 @@ export const articleSchema = z.object({
 
 export type Article = z.infer<typeof articleSchema>;
 
+export const presentationProfileSchema = z.object({
+  preset: z.enum(PRESENTATION_PROFILE_PRESETS),
+  tone: z.enum(SCRIPT_TONES),
+  closingLineMode: z.enum(CLOSING_LINE_MODES),
+  closingLineText: z.string(),
+  targetDurationPerPartSec: z.number().int().min(10).max(300),
+});
+
+export type PresentationProfile = z.infer<typeof presentationProfileSchema>;
+
 // プロジェクトメタ情報
 export const projectMetaSchema = z.object({
   id: z.string().uuid(),
@@ -182,6 +198,7 @@ export const projectSchema = projectMetaSchema.extend({
   prompts: z.array(imagePromptSchema),
   audio: z.array(audioAssetSchema),
   usage: z.array(usageRecordSchema),
+  presentationProfile: presentationProfileSchema,
   thumbnail: imageAssetRefSchema.optional(),
   autoGenerationStatus: autoGenerationStatusSchema.optional(),
 });
@@ -210,7 +227,7 @@ export type ArticleInput = z.infer<typeof articleInputSchema>;
 // スクリプト生成オプション
 export const scriptOptionsSchema = z.object({
   targetPartCount: z.number().int().min(1).max(20).optional(),
-  tone: z.enum(['formal', 'casual', 'news']).optional(),
+  tone: z.enum(SCRIPT_TONES).optional(),
   targetDurationPerPartSec: z.number().int().min(10).max(300).optional(),
 });
 
@@ -302,13 +319,14 @@ export function createNewProject(name: string, projectPath: string): Project {
     createdAt: now,
     updatedAt: now,
     path: projectPath,
-    schemaVersion: '1.0.0',
+    schemaVersion: 'v1.2',
     article: createNewArticle(),
     parts: [],
     images: [],
     prompts: [],
     audio: [],
     usage: [],
+    presentationProfile: getDefaultPresentationProfile(),
     thumbnail: undefined,
   };
 }

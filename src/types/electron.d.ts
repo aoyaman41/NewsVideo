@@ -7,6 +7,11 @@ import type {
   type TextCompletionModel,
 } from '../../shared/constants/models';
 import type { type TTSEngine } from '../../shared/settings/appSettings';
+import type {
+  type ClosingLineMode,
+  type PresentationProfilePreset,
+  type ScriptTone,
+} from '../../shared/project/presentationProfile';
 
 // Electron API の型定義
 
@@ -150,8 +155,17 @@ interface Project extends ProjectMeta {
   prompts: ImagePrompt[];
   audio: AudioAsset[];
   usage: UsageRecord[];
+  presentationProfile: PresentationProfile;
   thumbnail?: ImageAssetRef;
   autoGenerationStatus?: AutoGenerationStatus;
+}
+
+interface PresentationProfile {
+  preset: PresentationProfilePreset;
+  tone: ScriptTone;
+  closingLineMode: ClosingLineMode;
+  closingLineText: string;
+  targetDurationPerPartSec: number;
 }
 
 interface Article {
