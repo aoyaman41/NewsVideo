@@ -8,6 +8,14 @@ body:
     attributes:
       value: |
         バグか判断しきれない相談や、初回セットアップの質問はこちらを使ってください。
+
+        NewsVideo は個人開発の `OSS Public Beta` です。サポートは `best effort` で、まずドキュメントを見ながら自己解決できる範囲で試してもらう前提です。
+
+        先に確認してほしいもの:
+
+        - `README`
+        - `docs/クイックスタート.md`
+        - `docs/対応環境と制約.md`
   - type: dropdown
     id: category
     attributes:
@@ -53,4 +61,6 @@ body:
         - label: docs/クイックスタート.md を確認した
           required: true
         - label: docs/対応環境と制約.md を確認した
+          required: true
+        - label: 個別環境の手厚いセットアップ支援は対象外であることを理解した
           required: true
