@@ -29,6 +29,9 @@ concurrency:
   group: release-public-beta
   cancel-in-progress: false
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+
 jobs:
   release:
     runs-on: macos-14
@@ -46,12 +49,12 @@ jobs:
           }
 
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: '22.12.0'
           cache: npm
@@ -110,17 +113,57 @@ jobs:
             release/latest-mac.yml
 
       - name: Publish GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: v${{ inputs.version }}
-          target_commitish: ${{ github.sha }}
-          name: NewsVideo v${{ inputs.version }} Public Beta
-          body_path: release/release-notes.md
-          prerelease: ${{ inputs.prerelease }}
-          fail_on_unmatched_files: true
-          files: |
-            release/NewsVideo-${{ inputs.version }}-arm64.dmg
-            release/NewsVideo-${{ inputs.version }}-arm64.dmg.blockmap
-            release/NewsVideo-${{ inputs.version }}-arm64-mac.zip
-            release/NewsVideo-${{ inputs.version }}-arm64-mac.zip.blockmap
-            release/latest-mac.yml
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: v${{ inputs.version }}
+          RELEASE_TITLE: NewsVideo v${{ inputs.version }} Public Beta
+          PRERELEASE: ${{ inputs.prerelease }}
+        run: |
+          assets=(
+            "release/NewsVideo-${RELEASE_VERSION}-arm64.dmg"
+            "release/NewsVideo-${RELEASE_VERSION}-arm64.dmg.blockmap"
+            "release/NewsVideo-${RELEASE_VERSION}-arm64-mac.zip"
+            "release/NewsVideo-${RELEASE_VERSION}-arm64-mac.zip.blockmap"
+            "release/latest-mac.yml"
+          )
+
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" "${assets[@]}" --clobber
+
+            edit_args=(
+              "$RELEASE_TAG"
+              --title "$RELEASE_TITLE"
+              --notes-file release/release-notes.md
+              --latest
+            )
+
+            if [ "$PRERELEASE" = "true" ]; then
+              edit_args+=(--prerelease)
+            fi
+
+            gh release edit "${edit_args[@]}"
+          else
+            create_args=(
+              "$RELEASE_TAG"
+              "${assets[@]}"
+              --title "$RELEASE_TITLE"
+              --notes-file release/release-notes.md
+              --target "$GITHUB_SHA"
+              --latest
+            )
+
+            if [ "$PRERELEASE" = "true" ]; then
+              create_args+=(--prerelease)
+            fi
+
+            gh release create "${create_args[@]}"
+          fi
+
+          release_id="$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" --jq '.id')"
+          printf '{"prerelease": %s, "make_latest": "true"}' "$PRERELEASE" | \
+            gh api \
+              --method PATCH \
+              -H "Accept: application/vnd.github+json" \
+              "repos/$GITHUB_REPOSITORY/releases/$release_id" \
+              --input - \
+              >/dev/null
