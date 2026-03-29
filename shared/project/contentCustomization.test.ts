@@ -11,6 +11,9 @@ describe('CONTENT_CUSTOMIZATION_BOUNDARIES', () => {
     const narrationStyle = CONTENT_CUSTOMIZATION_BOUNDARIES.find(
       (boundary) => boundary.id === 'tts_narration_style'
     );
+    const closingCard = CONTENT_CUSTOMIZATION_BOUNDARIES.find(
+      (boundary) => boundary.id === 'closing_card'
+    );
     const duration = CONTENT_CUSTOMIZATION_BOUNDARIES.find(
       (boundary) => boundary.id === 'target_duration_per_part_sec'
     );
@@ -19,6 +22,8 @@ describe('CONTENT_CUSTOMIZATION_BOUNDARIES', () => {
     expect(imageStyle?.category).toBe('preset_only');
     expect(narrationStyle?.category).toBe('preset_with_override');
     expect(narrationStyle?.uiExposure).toBe('main');
+    expect(closingCard?.category).toBe('preset_with_override');
+    expect(closingCard?.uiExposure).toBe('details');
     expect(duration?.category).toBe('direct_setting');
   });
 

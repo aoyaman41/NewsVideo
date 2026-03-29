@@ -40,6 +40,9 @@ describe('createNewProject', () => {
       presentationProfile: normalizePresentationProfile(undefined),
     });
 
-    expect(upgradedProject.presentationProfile).toEqual(getDefaultPresentationProfile());
+    expect(upgradedProject.presentationProfile).toEqual({
+      ...getDefaultPresentationProfile(),
+      closingCardEnabled: false,
+    });
   });
 });

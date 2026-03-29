@@ -3,6 +3,7 @@ import {
   CLOSING_LINE_MODES,
   PRESENTATION_PROFILE_PRESETS,
   SCRIPT_TONES,
+  SOURCE_DISPLAY_MODES,
   getDefaultPresentationProfile,
 } from '../../shared/project/presentationProfile';
 import { IMAGE_ASPECT_RATIOS, IMAGE_STYLE_PRESETS } from '../../shared/project/imageStylePresets';
@@ -180,6 +181,11 @@ export const presentationProfileSchema = z.object({
   aspectRatio: z.enum(IMAGE_ASPECT_RATIOS),
   ttsNarrationStylePreset: z.enum(TTS_NARRATION_STYLE_PRESETS),
   ttsNarrationStyleNote: z.string(),
+  closingCardEnabled: z.boolean(),
+  closingCardHeadline: z.string(),
+  closingCardCtaText: z.string(),
+  sourceDisplayMode: z.enum(SOURCE_DISPLAY_MODES),
+  sourceDisplayText: z.string(),
 });
 
 export type PresentationProfile = z.infer<typeof presentationProfileSchema>;

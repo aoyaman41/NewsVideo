@@ -4,6 +4,10 @@ import * as fs from 'fs/promises';
 import * as os from 'os';
 import * as path from 'path';
 import { createRequire } from 'module';
+import {
+  normalizePresentationProfile,
+  resolvePresentationSourceLine,
+} from '../../shared/project/presentationProfile';
 
 type RenderStage = 'preparing' | 'rendering_parts' | 'concatenating' | 'finalizing';
 
@@ -36,6 +40,13 @@ type Settings = {
 type ImageAssetLike = { id: string; filePath: string };
 type AudioAssetLike = { id: string; filePath: string; durationSec: number };
 type ImageAssetRefLike = { imageId: string; displayDurationSec?: number };
+type PresentationProfileLike = {
+  closingCardEnabled?: boolean;
+  closingCardHeadline?: string;
+  closingCardCtaText?: string;
+  sourceDisplayMode?: 'auto' | 'hidden' | 'custom';
+  sourceDisplayText?: string;
+};
 type PartLike = {
   id: string;
   index: number;
@@ -50,7 +61,8 @@ type ProjectLike = {
   parts: PartLike[];
   images: ImageAssetLike[];
   audio: AudioAssetLike[];
-  article: { importedImages: ImageAssetLike[] };
+  article: { title?: string; source?: string; importedImages: ImageAssetLike[] };
+  presentationProfile?: PresentationProfileLike;
 };
 
 type VideoJob = {
@@ -91,6 +103,76 @@ async function fileExists(filePath: string): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+function compactWhitespace(text: string): string {
+  return text.replace(/\s+/g, ' ').trim();
+}
+
+function truncateForClosingCard(text: string, maxLength: number): string {
+  if (text.length <= maxLength) return text;
+  return `${text.slice(0, maxLength - 1).trimEnd()}…`;
+}
+
+function escapeDrawtextValue(value: string): string {
+  return value
+    .replace(/\\/g, '\\\\')
+    .replace(/'/g, "\\'")
+    .replace(/:/g, '\\:')
+    .replace(/,/g, '\\,');
+}
+
+async function resolveDrawtextFontFile(): Promise<string | null> {
+  const candidates = [
+    '/System/Library/Fonts/ヒラギノ角ゴシック W6.ttc',
+    '/System/Library/Fonts/ヒラギノ角ゴシック W3.ttc',
+    '/System/Library/Fonts/Supplemental/Arial Unicode.ttf',
+    '/System/Library/Fonts/Supplemental/Arial.ttf',
+  ];
+
+  for (const candidate of candidates) {
+    if (await fileExists(candidate)) return candidate;
+  }
+
+  return null;
+}
+
+function buildDrawtextFilter(options: {
+  textFilePath: string;
+  x: string;
+  y: string;
+  fontSize: number;
+  fontColor?: string;
+  boxColor?: string;
+  boxBorderW?: number;
+  lineSpacing?: number;
+  fontFile?: string | null;
+}): string {
+  const {
+    textFilePath,
+    x,
+    y,
+    fontSize,
+    fontColor = 'white',
+    boxColor = 'black@0.35',
+    boxBorderW = 20,
+    lineSpacing = 6,
+    fontFile = null,
+  } = options;
+
+  const segments = ['drawtext'];
+  if (fontFile) segments.push(`fontfile='${escapeDrawtextValue(fontFile)}'`);
+  segments.push(`textfile='${escapeDrawtextValue(textFilePath)}'`);
+  segments.push('text_shaping=1');
+  segments.push(`fontcolor=${fontColor}`);
+  segments.push(`fontsize=${fontSize}`);
+  segments.push(`line_spacing=${lineSpacing}`);
+  segments.push(`x=${x}`);
+  segments.push(`y=${y}`);
+  segments.push('box=1');
+  segments.push(`boxcolor=${boxColor}`);
+  segments.push(`boxborderw=${boxBorderW}`);
+  return segments.join(':');
 }
 
 function assertNotCanceled(job: VideoJob) {
@@ -579,6 +661,141 @@ async function concatSegments(
   await fs.rm(tmpDir, { recursive: true, force: true });
 }
 
+async function renderClosingCardVideo(
+  ffmpegPath: string,
+  project: ProjectLike,
+  options: RenderOptions,
+  outputPath: string,
+  tempDir: string,
+  job: VideoJob
+): Promise<string | null> {
+  const presentationProfile = normalizePresentationProfile(project.presentationProfile);
+  if (!presentationProfile.closingCardEnabled) return null;
+
+  const headline = truncateForClosingCard(
+    compactWhitespace(presentationProfile.closingCardHeadline),
+    48
+  );
+  const cta = truncateForClosingCard(
+    compactWhitespace(presentationProfile.closingCardCtaText),
+    76
+  );
+  const source = truncateForClosingCard(
+    compactWhitespace(resolvePresentationSourceLine(presentationProfile, project.article.source) ?? ''),
+    88
+  );
+  const lines = [headline || '', cta || '', source || ''].filter(Boolean);
+  if (lines.length === 0) return null;
+
+  const fontFile = await resolveDrawtextFontFile();
+  const textDir = await fs.mkdtemp(path.join(tempDir, 'closing-card-'));
+  const filters: string[] = [];
+  const lineDefinitions = [
+    {
+      text: headline,
+      y: 'h*0.30-text_h/2',
+      fontSize: 68,
+      fontColor: 'white',
+      boxColor: 'black@0.4',
+      boxBorderW: 24,
+    },
+    {
+      text: cta,
+      y: 'h*0.56-text_h/2',
+      fontSize: 38,
+      fontColor: '0xdbeafe',
+      boxColor: 'black@0.3',
+      boxBorderW: 18,
+    },
+    {
+      text: source,
+      y: 'h*0.74-text_h/2',
+      fontSize: 28,
+      fontColor: '0xcbd5e1',
+      boxColor: 'black@0.22',
+      boxBorderW: 14,
+    },
+  ] as const;
+
+  for (let index = 0; index < lineDefinitions.length; index += 1) {
+    const definition = lineDefinitions[index];
+    if (!definition.text) continue;
+    const textFilePath = path.join(textDir, `line-${index + 1}.txt`);
+    await fs.writeFile(textFilePath, `${definition.text}\n`, 'utf-8');
+    filters.push(
+      buildDrawtextFilter({
+        textFilePath,
+        x: '(w-text_w)/2',
+        y: definition.y,
+        fontSize: definition.fontSize,
+        fontColor: definition.fontColor,
+        boxColor: definition.boxColor,
+        boxBorderW: definition.boxBorderW,
+        fontFile,
+      })
+    );
+  }
+
+  if (filters.length === 0) {
+    await fs.rm(textDir, { recursive: true, force: true });
+    return null;
+  }
+
+  const { width, height } = parseResolution(options.resolution);
+  const durationSec = 3.6;
+  const background = 'color=c=0x0f172a:s=' + `${width}x${height}:d=${durationSec}:r=${options.fps}`;
+  const args = [
+    '-y',
+    '-hide_banner',
+    '-loglevel',
+    'error',
+    '-f',
+    'lavfi',
+    '-i',
+    background,
+    '-f',
+    'lavfi',
+    '-i',
+    'anullsrc=channel_layout=stereo:sample_rate=48000',
+    '-filter:v',
+    filters.join(','),
+    '-map',
+    '0:v:0',
+    '-map',
+    '1:a:0',
+    '-shortest',
+    '-r',
+    String(options.fps),
+    '-c:v',
+    'libx264',
+    '-pix_fmt',
+    'yuv420p',
+    '-preset',
+    'veryfast',
+    '-b:v',
+    options.videoBitrate,
+    '-c:a',
+    'aac',
+    '-b:a',
+    options.audioBitrate,
+    '-ar',
+    '48000',
+    '-ac',
+    '2',
+    '-movflags',
+    '+faststart',
+    outputPath,
+  ];
+
+  try {
+    await runFfmpeg(ffmpegPath, args, job);
+  } finally {
+    await fs.rm(textDir, { recursive: true, force: true });
+  }
+
+  return outputPath;
+}
+
 function formatUnknownError(error: unknown): string {
   if (error instanceof Error && error.message) return error.message;
   return String(error);
@@ -792,6 +1009,7 @@ ipcMain.handle(
 
       const settings = await readSettings();
       const leadInSec = settings.videoPartLeadInSec ?? 0.3;
+      const presentationProfile = normalizePresentationProfile(project.presentationProfile);
 
       // パート動画を生成
       const partsDir = path.join(project.path, 'output', 'parts');
@@ -858,6 +1076,25 @@ ipcMain.handle(
       }
 
       segments.push(...generatedPartPaths);
+
+      if (presentationProfile.closingCardEnabled) {
+        const closingCardPath = path.join(renderTmpDir, 'closing-card.mp4');
+        sendProgress({ stage: 'preparing', percent: 84, message: '締めカードを生成中...' });
+        const renderedClosingCard = await renderClosingCardVideo(
+          ffmpegPath,
+          {
+            ...project,
+            presentationProfile,
+          },
+          options,
+          closingCardPath,
+          renderTmpDir,
+          job
+        );
+        if (renderedClosingCard) {
+          segments.push(renderedClosingCard);
+        }
+      }
 
       if (options.includeEnding) {
         const ending = settings.endingVideoPath;
