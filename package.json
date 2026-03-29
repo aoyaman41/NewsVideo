@@ -1,13 +1,13 @@
 {
   "name": "newsvideo",
-  "version": "2.0.3",
+  "version": "2.0.4",
   "type": "module",
   "description": "報道動画自動生成アプリケーション",
   "main": "dist-electron/main.js",
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build && electron-builder",
-    "build:release:mac": "tsc --noEmit && vite build && electron-builder --publish never --mac dmg zip --arm64",
+    "build:release:mac": "npm run prepare:ffmpeg:mac && tsc --noEmit && vite build && electron-builder --publish never --mac dmg zip --arm64",
     "build:vite": "vite build",
     "preview": "vite preview",
     "electron:dev": "vite",

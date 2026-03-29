@@ -82,6 +82,14 @@ jobs:
       - name: Build Public Beta artifacts
         run: npm run build:release:mac
 
+      - name: Verify bundled ffmpeg binaries
+        run: |
+          APP_PATH="release/mac-arm64/NewsVideo.app"
+          test -f "$APP_PATH/Contents/Resources/ffmpeg/ffmpeg"
+          test -f "$APP_PATH/Contents/Resources/ffmpeg/ffprobe"
+          test -x "$APP_PATH/Contents/Resources/ffmpeg/ffmpeg"
+          test -x "$APP_PATH/Contents/Resources/ffmpeg/ffprobe"
+
       - name: Verify release files
         run: |
           test -f "release/NewsVideo-${RELEASE_VERSION}-arm64.dmg"
@@ -89,6 +97,12 @@ jobs:
           test -f "release/NewsVideo-${RELEASE_VERSION}-arm64-mac.zip"
           test -f "release/NewsVideo-${RELEASE_VERSION}-arm64-mac.zip.blockmap"
           test -f "release/latest-mac.yml"
+          TMP_DIR="$(mktemp -d)"
+          ditto -x -k "release/NewsVideo-${RELEASE_VERSION}-arm64-mac.zip" "$TMP_DIR"
+          test -f "$TMP_DIR/NewsVideo.app/Contents/Resources/ffmpeg/ffmpeg"
+          test -f "$TMP_DIR/NewsVideo.app/Contents/Resources/ffmpeg/ffprobe"
+          test -x "$TMP_DIR/NewsVideo.app/Contents/Resources/ffmpeg/ffmpeg"
+          test -x "$TMP_DIR/NewsVideo.app/Contents/Resources/ffmpeg/ffprobe"
 
       - name: Prepare release notes
         run: |
