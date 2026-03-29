@@ -107,6 +107,7 @@ npm test
 
 - 4画面をつないだ短いデモ: [workflow-demo.gif](.github/assets/public-beta/workflow-demo.gif)
 - 公開用のサンプル入力 / 出力まとめ: [docs/サンプル出力.md](docs/サンプル出力.md)
+- 記事入力済みのサンプルプロジェクト: [docs/サンプルプロジェクト.md](docs/サンプルプロジェクト.md)
 - リリース前の最低限チェック: [docs/リリース前スモークテスト.md](docs/リリース前スモークテスト.md)
 - 最新の配布物: [GitHub Releases](https://github.com/aoyaman41/NewsVideo/releases/latest)
 - 検証用の入力例: [docs/サンプル記事.md](docs/サンプル記事.md)
