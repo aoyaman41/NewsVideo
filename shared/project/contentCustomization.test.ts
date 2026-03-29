@@ -8,12 +8,17 @@ describe('CONTENT_CUSTOMIZATION_BOUNDARIES', () => {
   it('keeps the main phase-1 controls in the intended categories', () => {
     const closingLine = CONTENT_CUSTOMIZATION_BOUNDARIES.find((boundary) => boundary.id === 'closing_line');
     const imageStyle = CONTENT_CUSTOMIZATION_BOUNDARIES.find((boundary) => boundary.id === 'image_style');
+    const narrationStyle = CONTENT_CUSTOMIZATION_BOUNDARIES.find(
+      (boundary) => boundary.id === 'tts_narration_style'
+    );
     const duration = CONTENT_CUSTOMIZATION_BOUNDARIES.find(
       (boundary) => boundary.id === 'target_duration_per_part_sec'
     );
 
     expect(closingLine?.category).toBe('preset_with_override');
     expect(imageStyle?.category).toBe('preset_only');
+    expect(narrationStyle?.category).toBe('preset_with_override');
+    expect(narrationStyle?.uiExposure).toBe('main');
     expect(duration?.category).toBe('direct_setting');
   });
 

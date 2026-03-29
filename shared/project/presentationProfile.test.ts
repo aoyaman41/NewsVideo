@@ -19,6 +19,7 @@ describe('normalizePresentationProfile', () => {
       targetDurationPerPartSec: 999,
       imageStylePreset: 'invalid-style',
       aspectRatio: '21:9',
+      ttsNarrationStylePreset: 'invalid-tts-style',
     });
 
     expect(normalized).toEqual(getDefaultPresentationProfile('short'));
@@ -33,6 +34,8 @@ describe('normalizePresentationProfile', () => {
       targetDurationPerPartSec: 18,
       imageStylePreset: 'editorial',
       aspectRatio: '1:1',
+      ttsNarrationStylePreset: 'promo',
+      ttsNarrationStyleNote: '語尾はやわらかめに',
     });
 
     expect(normalized).toEqual({
@@ -43,6 +46,8 @@ describe('normalizePresentationProfile', () => {
       targetDurationPerPartSec: 18,
       imageStylePreset: 'editorial',
       aspectRatio: '1:1',
+      ttsNarrationStylePreset: 'promo',
+      ttsNarrationStyleNote: '語尾はやわらかめに',
     });
   });
 
@@ -62,6 +67,7 @@ describe('normalizePresentationProfile', () => {
 
     expect(normalized.imageStylePreset).toBe('infographic');
     expect(normalized.aspectRatio).toBe('9:16');
+    expect(normalized.ttsNarrationStylePreset).toBe('news');
   });
 });
 

@@ -25,9 +25,9 @@ export const CONTENT_CUSTOMIZATION_BOUNDARIES: readonly ContentCustomizationBoun
   {
     id: 'tts_narration_style',
     label: 'TTS 話法',
-    category: 'preset_only',
-    uiExposure: 'details',
-    description: 'ナレーション話法は preset で選び、話者向けの生 prompt は通常 UI に出さない。',
+    category: 'preset_with_override',
+    uiExposure: 'main',
+    description: 'ナレーション話法は preset で選び、短い補足だけ上書きできる。',
   },
   {
     id: 'layout_direction',

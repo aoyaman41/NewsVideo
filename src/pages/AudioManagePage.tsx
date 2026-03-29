@@ -16,6 +16,10 @@ import type { AudioAsset, Project, UsageRecord } from '../schemas';
 import { toLocalFileUrl } from '../utils/toLocalFileUrl';
 import { createGeminiTtsUsageRecord } from '../utils/usage';
 import {
+  TTS_NARRATION_STYLE_DESCRIPTIONS,
+  TTS_NARRATION_STYLE_LABELS,
+} from '../../shared/project/ttsNarrationStyles';
+import {
   parseMarkIndex,
   splitScriptIntoSegments,
 } from '../../shared/utils/ttsSegmentation';
@@ -142,6 +146,7 @@ export function AudioManagePage() {
   }, [project]);
 
   const ttsOptions = useMemo(() => {
+    const narrationProfile = project?.presentationProfile;
     return {
       ttsEngine: settings.ttsEngine,
       voiceName: settings.ttsVoice,
@@ -149,8 +154,10 @@ export function AudioManagePage() {
       speakingRate: settings.ttsSpeakingRate,
       pitch: settings.ttsPitch,
       audioEncoding: 'MP3' as const,
+      narrationStylePreset: narrationProfile?.ttsNarrationStylePreset,
+      narrationStyleNote: narrationProfile?.ttsNarrationStyleNote,
     };
-  }, [settings]);
+  }, [project?.presentationProfile, settings]);
 
   const saveProject = useCallback(async (updated: Project) => {
     await window.electronAPI.project.save(updated);
@@ -570,6 +577,27 @@ export function AudioManagePage() {
                   このページでは既定値を参照して音声生成を実行します。
                 </div>
               </div>
+              {project && (
+                <div className="rounded-[10px] border border-[var(--nv-color-border)] bg-slate-50 p-3 text-xs text-slate-600">
+                  <div className="text-xs font-semibold text-slate-700">話し方</div>
+                  <div className="mt-2 flex flex-wrap items-center gap-2">
+                    <Badge tone="neutral">
+                      {TTS_NARRATION_STYLE_LABELS[project.presentationProfile.ttsNarrationStylePreset]}
+                    </Badge>
+                    <span className="text-sm font-semibold text-slate-900">
+                      {TTS_NARRATION_STYLE_DESCRIPTIONS[project.presentationProfile.ttsNarrationStylePreset]}
+                    </span>
+                  </div>
+                  {project.presentationProfile.ttsNarrationStyleNote && (
+                    <div className="mt-2 text-slate-700">
+                      補足: {project.presentationProfile.ttsNarrationStyleNote}
+                    </div>
+                  )}
+                  <div className="mt-2 text-slate-500">
+                    話し方はプロジェクト単位の設定です。engine と voice は設定画面、スタイルは記事画面の生成設定で切り替えます。
+                  </div>
+                </div>
+              )}
             </div>
           </Card>
 

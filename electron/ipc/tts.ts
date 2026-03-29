@@ -5,6 +5,12 @@ import { promisify } from 'util';
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import { GoogleGenAI } from '@google/genai';
+import {
+  DEFAULT_TTS_NARRATION_STYLE_PRESET,
+  buildTtsNarrationInstruction,
+  isTtsNarrationStylePreset,
+  type TtsNarrationStylePreset,
+} from '../../shared/project/ttsNarrationStyles';
 import { splitScriptIntoSegments } from '../../shared/utils/ttsSegmentation';
 
 const execFileAsync = promisify(execFile);
@@ -19,6 +25,8 @@ interface TTSOptions {
   speakingRate: number;
   pitch: number;
   audioEncoding: 'MP3' | 'LINEAR16';
+  narrationStylePreset?: TtsNarrationStylePreset;
+  narrationStyleNote?: string;
 }
 
 type TokenUsage = {
@@ -298,8 +306,6 @@ async function synthesizeGoogleTts(
 }
 
 const GEMINI_TTS_MODEL_ID = 'gemini-2.5-pro-preview-tts';
-const DEFAULT_GEMINI_TTS_PROMPT =
-  'ニュース番組のナレーションとして、次の文章を自然な日本語で、落ち着いたニュース調で読み上げてください。';
 
 async function synthesizeGeminiTts(
   text: string,
@@ -318,6 +324,13 @@ async function synthesizeGeminiTts(
   if (!promptText) {
     throw new Error('読み上げテキストが空です');
   }
+  const narrationStylePreset = isTtsNarrationStylePreset(options.narrationStylePreset)
+    ? options.narrationStylePreset
+    : DEFAULT_TTS_NARRATION_STYLE_PRESET;
+  const narrationInstruction = buildTtsNarrationInstruction(
+    narrationStylePreset,
+    options.narrationStyleNote
+  );
 
   const ai = new GoogleGenAI({ apiKey });
 
@@ -325,7 +338,7 @@ async function synthesizeGeminiTts(
     async () => {
       return ai.models.generateContent({
         model: GEMINI_TTS_MODEL_ID,
-        contents: `${DEFAULT_GEMINI_TTS_PROMPT}\n\n${promptText}`,
+        contents: `${narrationInstruction}\n\n${promptText}`,
         config: {
           responseModalities: ['AUDIO'],
           speechConfig: {

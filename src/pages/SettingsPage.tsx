@@ -733,7 +733,7 @@ export function SettingsPage() {
                 </div>
               </Card>
 
-              <Card title="デフォルト音声設定" subtitle="Gemini TTS の初期設定">
+              <Card title="デフォルト音声設定" subtitle="engine と voice の既定値">
                 <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
                   <div>
                     <label className="mb-1 block text-xs font-semibold text-slate-600">
@@ -778,7 +778,7 @@ export function SettingsPage() {
                       </span>
                     </div>
                     <p className="mt-2 text-xs text-slate-500">
-                      現在のアプリは Gemini TTS を既定の音声エンジンとして使用します。
+                      現在のアプリは Gemini TTS を既定の音声エンジンとして使用します。話し方の preset はプロジェクト設定側で切り替えます。
                     </p>
                   </div>
                   <div className="rounded-[10px] border border-[var(--nv-color-border)] bg-slate-50 p-3">
