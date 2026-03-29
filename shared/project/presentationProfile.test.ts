@@ -4,14 +4,18 @@ import {
   getDefaultPresentationProfile,
   normalizePresentationProfile,
   resolvePresentationClosingLine,
+  resolvePresentationSourceLine,
 } from './presentationProfile';
 
 describe('normalizePresentationProfile', () => {
-  it('falls back to the default news profile when input is missing', () => {
-    expect(normalizePresentationProfile(undefined)).toEqual(DEFAULT_PRESENTATION_PROFILE);
+  it('treats missing input as a legacy profile and disables the closing card by default', () => {
+    expect(normalizePresentationProfile(undefined)).toEqual({
+      ...DEFAULT_PRESENTATION_PROFILE,
+      closingCardEnabled: false,
+    });
   });
 
-  it('uses preset defaults for invalid values', () => {
+  it('uses preset defaults for invalid values while keeping legacy closing-card compatibility', () => {
     const normalized = normalizePresentationProfile({
       preset: 'short',
       tone: 'invalid-tone',
@@ -22,7 +26,10 @@ describe('normalizePresentationProfile', () => {
       ttsNarrationStylePreset: 'invalid-tts-style',
     });
 
-    expect(normalized).toEqual(getDefaultPresentationProfile('short'));
+    expect(normalized).toEqual({
+      ...getDefaultPresentationProfile('short'),
+      closingCardEnabled: false,
+    });
   });
 
   it('preserves valid custom overrides', () => {
@@ -36,6 +43,11 @@ describe('normalizePresentationProfile', () => {
       aspectRatio: '1:1',
       ttsNarrationStylePreset: 'promo',
       ttsNarrationStyleNote: '語尾はやわらかめに',
+      closingCardEnabled: false,
+      closingCardHeadline: '資料の確認ありがとうございました',
+      closingCardCtaText: '詳細はポータルを確認してください',
+      sourceDisplayMode: 'custom',
+      sourceDisplayText: '社内資料 2026-03-29 時点',
     });
 
     expect(normalized).toEqual({
@@ -48,6 +60,11 @@ describe('normalizePresentationProfile', () => {
       aspectRatio: '1:1',
       ttsNarrationStylePreset: 'promo',
       ttsNarrationStyleNote: '語尾はやわらかめに',
+      closingCardEnabled: false,
+      closingCardHeadline: '資料の確認ありがとうございました',
+      closingCardCtaText: '詳細はポータルを確認してください',
+      sourceDisplayMode: 'custom',
+      sourceDisplayText: '社内資料 2026-03-29 時点',
     });
   });
 
@@ -68,6 +85,8 @@ describe('normalizePresentationProfile', () => {
     expect(normalized.imageStylePreset).toBe('infographic');
     expect(normalized.aspectRatio).toBe('9:16');
     expect(normalized.ttsNarrationStylePreset).toBe('news');
+    expect(normalized.closingCardEnabled).toBe(false);
+    expect(normalized.sourceDisplayMode).toBe('auto');
   });
 });
 
@@ -95,5 +114,38 @@ describe('resolvePresentationClosingLine', () => {
         closingLineText: 'ご確認ありがとうございました',
       })
     ).toBe('ご確認ありがとうございました');
+  });
+});
+
+describe('resolvePresentationSourceLine', () => {
+  it('uses the article source in auto mode', () => {
+    expect(resolvePresentationSourceLine(getDefaultPresentationProfile('news'), '架空ニュース通信')).toBe(
+      '出典: 架空ニュース通信'
+    );
+  });
+
+  it('returns null when source display is hidden', () => {
+    expect(
+      resolvePresentationSourceLine(
+        {
+          ...getDefaultPresentationProfile('short'),
+          sourceDisplayMode: 'hidden',
+        },
+        '架空ニュース通信'
+      )
+    ).toBeNull();
+  });
+
+  it('returns custom source text when configured', () => {
+    expect(
+      resolvePresentationSourceLine(
+        {
+          ...getDefaultPresentationProfile('report'),
+          sourceDisplayMode: 'custom',
+          sourceDisplayText: '社内広報資料',
+        },
+        'ignored'
+      )
+    ).toBe('社内広報資料');
   });
 });

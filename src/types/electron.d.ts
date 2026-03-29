@@ -11,6 +11,7 @@ import type {
   type ClosingLineMode,
   type PresentationProfilePreset,
   type ScriptTone,
+  type SourceDisplayMode,
 } from '../../shared/project/presentationProfile';
 import type {
   type ImageAspectRatio,
@@ -177,6 +178,11 @@ interface PresentationProfile {
   aspectRatio: ImageAspectRatio;
   ttsNarrationStylePreset: TtsNarrationStylePreset;
   ttsNarrationStyleNote: string;
+  closingCardEnabled: boolean;
+  closingCardHeadline: string;
+  closingCardCtaText: string;
+  sourceDisplayMode: SourceDisplayMode;
+  sourceDisplayText: string;
 }
 
 interface Article {

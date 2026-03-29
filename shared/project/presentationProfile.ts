@@ -24,6 +24,9 @@ export type ScriptTone = (typeof SCRIPT_TONES)[number];
 export const CLOSING_LINE_MODES = ['preset', 'none', 'custom'] as const;
 export type ClosingLineMode = (typeof CLOSING_LINE_MODES)[number];
 
+export const SOURCE_DISPLAY_MODES = ['auto', 'hidden', 'custom'] as const;
+export type SourceDisplayMode = (typeof SOURCE_DISPLAY_MODES)[number];
+
 export type PresentationProfile = {
   preset: PresentationProfilePreset;
   tone: ScriptTone;
@@ -34,6 +37,11 @@ export type PresentationProfile = {
   aspectRatio: ImageAspectRatio;
   ttsNarrationStylePreset: TtsNarrationStylePreset;
   ttsNarrationStyleNote: string;
+  closingCardEnabled: boolean;
+  closingCardHeadline: string;
+  closingCardCtaText: string;
+  sourceDisplayMode: SourceDisplayMode;
+  sourceDisplayText: string;
 };
 
 type PresentationProfileDefaults = {
@@ -61,6 +69,12 @@ export const CLOSING_LINE_MODE_LABELS: Record<ClosingLineMode, string> = {
   custom: 'カスタム',
 };
 
+export const SOURCE_DISPLAY_MODE_LABELS: Record<SourceDisplayMode, string> = {
+  auto: '記事の出典を使う',
+  hidden: '表示しない',
+  custom: 'カスタム表記',
+};
+
 const TARGET_DURATION_RANGE = { min: 10, max: 300 } as const;
 
 const presetDefaults: Record<PresentationProfilePreset, PresentationProfile> = {
@@ -74,6 +88,11 @@ const presetDefaults: Record<PresentationProfilePreset, PresentationProfile> = {
     aspectRatio: DEFAULT_IMAGE_ASPECT_RATIO,
     ttsNarrationStylePreset: 'news',
     ttsNarrationStyleNote: '',
+    closingCardEnabled: true,
+    closingCardHeadline: 'ご視聴ありがとうございました',
+    closingCardCtaText: '',
+    sourceDisplayMode: 'auto',
+    sourceDisplayText: '',
   },
   explain: {
     preset: 'explain',
@@ -85,6 +104,11 @@ const presetDefaults: Record<PresentationProfilePreset, PresentationProfile> = {
     aspectRatio: DEFAULT_IMAGE_ASPECT_RATIO,
     ttsNarrationStylePreset: 'explain',
     ttsNarrationStyleNote: '',
+    closingCardEnabled: true,
+    closingCardHeadline: '最後までご覧いただきありがとうございました',
+    closingCardCtaText: '',
+    sourceDisplayMode: 'auto',
+    sourceDisplayText: '',
   },
   report: {
     preset: 'report',
@@ -96,6 +120,11 @@ const presetDefaults: Record<PresentationProfilePreset, PresentationProfile> = {
     aspectRatio: DEFAULT_IMAGE_ASPECT_RATIO,
     ttsNarrationStylePreset: 'explain',
     ttsNarrationStyleNote: '',
+    closingCardEnabled: true,
+    closingCardHeadline: 'ご確認ありがとうございました',
+    closingCardCtaText: '',
+    sourceDisplayMode: 'auto',
+    sourceDisplayText: '',
   },
   short: {
     preset: 'short',
@@ -107,6 +136,11 @@ const presetDefaults: Record<PresentationProfilePreset, PresentationProfile> = {
     aspectRatio: DEFAULT_IMAGE_ASPECT_RATIO,
     ttsNarrationStylePreset: 'casual',
     ttsNarrationStyleNote: '',
+    closingCardEnabled: true,
+    closingCardHeadline: 'また次回もご覧ください',
+    closingCardCtaText: '',
+    sourceDisplayMode: 'hidden',
+    sourceDisplayText: '',
   },
 };
 
@@ -131,6 +165,11 @@ export const presentationProfileSchema = z.object({
   aspectRatio: z.enum(IMAGE_ASPECT_RATIOS),
   ttsNarrationStylePreset: z.enum(TTS_NARRATION_STYLE_PRESETS),
   ttsNarrationStyleNote: z.string(),
+  closingCardEnabled: z.boolean(),
+  closingCardHeadline: z.string(),
+  closingCardCtaText: z.string(),
+  sourceDisplayMode: z.enum(SOURCE_DISPLAY_MODES),
+  sourceDisplayText: z.string(),
 });
 
 export const DEFAULT_PRESENTATION_PROFILE: PresentationProfile = presetDefaults.news;
@@ -145,6 +184,10 @@ export function isScriptTone(value: unknown): value is ScriptTone {
 
 export function isClosingLineMode(value: unknown): value is ClosingLineMode {
   return typeof value === 'string' && CLOSING_LINE_MODES.includes(value as ClosingLineMode);
+}
+
+export function isSourceDisplayMode(value: unknown): value is SourceDisplayMode {
+  return typeof value === 'string' && SOURCE_DISPLAY_MODES.includes(value as SourceDisplayMode);
 }
 
 export function getDefaultPresentationProfile(
@@ -186,6 +229,31 @@ export function normalizePresentationProfile(
     : presetDefaults.ttsNarrationStylePreset;
   const ttsNarrationStyleNote =
     typeof raw.ttsNarrationStyleNote === 'string' ? raw.ttsNarrationStyleNote.trim() : '';
+  const hasClosingCardSettings =
+    'closingCardEnabled' in raw ||
+    'closingCardHeadline' in raw ||
+    'closingCardCtaText' in raw ||
+    'sourceDisplayMode' in raw ||
+    'sourceDisplayText' in raw;
+  const closingCardEnabled =
+    typeof raw.closingCardEnabled === 'boolean'
+      ? raw.closingCardEnabled
+      : hasClosingCardSettings
+        ? presetDefaults.closingCardEnabled
+        : false;
+  const closingCardHeadline =
+    typeof raw.closingCardHeadline === 'string'
+      ? raw.closingCardHeadline.trim()
+      : presetDefaults.closingCardHeadline;
+  const closingCardCtaText =
+    typeof raw.closingCardCtaText === 'string'
+      ? raw.closingCardCtaText.trim()
+      : presetDefaults.closingCardCtaText;
+  const sourceDisplayMode = isSourceDisplayMode(raw.sourceDisplayMode)
+    ? raw.sourceDisplayMode
+    : presetDefaults.sourceDisplayMode;
+  const sourceDisplayText =
+    typeof raw.sourceDisplayText === 'string' ? raw.sourceDisplayText.trim() : '';
 
   return {
     preset,
@@ -197,6 +265,11 @@ export function normalizePresentationProfile(
     aspectRatio,
     ttsNarrationStylePreset,
     ttsNarrationStyleNote,
+    closingCardEnabled,
+    closingCardHeadline,
+    closingCardCtaText,
+    sourceDisplayMode,
+    sourceDisplayText,
   };
 }
 
@@ -209,5 +282,22 @@ export function resolvePresentationClosingLine(profile: PresentationProfile): st
     case 'preset':
     default:
       return PRESENTATION_PROFILE_PRESET_CLOSING_LINES[profile.preset];
+  }
+}
+
+export function resolvePresentationSourceLine(
+  profile: PresentationProfile,
+  articleSource: string | null | undefined
+): string | null {
+  switch (profile.sourceDisplayMode) {
+    case 'hidden':
+      return null;
+    case 'custom':
+      return profile.sourceDisplayText.trim() || null;
+    case 'auto':
+    default: {
+      const trimmedSource = typeof articleSource === 'string' ? articleSource.trim() : '';
+      return trimmedSource ? `出典: ${trimmedSource}` : null;
+    }
   }
 }

@@ -14,6 +14,12 @@ import {
 import type { AutoGenerationStatus, Project } from '../schemas';
 import { toLocalFileUrl } from '../utils/toLocalFileUrl';
 import { summarizeProjectProgress } from '../utils/projectHealth';
+import {
+  SOURCE_DISPLAY_MODE_LABELS,
+  getDefaultPresentationProfile,
+  normalizePresentationProfile,
+  resolvePresentationSourceLine,
+} from '../../shared/project/presentationProfile';
 
 type RenderOptions = {
   resolution: '1920x1080' | '1280x720' | '3840x2160';
@@ -77,10 +83,14 @@ export function VideoManagePage() {
   const [isRendering, setIsRendering] = useState(false);
   const [progress, setProgress] = useState<VideoProgress | null>(null);
   const [showProgress, setShowProgress] = useState(false);
+  const [presentationProfile, setPresentationProfile] = useState(getDefaultPresentationProfile());
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const lastVideoPathRef = useRef<string | null>(null);
   const lastVideoIdentityRef = useRef<string | null>(null);
+  const savedPresentationProfileRef = useRef<string>(
+    JSON.stringify(getDefaultPresentationProfile())
+  );
 
   const reportError = useCallback(
     (message: string, title?: string) => {
@@ -170,6 +180,10 @@ export function VideoManagePage() {
     return project.parts.filter((p) => (p.panelImages?.length ?? 0) === 0).length;
   }, [project]);
   const summary = useMemo(() => (project ? summarizeProjectProgress(project) : null), [project]);
+  const closingSourcePreview = useMemo(
+    () => resolvePresentationSourceLine(presentationProfile, project?.article.source),
+    [presentationProfile, project?.article.source]
+  );
 
   const selectedPart = useMemo(() => {
     return project?.parts.find((p) => p.id === selectedPartId) ?? null;
@@ -255,7 +269,15 @@ export function VideoManagePage() {
           window.electronAPI.settings.get(),
         ]);
 
-        setProject(loadedProject);
+        const normalizedPresentationProfile = normalizePresentationProfile(loadedProject.presentationProfile);
+        const normalizedProject: Project = {
+          ...loadedProject,
+          presentationProfile: normalizedPresentationProfile,
+        };
+
+        setProject(normalizedProject);
+        setPresentationProfile(normalizedPresentationProfile);
+        savedPresentationProfileRef.current = JSON.stringify(normalizedPresentationProfile);
         const normalizedSettings: Settings = {
           videoResolution: loadedSettings.videoResolution ?? '1920x1080',
           videoFps: loadedSettings.videoFps ?? 30,
@@ -272,7 +294,7 @@ export function VideoManagePage() {
         };
         setSettings(normalizedSettings);
 
-        setSelectedPartId(loadedProject.parts[0]?.id ?? null);
+        setSelectedPartId(normalizedProject.parts[0]?.id ?? null);
 
         const defaults: RenderOptions = {
           resolution: normalizedSettings.videoResolution,
@@ -284,15 +306,15 @@ export function VideoManagePage() {
         };
         setRenderOptions(defaults);
 
-        const safeName = loadedProject.name.replace(/[\\/:*?"<>|]/g, '_').slice(0, 80) || 'output';
-        setOutputPath(`${loadedProject.path}/output/${safeName}.mp4`);
+        const safeName = normalizedProject.name.replace(/[\\/:*?"<>|]/g, '_').slice(0, 80) || 'output';
+        setOutputPath(`${normalizedProject.path}/output/${safeName}.mp4`);
 
-        const existingVideoPath = await resolveExistingVideoPath(loadedProject);
+        const existingVideoPath = await resolveExistingVideoPath(normalizedProject);
         if (existingVideoPath) {
           applyResolvedVideoAsset(existingVideoPath);
-          if (existingVideoPath.path !== loadedProject.autoGenerationStatus?.lastVideoPath) {
+          if (existingVideoPath.path !== normalizedProject.autoGenerationStatus?.lastVideoPath) {
             const now = new Date().toISOString();
-            const current = loadedProject.autoGenerationStatus;
+            const current = normalizedProject.autoGenerationStatus;
             const nextStatus: AutoGenerationStatus = {
               running: current?.running ?? false,
               step: current?.running ? current?.step : (current?.step ?? '完了'),
@@ -305,7 +327,7 @@ export function VideoManagePage() {
               lastVideoPath: existingVideoPath.path,
             };
             const updatedProject: Project = {
-              ...loadedProject,
+              ...normalizedProject,
               autoGenerationStatus: nextStatus,
               updatedAt: now,
             };
@@ -327,6 +349,35 @@ export function VideoManagePage() {
   }, [applyResolvedVideoAsset, clearVideoAsset, projectId, reportError, resolveExistingVideoPath]);
 
   useEffect(() => {
+    if (!project) return;
+
+    const serialized = JSON.stringify(presentationProfile);
+    if (serialized === savedPresentationProfileRef.current) return;
+
+    const timeoutId = window.setTimeout(async () => {
+      try {
+        const updatedAt = new Date().toISOString();
+        const updatedProject: Project = {
+          ...project,
+          presentationProfile,
+          updatedAt,
+        };
+        await window.electronAPI.project.save(updatedProject);
+        savedPresentationProfileRef.current = serialized;
+        setProject(updatedProject);
+      } catch (err) {
+        console.error('Failed to save video presentation profile:', err);
+        reportError(
+          err instanceof Error ? err.message : '動画設定の保存に失敗しました',
+          '動画設定の保存に失敗しました'
+        );
+      }
+    }, 250);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [presentationProfile, project, reportError]);
+
+  useEffect(() => {
     if (!projectId) return;
     let cancelled = false;
     const interval = setInterval(async () => {
@@ -334,7 +385,10 @@ export function VideoManagePage() {
       try {
         const latest = await window.electronAPI.project.load(projectId);
         if (cancelled) return;
-        setProject(latest);
+        setProject({
+          ...latest,
+          presentationProfile: normalizePresentationProfile(latest.presentationProfile),
+        });
         const candidate = await resolveExistingVideoPath(latest);
         applyResolvedVideoAsset(candidate);
       } catch {
@@ -394,11 +448,15 @@ export function VideoManagePage() {
       setShowProgress(true);
       setProgress({ stage: 'preparing', percent: 0, message: '準備中...' });
 
-      const res = await window.electronAPI.video.render(project, renderOptions, outputPath.trim());
+      const renderProject: Project = {
+        ...project,
+        presentationProfile,
+      };
+      const res = await window.electronAPI.video.render(renderProject, renderOptions, outputPath.trim());
       forceReloadVideoAsset(res.outputPath);
       try {
         const now = new Date().toISOString();
-        const current = project.autoGenerationStatus;
+        const current = renderProject.autoGenerationStatus;
         const nextStatus: AutoGenerationStatus = {
           running: current?.running ?? false,
           step: current?.running ? current?.step : '完了',
@@ -411,7 +469,7 @@ export function VideoManagePage() {
           lastVideoPath: res.outputPath,
         };
         const updatedProject: Project = {
-          ...project,
+          ...renderProject,
           autoGenerationStatus: nextStatus,
           updatedAt: now,
         };
@@ -429,7 +487,7 @@ export function VideoManagePage() {
     } finally {
       setIsRendering(false);
     }
-  }, [forceReloadVideoAsset, outputPath, project, renderOptions, reportError, toast]);
+  }, [forceReloadVideoAsset, outputPath, presentationProfile, project, renderOptions, reportError, toast]);
 
   const handleCancel = useCallback(async () => {
     try {
@@ -616,8 +674,148 @@ export function VideoManagePage() {
 
         <div className="space-y-4 overflow-auto">
           <Card
+            title="締めカード設定"
+            subtitle="案件ごとの outro 文言をここで調整"
+          >
+            <div className="space-y-4">
+              <div className="rounded-[10px] border border-[var(--nv-color-border)] bg-slate-50 p-3 text-xs text-slate-600">
+                <p>
+                  ここで調整するのは project ごとの締めカードです。設定画面の `オープニング / エンディング動画` は共通素材で、必要ならこの締めカードの前後に差し込みます。
+                </p>
+              </div>
+
+              <label className="inline-flex items-center gap-2 text-sm text-slate-700">
+                <input
+                  type="checkbox"
+                  checked={presentationProfile.closingCardEnabled}
+                  onChange={(e) =>
+                    setPresentationProfile((prev) => ({
+                      ...prev,
+                      closingCardEnabled: e.target.checked,
+                    }))
+                  }
+                  disabled={isRendering || isPreviewing}
+                />
+                締めカードを含める
+              </label>
+
+              <div className="grid gap-4">
+                <div>
+                  <label className="mb-1 block text-xs font-semibold text-slate-600">
+                    見出し
+                  </label>
+                  <input
+                    type="text"
+                    value={presentationProfile.closingCardHeadline}
+                    onChange={(e) =>
+                      setPresentationProfile((prev) => ({
+                        ...prev,
+                        closingCardHeadline: e.target.value,
+                      }))
+                    }
+                    className="nv-input"
+                    disabled={isRendering || isPreviewing}
+                    placeholder="ご視聴ありがとうございました"
+                  />
+                </div>
+
+                <div>
+                  <label className="mb-1 block text-xs font-semibold text-slate-600">
+                    CTA
+                  </label>
+                  <input
+                    type="text"
+                    value={presentationProfile.closingCardCtaText}
+                    onChange={(e) =>
+                      setPresentationProfile((prev) => ({
+                        ...prev,
+                        closingCardCtaText: e.target.value,
+                      }))
+                    }
+                    className="nv-input"
+                    disabled={isRendering || isPreviewing}
+                    placeholder="続きは概要欄から確認してください"
+                  />
+                </div>
+
+                <div>
+                  <label className="mb-1 block text-xs font-semibold text-slate-600">
+                    出典表示
+                  </label>
+                  <select
+                    value={presentationProfile.sourceDisplayMode}
+                    onChange={(e) =>
+                      setPresentationProfile((prev) => ({
+                        ...prev,
+                        sourceDisplayMode: e.target.value as typeof prev.sourceDisplayMode,
+                      }))
+                    }
+                    className="nv-input"
+                    disabled={isRendering || isPreviewing}
+                  >
+                    {Object.entries(SOURCE_DISPLAY_MODE_LABELS).map(([mode, label]) => (
+                      <option key={mode} value={mode}>
+                        {label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                {presentationProfile.sourceDisplayMode === 'custom' && (
+                  <div>
+                    <label className="mb-1 block text-xs font-semibold text-slate-600">
+                      カスタム出典表記
+                    </label>
+                    <input
+                      type="text"
+                      value={presentationProfile.sourceDisplayText}
+                      onChange={(e) =>
+                        setPresentationProfile((prev) => ({
+                          ...prev,
+                          sourceDisplayText: e.target.value,
+                        }))
+                      }
+                      className="nv-input"
+                      disabled={isRendering || isPreviewing}
+                      placeholder="出典: 社内広報資料"
+                    />
+                  </div>
+                )}
+              </div>
+
+              <div className="rounded-[10px] border border-[var(--nv-color-border)] bg-white p-3">
+                <div className="mb-2 flex flex-wrap gap-2 text-xs">
+                  <Badge tone={presentationProfile.closingCardEnabled ? 'success' : 'neutral'}>
+                    {presentationProfile.closingCardEnabled ? '締めカードあり' : '締めカードなし'}
+                  </Badge>
+                  <Badge tone="info">{SOURCE_DISPLAY_MODE_LABELS[presentationProfile.sourceDisplayMode]}</Badge>
+                  {renderOptions.includeEnding && <Badge tone="neutral">後段に ending 動画を連結</Badge>}
+                </div>
+                <div className="space-y-2 text-xs text-slate-600">
+                  <div>
+                    <div className="font-semibold text-slate-700">見出しプレビュー</div>
+                    <div className="mt-1 text-sm text-slate-900">
+                      {presentationProfile.closingCardHeadline.trim() || '未設定'}
+                    </div>
+                  </div>
+                  <div>
+                    <div className="font-semibold text-slate-700">CTA プレビュー</div>
+                    <div className="mt-1 text-sm text-slate-900">
+                      {presentationProfile.closingCardCtaText.trim() || 'なし'}
+                    </div>
+                  </div>
+                  <div>
+                    <div className="font-semibold text-slate-700">出典プレビュー</div>
+                    <div className="mt-1 text-sm text-slate-900">{closingSourcePreview ?? 'なし'}</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </Card>
+
+          <Card
             title="今回の書き出し設定"
-            subtitle="品質の既定値は設定画面で変更します"
+            subtitle="品質は app settings、付加素材は今回の書き出しで切り替え"
             actions={
               <Button
                 variant="secondary"

@@ -51,6 +51,13 @@ export const CONTENT_CUSTOMIZATION_BOUNDARIES: readonly ContentCustomizationBoun
     description: '導線文言は preset を基本とし、案件ごとの差し替えだけ許容する。',
   },
   {
+    id: 'closing_card',
+    label: '締めカード',
+    category: 'preset_with_override',
+    uiExposure: 'details',
+    description: '締めカード自体の有無と見出しは preset を基本にし、案件ごとの差し替えだけ許容する。',
+  },
+  {
     id: 'opening_line',
     label: '冒頭文',
     category: 'preset_with_override',
@@ -139,7 +146,7 @@ export const CONTENT_CUSTOMIZATION_BOUNDARIES: readonly ContentCustomizationBoun
     label: 'オープニング / エンディング素材',
     category: 'direct_setting',
     uiExposure: 'details',
-    description: '素材の有無や差し込み自体は通常設定として扱う。',
+    description: '共通の動画素材パスは通常設定として扱い、案件ごとの締めカード文言とは分離する。',
   },
 ] as const;
 
