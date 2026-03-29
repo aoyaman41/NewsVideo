@@ -8,6 +8,14 @@ body:
     attributes:
       value: |
         再現手順、利用環境、使っていた API 構成が分かると切り分けが速くなります。
+
+        NewsVideo は個人開発の `OSS Public Beta` です。サポートは `best effort` で、個別環境ごとの無償セットアップ支援や外部 API の不具合調査代行は行いません。
+
+        先に確認してほしいもの:
+
+        - `README`
+        - `docs/クイックスタート.md`
+        - `docs/対応環境と制約.md`
   - type: input
     id: summary
     attributes:
@@ -89,6 +97,8 @@ body:
       label: 事前確認
       options:
         - label: README と docs/クイックスタート.md を確認した
+          required: true
+        - label: docs/対応環境と制約.md を確認し、自分の環境がサポート範囲内だと確認した
           required: true
         - label: 既存 Issue に同様の報告がないことを確認した
           required: true
