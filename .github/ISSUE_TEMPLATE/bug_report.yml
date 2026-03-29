@@ -39,8 +39,8 @@ body:
     id: version
     attributes:
       label: バージョン
-      description: "例: v2.0.1"
-      placeholder: v2.0.1
+      description: "例: v2.0.2"
+      placeholder: v2.0.2
     validations:
       required: true
   - type: input
