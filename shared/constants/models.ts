@@ -58,7 +58,6 @@ export const IMAGE_RESOLUTION_LABELS: Record<ImageResolution, string> = {
   '4k': '4K 相当 (16:9=3840x2160)',
 };
 
-export const FIXED_IMAGE_STYLE_PRESET = 'infographic' as const;
 export const DEFAULT_GEMINI_TTS_MODEL = 'gemini-2.5-pro-preview-tts' as const;
 
 const TEXT_COMPLETION_MODEL_SET = new Set<string>(TEXT_COMPLETION_MODELS);

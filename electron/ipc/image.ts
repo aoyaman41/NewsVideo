@@ -6,13 +6,17 @@ import { GoogleGenAI } from '@google/genai';
 import {
   DEFAULT_IMAGE_MODEL,
   DEFAULT_IMAGE_RESOLUTION,
-  FIXED_IMAGE_STYLE_PRESET,
   isImageModel,
   isImageResolution,
   type ImageModel,
   type ImageResolution,
   type ImageSizeTier,
 } from '../../shared/constants/models';
+import {
+  getImageStylePresetConfig,
+  type ImageAspectRatio,
+  type ImageStylePreset,
+} from '../../shared/project/imageStylePresets';
 import { sanitizeImagePromptForRendering } from '../../shared/utils/imagePromptSanitizer';
 import { logger } from '../utils/logger';
 
@@ -24,8 +28,6 @@ const getSettingsPath = () => path.join(app.getPath('userData'), 'settings.json'
 
 // プロジェクトディレクトリのパス
 const getProjectsPath = () => path.join(app.getPath('userData'), 'projects');
-
-type ImageAspectRatio = '16:9' | '1:1' | '9:16';
 
 // APIキーを読み込み
 async function readApiKey(service: string): Promise<string | null> {
@@ -101,50 +103,12 @@ async function withRetry<T>(
 interface ImagePrompt {
   id: string;
   partId: string;
-  stylePreset: string;
+  stylePreset: ImageStylePreset;
   prompt: string;
   negativePrompt?: string;
   aspectRatio: ImageAspectRatio;
   version: number;
   createdAt: string;
-}
-
-type StylePresetConfig = {
-  id: string;
-  baseStyle: string;
-  colorPalette: string;
-  lighting: string;
-  background: string;
-  density: 'low' | 'medium' | 'high';
-  layoutVariants: {
-    dataAndLocation: string;
-    dataOnly: string;
-    locationOnly: string;
-    general: string;
-  };
-  negative: string;
-};
-
-const INFOGRAPHIC_STYLE_PRESET: StylePresetConfig = {
-  id: FIXED_IMAGE_STYLE_PRESET,
-  baseStyle: 'フラットなベクター調、非写実、情報整理しやすい明瞭な図解表現',
-  colorPalette:
-    '背景 #F6F7F9、主要線 #1F3552、補助線 #5C6B7A、アクセント #2C8E8A（単色）、文字 #0F172A',
-  lighting: 'フラットでマットな質感',
-  background: '余白を十分に取った明るい無地背景',
-  density: 'low',
-  layoutVariants: {
-    dataAndLocation: '左右2カラム。左に主ビジュアルを大きく、右を上下2段に分けて上に地図、下に図表を置く',
-    dataOnly: '左右2カラム。左に主ビジュアルを大きく、右に図表パネルをまとめる',
-    locationOnly: '左右2カラム。左に主ビジュアルを大きく、右に地図パネルを置く',
-    general: '左右2カラム。左に主ビジュアルを大きく、右に補助情報パネルを置く',
-  },
-  negative:
-    '人物, 顔, 手, 群衆, 肖像, インタビュー, アナウンサー, 記者, 番組セット, テロップ, 速報帯, ティッカー, ニュース名, 番組名, 局名, 番組タイトル, カテゴリー名, ロゴ, 透かし, QRコード, 商標, 写真, 実写, 写真風, 写実, フォトリアル, フォトリアリスティック, カメラ風, 過度なネオン, 強コントラスト, ギラついた光沢, サイバーパンク, アニメ調',
-};
-
-function getStylePreset(): StylePresetConfig {
-  return INFOGRAPHIC_STYLE_PRESET;
 }
 
 const IMAGE_SYSTEM_POLICY_CORE = `タスク:
@@ -252,7 +216,7 @@ function extractImageUsage(
 }
 
 function buildImageSystemInstruction(prompt: ImagePrompt): string {
-  const styleConfig = getStylePreset();
+  const styleConfig = getImageStylePresetConfig(prompt.stylePreset);
   const styleLines = [
     styleConfig.baseStyle,
     `- 配色: ${styleConfig.colorPalette}`,

@@ -13,6 +13,10 @@ import {
 } from '../components/ui';
 import type { Project, ImageAssetRef, ImagePrompt } from '../schemas';
 import { createGeminiImageUsageRecordFromAssets, createOpenAIUsageRecord } from '../utils/usage';
+import {
+  IMAGE_ASPECT_RATIO_LABELS,
+  IMAGE_STYLE_PRESET_LABELS,
+} from '../../shared/project/imageStylePresets';
 
 export function ImageManagePage() {
   const { projectId } = useParams<{ projectId: string }>();
@@ -117,7 +121,11 @@ export function ImageManagePage() {
 
       const result = await window.electronAPI.ai.generateImagePrompts(
         project.parts,
-        project.article
+        project.article,
+        {
+          stylePreset: project.presentationProfile.imageStylePreset,
+          aspectRatio: project.presentationProfile.aspectRatio,
+        }
       );
       const usageRecord = createOpenAIUsageRecord('image_prompt_generate', result.usage);
 
@@ -150,7 +158,11 @@ export function ImageManagePage() {
         const result = await window.electronAPI.ai.generateImagePromptForTarget(
           project.parts,
           project.article,
-          targetId
+          targetId,
+          {
+            stylePreset: project.presentationProfile.imageStylePreset,
+            aspectRatio: project.presentationProfile.aspectRatio,
+          }
         );
         const usageRecord = createOpenAIUsageRecord('image_prompt_regenerate', result.usage);
 
@@ -463,6 +475,14 @@ export function ImageManagePage() {
             </div>
           }
         >
+          <div className="mb-3 flex flex-wrap items-center gap-2">
+            <Badge tone="neutral">
+              {IMAGE_STYLE_PRESET_LABELS[project.presentationProfile.imageStylePreset]}
+            </Badge>
+            <Badge tone="info">
+              {IMAGE_ASPECT_RATIO_LABELS[project.presentationProfile.aspectRatio]}
+            </Badge>
+          </div>
           <p className="text-xs text-slate-500">
             この画面ではプロンプト作成と画像割り当てだけを扱います。全体進捗は上部の Workflow で確認できます。
           </p>

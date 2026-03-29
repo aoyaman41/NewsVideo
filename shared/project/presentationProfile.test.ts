@@ -17,6 +17,8 @@ describe('normalizePresentationProfile', () => {
       tone: 'invalid-tone',
       closingLineMode: 'invalid-mode',
       targetDurationPerPartSec: 999,
+      imageStylePreset: 'invalid-style',
+      aspectRatio: '21:9',
     });
 
     expect(normalized).toEqual(getDefaultPresentationProfile('short'));
@@ -29,6 +31,8 @@ describe('normalizePresentationProfile', () => {
       closingLineMode: 'custom',
       closingLineText: 'ご視聴ありがとうございました',
       targetDurationPerPartSec: 18,
+      imageStylePreset: 'editorial',
+      aspectRatio: '1:1',
     });
 
     expect(normalized).toEqual({
@@ -37,7 +41,27 @@ describe('normalizePresentationProfile', () => {
       closingLineMode: 'custom',
       closingLineText: 'ご視聴ありがとうございました',
       targetDurationPerPartSec: 18,
+      imageStylePreset: 'editorial',
+      aspectRatio: '1:1',
     });
+  });
+
+  it('accepts default overrides for legacy projects without visual fields', () => {
+    const normalized = normalizePresentationProfile(
+      {
+        preset: 'news',
+        tone: 'news',
+        closingLineMode: 'preset',
+        closingLineText: '',
+        targetDurationPerPartSec: 30,
+      },
+      {
+        aspectRatio: '9:16',
+      }
+    );
+
+    expect(normalized.imageStylePreset).toBe('infographic');
+    expect(normalized.aspectRatio).toBe('9:16');
   });
 });
 

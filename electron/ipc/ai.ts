@@ -7,7 +7,6 @@ import { z } from 'zod/v3';
 import {
   DEFAULT_IMAGE_PROMPT_TEXT_MODEL,
   DEFAULT_SCRIPT_TEXT_MODEL,
-  FIXED_IMAGE_STYLE_PRESET,
   GEMINI_TEXT_COMPLETION_MODEL,
   getDefaultGeminiThinkingLevel,
   getDefaultOpenAIReasoningEffort,
@@ -22,6 +21,16 @@ import {
   type OpenAIReasoningEffort,
   type TextCompletionModel,
 } from '../../shared/constants/models';
+import {
+  DEFAULT_IMAGE_ASPECT_RATIO,
+  getImageAspectRatioLabel,
+  getImageLayoutVariant,
+  getImageStylePresetConfig,
+  isImageAspectRatio,
+  type ImageAspectRatio,
+  type ImageStylePreset,
+  type ImageStylePresetConfig,
+} from '../../shared/project/imageStylePresets';
 import { PRESENTATION_PROFILE_PRESET_CLOSING_LINES } from '../../shared/project/presentationProfile';
 import { DEFAULT_SETTINGS, normalizeSettings } from '../../shared/settings/appSettings';
 import { sanitizeImagePromptForRendering } from '../../shared/utils/imagePromptSanitizer';
@@ -582,26 +591,20 @@ ipcMain.handle(
   }
 );
 
-type StylePresetConfig = {
-  id: string;
-  layoutVariants: {
-    dataAndLocation: string;
-    dataOnly: string;
-    locationOnly: string;
-    general: string;
-  };
-  negative: string;
-};
-
 type ImagePrompt = {
   id: string;
   partId: string;
-  stylePreset: string;
+  stylePreset: ImageStylePreset;
   prompt: string;
   negativePrompt: string;
-  aspectRatio: '16:9';
+  aspectRatio: ImageAspectRatio;
   version: number;
   createdAt: string;
+};
+
+type ImagePromptGenerationOptions = {
+  stylePreset?: ImageStylePreset;
+  aspectRatio?: ImageAspectRatio;
 };
 
 const QuantFactSchema = z.object({
@@ -645,22 +648,6 @@ const ImagePromptExtractionSchema = z.object({
 });
 
 type ImagePromptExtraction = z.infer<typeof ImagePromptExtractionSchema>;
-
-const INFOGRAPHIC_STYLE_PRESET: StylePresetConfig = {
-  id: FIXED_IMAGE_STYLE_PRESET,
-  layoutVariants: {
-    dataAndLocation: '左右2カラム。左に主ビジュアルを大きく、右を上下2段に分けて上に地図、下に図表を置く',
-    dataOnly: '左右2カラム。左に主ビジュアルを大きく、右に図表パネルをまとめる',
-    locationOnly: '左右2カラム。左に主ビジュアルを大きく、右に地図パネルを置く',
-    general: '左右2カラム。左に主ビジュアルを大きく、右に補助情報パネルを置く',
-  },
-  negative:
-    '人物, 顔, 手, 群衆, 肖像, インタビュー, アナウンサー, 記者, 番組セット, テロップ, 速報帯, ティッカー, ニュース名, 番組名, 局名, 番組タイトル, カテゴリー名, ロゴ, 透かし, QRコード, 商標, 写真, 実写, 写真風, 写実, フォトリアル, フォトリアリスティック, カメラ風, 過度なネオン, 強コントラスト, ギラついた光沢, サイバーパンク, アニメ調',
-};
-
-function getStylePreset(): StylePresetConfig {
-  return INFOGRAPHIC_STYLE_PRESET;
-}
 
 function normalizeString(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
@@ -730,13 +717,6 @@ function normalizeStringArray(value: unknown, limit: number): string[] {
     .map((item) => truncateTextByChars(normalizeString(item), MAX_EXTRACTED_TEXT_CHARS))
     .filter((item) => item.length > 0);
   return items.slice(0, limit);
-}
-
-function pickLayoutVariant(style: StylePresetConfig, hasData: boolean, hasLocation: boolean): string {
-  if (hasData && hasLocation) return style.layoutVariants.dataAndLocation;
-  if (hasData) return style.layoutVariants.dataOnly;
-  if (hasLocation) return style.layoutVariants.locationOnly;
-  return style.layoutVariants.general;
 }
 
 type QuantFact = {
@@ -1143,7 +1123,8 @@ function coerceImagePromptExtraction(raw: unknown): ImagePromptExtraction {
 
 type PromptBuildContext = {
   articleText: string;
-  styleConfig: StylePresetConfig;
+  styleConfig: ImageStylePresetConfig;
+  aspectRatio: ImageAspectRatio;
 };
 
 function buildImagePromptText(
@@ -1211,7 +1192,7 @@ function buildImagePromptText(
 
   const resolvedSlots: VisualSlot[] = visualSlots;
 
-  const layout = pickLayoutVariant(context.styleConfig, hasData, hasLocation);
+  const layout = getImageLayoutVariant(context.aspectRatio, hasData, hasLocation);
   const heroSubject = normalizeExtractedText((p as { heroSubject?: unknown }).heroSubject, sourceText);
   const heroSetting = normalizeExtractedText((p as { heroSetting?: unknown }).heroSetting, sourceText);
   const compositionNote = normalizeCompositionNote((p as { compositionNote?: unknown }).compositionNote);
@@ -1253,6 +1234,8 @@ function buildImagePromptText(
 
   const promptLines = [
     'スライド仕様',
+    `画面比率: ${getImageAspectRatioLabel(context.aspectRatio)}`,
+    `表現スタイル: ${context.styleConfig.id}`,
     `背景: ${backgroundSummary}`,
     `意図: ${intentSummary}`,
     `主題: ${topic || 'このパートの要点を1枚で説明'}`,
@@ -1500,21 +1483,25 @@ ipcMain.handle(
   async (
     _,
     parts: GeneratedPart[],
-    article: Article
+    article: Article,
+    options?: ImagePromptGenerationOptions
   ): Promise<{
     prompts: Array<{
       id: string;
       partId: string;
-      stylePreset: string;
+      stylePreset: ImageStylePreset;
       prompt: string;
       negativePrompt: string;
-      aspectRatio: '16:9';
+      aspectRatio: ImageAspectRatio;
       version: number;
       createdAt: string;
     }>;
     usage: OpenAIUsageSummary | null;
   }> => {
-    const styleConfig = getStylePreset();
+    const styleConfig = getImageStylePresetConfig(options?.stylePreset);
+    const aspectRatio = isImageAspectRatio(options?.aspectRatio)
+      ? options.aspectRatio
+      : DEFAULT_IMAGE_ASPECT_RATIO;
     const cleanedBodyText = sanitizeArticleText(article.bodyText ?? '');
     const bodyTextForPrompt = cleanedBodyText || article.bodyText || '';
     const articleText = `${article.title}\n${article.source ?? ''}\n${bodyTextForPrompt}`.trim();
@@ -1541,7 +1528,7 @@ ipcMain.handle(
       }
     );
     const now = new Date().toISOString();
-    const promptContext = { articleText, styleConfig };
+    const promptContext = { articleText, styleConfig, aspectRatio };
     const prompts = parts.map((part, index: number) => {
       const candidate = extractionResults[index]?.candidate;
       const finalPrompt = buildImagePromptText(candidate, promptContext);
@@ -1552,7 +1539,7 @@ ipcMain.handle(
         stylePreset: styleConfig.id,
         prompt: finalPrompt,
         negativePrompt: styleConfig.negative,
-        aspectRatio: '16:9' as const,
+        aspectRatio,
         version: 1,
         createdAt: now,
       };
@@ -1573,9 +1560,13 @@ ipcMain.handle(
     _,
     parts: GeneratedPart[],
     article: Article,
-    targetId: string
+    targetId: string,
+    options?: ImagePromptGenerationOptions
   ): Promise<{ prompt: ImagePrompt; usage: OpenAIUsageSummary | null }> => {
-    const styleConfig = getStylePreset();
+    const styleConfig = getImageStylePresetConfig(options?.stylePreset);
+    const aspectRatio = isImageAspectRatio(options?.aspectRatio)
+      ? options.aspectRatio
+      : DEFAULT_IMAGE_ASPECT_RATIO;
     const cleanedBodyText = sanitizeArticleText(article.bodyText ?? '');
     const bodyTextForPrompt = cleanedBodyText || article.bodyText || '';
     const articleText = `${article.title}\n${article.source ?? ''}\n${bodyTextForPrompt}`.trim();
@@ -1598,7 +1589,7 @@ ipcMain.handle(
       partContext,
       generationConfig,
     });
-    const promptText = buildImagePromptText(candidate, { articleText, styleConfig });
+    const promptText = buildImagePromptText(candidate, { articleText, styleConfig, aspectRatio });
 
     const now = new Date().toISOString();
     const prompt: ImagePrompt = {
@@ -1607,7 +1598,7 @@ ipcMain.handle(
       stylePreset: styleConfig.id,
       prompt: promptText,
       negativePrompt: styleConfig.negative,
-      aspectRatio: '16:9' as const,
+      aspectRatio,
       version: 1,
       createdAt: now,
     };
