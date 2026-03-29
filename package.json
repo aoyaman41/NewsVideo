@@ -11,6 +11,7 @@
     "preview": "vite preview",
     "electron:dev": "vite",
     "prepare:ffmpeg:mac": "node scripts/prepare-ffmpeg.mjs",
+    "docs:public-assets": "node scripts/generate-public-beta-assets.mjs",
     "prebuild": "node scripts/prepare-ffmpeg.mjs",
     "lint": "eslint \"src/**/*.{ts,tsx}\" \"electron/**/*.ts\" \"shared/**/*.ts\" \"vite.config.ts\"",
     "lint:fix": "eslint \"src/**/*.{ts,tsx}\" \"electron/**/*.ts\" \"shared/**/*.ts\" \"vite.config.ts\" --fix",

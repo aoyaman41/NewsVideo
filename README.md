@@ -89,9 +89,21 @@ npm test
 
 ## プレビューとサンプル
 
+- 4画面をつないだ短いデモ: [workflow-demo.gif](.github/assets/public-beta/workflow-demo.gif)
+- 公開用のサンプル入力 / 出力まとめ: [docs/サンプル出力.md](docs/サンプル出力.md)
 - 最新の配布物: [GitHub Releases](https://github.com/aoyaman41/NewsVideo/releases/latest)
 - 検証用の入力例: [docs/サンプル記事.md](docs/サンプル記事.md)
-- README に載せるスクリーンショットとデモ素材の整備: [Issue #5](https://github.com/aoyaman41/NewsVideo/issues/5)
+- 公開用素材の再生成: `npm run docs:public-assets`
+
+![Workflow demo](.github/assets/public-beta/workflow-demo.gif)
+
+| Project list | Article input |
+| --- | --- |
+| ![Project list](.github/assets/public-beta/project-list.png) | ![Article input](.github/assets/public-beta/article-input.png) |
+| Image workflow | Video export |
+| ![Image workflow](.github/assets/public-beta/image-workflow.png) | ![Video export](.github/assets/public-beta/video-export.png) |
+
+スクリーンショットと GIF は、機密情報や API キーが映らないように隔離プロファイルから自動生成しています。GitHub Releases に添付する場合も `.github/assets/public-beta/` 配下の同じファイルをそのまま使えます。
 
 ## 対応環境と制約
 
