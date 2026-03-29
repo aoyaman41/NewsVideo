@@ -160,10 +160,9 @@ function buildDrawtextFilter(options: {
     fontFile = null,
   } = options;
 
-  const segments = ['drawtext'];
+  const segments: string[] = [];
   if (fontFile) segments.push(`fontfile='${escapeDrawtextValue(fontFile)}'`);
   segments.push(`textfile='${escapeDrawtextValue(textFilePath)}'`);
-  segments.push('text_shaping=1');
   segments.push(`fontcolor=${fontColor}`);
   segments.push(`fontsize=${fontSize}`);
   segments.push(`line_spacing=${lineSpacing}`);
@@ -172,7 +171,7 @@ function buildDrawtextFilter(options: {
   segments.push('box=1');
   segments.push(`boxcolor=${boxColor}`);
   segments.push(`boxborderw=${boxBorderW}`);
-  return segments.join(':');
+  return `drawtext=${segments.join(':')}`;
 }
 
 function assertNotCanceled(job: VideoJob) {
