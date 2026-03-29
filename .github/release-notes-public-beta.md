@@ -16,6 +16,7 @@
 - Signing: no Developer ID signing
 - Notarization: not notarized
 - Rationale: intentionally omitted for this individual OSS beta because the annual Apple program cost and operational overhead are not justified yet
+- Disclaimer: provided as-is; public demo assets are limited to repo-authored fictional sample content and generated graphics
 - Install guide: https://github.com/{{REPOSITORY}}/blob/main/docs/%E5%85%AC%E9%96%8B%E3%83%AA%E3%83%AA%E3%83%BC%E3%82%B9%E6%89%8B%E9%A0%86.md
 - Gatekeeper guide: https://github.com/{{REPOSITORY}}/blob/main/docs/macOS%E3%82%A4%E3%83%B3%E3%82%B9%E3%83%88%E3%83%BC%E3%83%AB%E3%81%A8Gatekeeper.md
 - Quick start: https://github.com/{{REPOSITORY}}/blob/main/docs/%E3%82%AF%E3%82%A4%E3%83%83%E3%82%AF%E3%82%B9%E3%82%BF%E3%83%BC%E3%83%88.md

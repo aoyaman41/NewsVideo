@@ -149,6 +149,7 @@ npm test
 - 現行実装ガイド: [docs/現行実装ガイド.md](docs/現行実装ガイド.md)
 - クイックスタート: [docs/クイックスタート.md](docs/クイックスタート.md)
 - データ取り扱い: [docs/データ取り扱い.md](docs/データ取り扱い.md)
+- 免責事項: [docs/免責事項.md](docs/免責事項.md)
 - FAQ / トラブルシュート: [docs/FAQとトラブルシュート.md](docs/FAQとトラブルシュート.md)
 - リリース前スモークテスト: [docs/リリース前スモークテスト.md](docs/リリース前スモークテスト.md)
 - 公開リリース手順: [docs/公開リリース手順.md](docs/公開リリース手順.md)
@@ -157,6 +158,13 @@ npm test
 - Issue を開く前に、サポート方針と対応範囲を確認してください
 - バグ報告 / 要望 / 使い方の質問: [GitHub Issues](https://github.com/aoyaman41/NewsVideo/issues/new/choose)
 - 開発参加の前提: [CONTRIBUTING.md](CONTRIBUTING.md)
+
+## 免責事項
+
+- NewsVideo は個人開発の `OSS Public Beta` で、`AS IS` かつ `best effort` で提供します
+- 動作継続性、生成結果、外部 API 由来の障害や料金変更、将来の互換性は保証しません
+- 公開デモ素材はこのリポジトリ用の架空記事と自動生成図版で構成しており、確認した範囲では第三者ロゴ、写真、記事転載は含んでいません
+- 詳細は [docs/免責事項.md](docs/免責事項.md) と [LICENSE](LICENSE) を確認してください
 
 ## License
 
