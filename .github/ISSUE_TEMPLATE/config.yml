@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Quickstart
+    url: https://github.com/aoyaman41/NewsVideo/blob/main/docs/%E3%82%AF%E3%82%A4%E3%83%83%E3%82%AF%E3%82%B9%E3%82%BF%E3%83%BC%E3%83%88.md
+    about: 初回セットアップや API キー周りは先にこちらを確認してください。
+  - name: Support matrix
+    url: https://github.com/aoyaman41/NewsVideo/blob/main/docs/%E5%AF%BE%E5%BF%9C%E7%92%B0%E5%A2%83%E3%81%A8%E5%88%B6%E7%B4%84.md
+    about: 対応 OS / CPU と Public Beta の制約を確認してください。

@@ -1,0 +1,94 @@
+name: Bug report
+description: 不具合報告用テンプレート
+title: "[Bug] "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        再現手順、利用環境、使っていた API 構成が分かると切り分けが速くなります。
+  - type: input
+    id: summary
+    attributes:
+      label: 要約
+      description: 何が起きたかを一文で書いてください
+      placeholder: "例: Google AI の接続テストは成功するが画像生成で失敗する"
+    validations:
+      required: true
+  - type: dropdown
+    id: install-method
+    attributes:
+      label: 利用形態
+      description: どの方法で動かしていますか
+      options:
+        - GitHub Releases の配布版
+        - ソースビルド
+        - どちらか不明
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: バージョン
+      description: "例: v2.0.1"
+      placeholder: v2.0.1
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: 環境
+      description: OS / CPU を書いてください
+      placeholder: "macOS 15.3 / Apple Silicon (M3)"
+    validations:
+      required: true
+  - type: checkboxes
+    id: api-config
+    attributes:
+      label: 利用中の API 構成
+      description: 該当するものを選んでください
+      options:
+        - label: OpenAI を使っている
+        - label: Google AI を使っている
+        - label: 既定設定のまま使っている
+        - label: Gemini 3.1 Pro に切り替えている
+  - type: textarea
+    id: steps
+    attributes:
+      label: 再現手順
+      description: できるだけ具体的に書いてください
+      placeholder: |
+        1. 設定で Google AI キーを保存
+        2. 新規プロジェクトを作成
+        3. サンプル記事を貼り付け
+        4. 記事から動画まで自動生成を実行
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: 期待した結果
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: 実際の結果
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: エラーメッセージ / 補足
+      description: 画面上のエラー文言やスクリーンショットへのリンクがあれば書いてください
+      render: shell
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: 事前確認
+      options:
+        - label: README と docs/クイックスタート.md を確認した
+          required: true
+        - label: 既存 Issue に同様の報告がないことを確認した
+          required: true

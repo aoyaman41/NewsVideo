@@ -1,0 +1,56 @@
+name: Usage question
+description: 使い方や初回セットアップの質問
+title: "[Question] "
+labels:
+  - question
+body:
+  - type: markdown
+    attributes:
+      value: |
+        バグか判断しきれない相談や、初回セットアップの質問はこちらを使ってください。
+  - type: dropdown
+    id: category
+    attributes:
+      label: 質問カテゴリ
+      options:
+        - 初回セットアップ
+        - API キー / モデル設定
+        - 配布版の使い方
+        - ソースビルド
+        - 出力 / ワークフロー
+        - その他
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: バージョン
+      placeholder: v2.0.1
+  - type: input
+    id: environment
+    attributes:
+      label: 環境
+      placeholder: macOS 15.3 / Apple Silicon (M3)
+  - type: textarea
+    id: question
+    attributes:
+      label: 質問内容
+      description: 何をしようとして、どこで止まったかを書いてください
+    validations:
+      required: true
+  - type: textarea
+    id: tried
+    attributes:
+      label: 試したこと
+      description: README や docs を見て試したことがあれば書いてください
+  - type: checkboxes
+    id: docs-check
+    attributes:
+      label: 事前確認
+      options:
+        - label: README を確認した
+          required: true
+        - label: docs/クイックスタート.md を確認した
+          required: true
+        - label: docs/対応環境と制約.md を確認した
+          required: true
