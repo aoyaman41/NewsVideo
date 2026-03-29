@@ -229,6 +229,7 @@ export const scriptOptionsSchema = z.object({
   targetPartCount: z.number().int().min(1).max(20).optional(),
   tone: z.enum(SCRIPT_TONES).optional(),
   targetDurationPerPartSec: z.number().int().min(10).max(300).optional(),
+  closingLine: z.string().nullable().optional(),
 });
 
 export type ScriptOptions = z.infer<typeof scriptOptionsSchema>;

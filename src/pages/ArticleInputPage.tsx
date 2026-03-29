@@ -408,6 +408,7 @@ export function ArticleInputPage() {
         tone: presentationProfile.tone,
         targetPartCount,
         targetDurationPerPartSec: presentationProfile.targetDurationPerPartSec,
+        closingLine: closingLinePreview,
       });
       const usageRecord = createOpenAIUsageRecord('script_generate', result.usage);
 
@@ -503,6 +504,7 @@ export function ArticleInputPage() {
           tone: presentationProfile.tone,
           targetPartCount,
           targetDurationPerPartSec: presentationProfile.targetDurationPerPartSec,
+          closingLine: closingLinePreview,
         });
         await ensureNotCancelled();
         const scriptUsage = createOpenAIUsageRecord('script_generate', scriptResult.usage);
