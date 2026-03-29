@@ -1,0 +1,131 @@
+name: Release Public Beta
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: package.json version without leading v
+        required: true
+        type: string
+      prerelease:
+        description: mark the GitHub Release as a prerelease
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-public-beta
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: macos-14
+    timeout-minutes: 45
+    env:
+      RELEASE_VERSION: ${{ inputs.version }}
+      CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+
+    steps:
+      - name: Ensure main branch
+        run: |
+          test "$GITHUB_REF_NAME" = "main" || {
+            echo "This workflow must be run from main."
+            exit 1
+          }
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22.12.0'
+          cache: npm
+
+      - name: Install Dependencies
+        run: npm ci
+
+      - name: Verify package version
+        run: |
+          PACKAGE_VERSION="$(node -p "require('./package.json').version")"
+          test "$PACKAGE_VERSION" = "$RELEASE_VERSION" || {
+            echo "package.json version ($PACKAGE_VERSION) does not match workflow input ($RELEASE_VERSION)."
+            exit 1
+          }
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Unit Test
+        run: npm test
+
+      - name: Build Public Beta artifacts
+        run: npm run build:release:mac
+
+      - name: Verify release files
+        run: |
+          test -f "release/NewsVideo-${RELEASE_VERSION}-arm64.dmg"
+          test -f "release/NewsVideo-${RELEASE_VERSION}-arm64.dmg.blockmap"
+          test -f "release/NewsVideo-${RELEASE_VERSION}-arm64-mac.zip"
+          test -f "release/NewsVideo-${RELEASE_VERSION}-arm64-mac.zip.blockmap"
+          test -f "release/latest-mac.yml"
+
+      - name: Prepare release notes
+        run: |
+          cat > release/release-notes.md <<EOF
+          ## Public Beta
+
+          - Platform: macOS / Apple Silicon (arm64)
+          - Support level: best effort
+          - Signing: no Developer ID signing
+          - Notarization: not notarized
+          - Install guide: https://github.com/${GITHUB_REPOSITORY}/blob/main/docs/%E5%85%AC%E9%96%8B%E3%83%AA%E3%83%AA%E3%83%BC%E3%82%B9%E6%89%8B%E9%A0%86.md
+          - Quick start: https://github.com/${GITHUB_REPOSITORY}/blob/main/docs/%E3%82%AF%E3%82%A4%E3%83%83%E3%82%AF%E3%82%B9%E3%82%BF%E3%83%BC%E3%83%88.md
+
+          ## Assets
+
+          - \`NewsVideo-${RELEASE_VERSION}-arm64.dmg\`
+          - \`NewsVideo-${RELEASE_VERSION}-arm64-mac.zip\`
+          - \`latest-mac.yml\`
+
+          ## Notes
+
+          - This release is built from \`${GITHUB_SHA}\`.
+          - \`releases/latest\` is expected to point to this release, so keep \`prerelease\` disabled unless you intentionally want it excluded from the latest link.
+          EOF
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: NewsVideo-${{ inputs.version }}-public-beta-release
+          if-no-files-found: error
+          path: |
+            release/NewsVideo-${{ inputs.version }}-arm64.dmg
+            release/NewsVideo-${{ inputs.version }}-arm64.dmg.blockmap
+            release/NewsVideo-${{ inputs.version }}-arm64-mac.zip
+            release/NewsVideo-${{ inputs.version }}-arm64-mac.zip.blockmap
+            release/latest-mac.yml
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ inputs.version }}
+          target_commitish: ${{ github.sha }}
+          name: NewsVideo v${{ inputs.version }} Public Beta
+          body_path: release/release-notes.md
+          prerelease: ${{ inputs.prerelease }}
+          fail_on_unmatched_files: true
+          files: |
+            release/NewsVideo-${{ inputs.version }}-arm64.dmg
+            release/NewsVideo-${{ inputs.version }}-arm64.dmg.blockmap
+            release/NewsVideo-${{ inputs.version }}-arm64-mac.zip
+            release/NewsVideo-${{ inputs.version }}-arm64-mac.zip.blockmap
+            release/latest-mac.yml

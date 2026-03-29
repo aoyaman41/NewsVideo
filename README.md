@@ -127,6 +127,7 @@ npm test
 
 - 現行実装ガイド: [docs/現行実装ガイド.md](docs/現行実装ガイド.md)
 - クイックスタート: [docs/クイックスタート.md](docs/クイックスタート.md)
+- 公開リリース手順: [docs/公開リリース手順.md](docs/公開リリース手順.md)
 - 対応環境と制約: [docs/対応環境と制約.md](docs/対応環境と制約.md)
 - バグ報告 / 要望 / 使い方の質問: [GitHub Issues](https://github.com/aoyaman41/NewsVideo/issues/new/choose)
 - 開発参加の前提: [CONTRIBUTING.md](CONTRIBUTING.md)
