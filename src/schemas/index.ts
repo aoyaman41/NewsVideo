@@ -6,6 +6,7 @@ import {
   getDefaultPresentationProfile,
 } from '../../shared/project/presentationProfile';
 import { IMAGE_ASPECT_RATIOS, IMAGE_STYLE_PRESETS } from '../../shared/project/imageStylePresets';
+import { TTS_NARRATION_STYLE_PRESETS } from '../../shared/project/ttsNarrationStyles';
 
 // ============================================
 // 基本型スキーマ
@@ -177,6 +178,8 @@ export const presentationProfileSchema = z.object({
   targetDurationPerPartSec: z.number().int().min(10).max(300),
   imageStylePreset: z.enum(IMAGE_STYLE_PRESETS),
   aspectRatio: z.enum(IMAGE_ASPECT_RATIOS),
+  ttsNarrationStylePreset: z.enum(TTS_NARRATION_STYLE_PRESETS),
+  ttsNarrationStyleNote: z.string(),
 });
 
 export type PresentationProfile = z.infer<typeof presentationProfileSchema>;

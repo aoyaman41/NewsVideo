@@ -32,6 +32,11 @@ import {
   IMAGE_STYLE_PRESET_DESCRIPTIONS,
   IMAGE_STYLE_PRESET_LABELS,
 } from '../../shared/project/imageStylePresets';
+import {
+  TTS_NARRATION_STYLE_DESCRIPTIONS,
+  TTS_NARRATION_STYLE_LABELS,
+  TTS_NARRATION_STYLE_PRESETS,
+} from '../../shared/project/ttsNarrationStyles';
 
 export function ArticleInputPage() {
   const { projectId } = useParams<{ projectId: string }>();
@@ -333,7 +338,7 @@ export function ArticleInputPage() {
     ttsVoice?: string;
     ttsSpeakingRate?: number;
     ttsPitch?: number;
-  }) => {
+  }, profile: PresentationProfile) => {
     const voiceName = settings.ttsVoice || 'Charon';
     const match = voiceName.match(/^([a-z]{2}-[A-Z]{2})/);
     const languageCode = match?.[1] || 'ja-JP';
@@ -345,6 +350,8 @@ export function ArticleInputPage() {
       speakingRate: Number.isFinite(settings.ttsSpeakingRate) ? settings.ttsSpeakingRate! : 1.0,
       pitch: Number.isFinite(settings.ttsPitch) ? settings.ttsPitch! : 0,
       audioEncoding: 'MP3' as const,
+      narrationStylePreset: profile.ttsNarrationStylePreset,
+      narrationStyleNote: profile.ttsNarrationStyleNote,
     };
   };
 
@@ -391,6 +398,8 @@ export function ArticleInputPage() {
   );
   const presetDescription = PRESENTATION_PROFILE_PRESET_DESCRIPTIONS[presentationProfile.preset];
   const imageStyleDescription = IMAGE_STYLE_PRESET_DESCRIPTIONS[presentationProfile.imageStylePreset];
+  const ttsStyleDescription =
+    TTS_NARRATION_STYLE_DESCRIPTIONS[presentationProfile.ttsNarrationStylePreset];
 
   const handleSubmit = async (data: ArticleInputType) => {
     if (!projectId) return;
@@ -639,7 +648,7 @@ export function ArticleInputPage() {
       const runAudioPipeline = async (baseProject: Project): Promise<AudioPipelineResult> => {
         const settings = await window.electronAPI.settings.get();
         await ensureNotCancelled();
-        const ttsOptions = buildTtsOptions(settings);
+        const ttsOptions = buildTtsOptions(settings, baseProject.presentationProfile);
         const usageRecords: Project['usage'] = [];
         const partAudioById = new Map<string, Project['audio'][number]>();
         const audioAdded: Project['audio'] = [];
@@ -1124,6 +1133,30 @@ export function ArticleInputPage() {
                     画像プロンプト生成と画像生成の両方で使われます。
                   </p>
                 </div>
+
+                <div>
+                  <label className="mb-1 block text-xs font-semibold text-slate-600">
+                    音声の話し方
+                  </label>
+                  <select
+                    value={presentationProfile.ttsNarrationStylePreset}
+                    onChange={(e) =>
+                      setPresentationProfile((prev) => ({
+                        ...prev,
+                        ttsNarrationStylePreset:
+                          e.target.value as PresentationProfile['ttsNarrationStylePreset'],
+                      }))
+                    }
+                    className="nv-input"
+                  >
+                    {TTS_NARRATION_STYLE_PRESETS.map((preset) => (
+                      <option key={preset} value={preset}>
+                        {TTS_NARRATION_STYLE_LABELS[preset]}
+                      </option>
+                    ))}
+                  </select>
+                  <p className="mt-2 text-xs text-slate-500">{ttsStyleDescription}</p>
+                </div>
               </div>
 
               {presentationProfile.closingLineMode === 'custom' && (
@@ -1145,6 +1178,27 @@ export function ArticleInputPage() {
                   />
                 </div>
               )}
+
+              <div className="mt-4">
+                <label className="mb-1 block text-xs font-semibold text-slate-600">
+                  音声スタイル補足
+                </label>
+                <input
+                  type="text"
+                  value={presentationProfile.ttsNarrationStyleNote}
+                  onChange={(e) =>
+                    setPresentationProfile((prev) => ({
+                      ...prev,
+                      ttsNarrationStyleNote: e.target.value,
+                    }))
+                  }
+                  className="nv-input"
+                  placeholder="語尾はやわらかく、煽りすぎない"
+                />
+                <p className="mt-2 text-xs text-slate-500">
+                  短い補足だけを上書きできます。engine やボイス設定は変更しません。
+                </p>
+              </div>
             </Card>
 
             <Card title="記事情報" subtitle="必須項目を入力してスクリプトを生成">

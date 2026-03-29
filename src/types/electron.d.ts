@@ -16,6 +16,7 @@ import type {
   type ImageAspectRatio,
   type ImageStylePreset,
 } from '../../shared/project/imageStylePresets';
+import type { type TtsNarrationStylePreset } from '../../shared/project/ttsNarrationStyles';
 
 // Electron API の型定義
 
@@ -174,6 +175,8 @@ interface PresentationProfile {
   targetDurationPerPartSec: number;
   imageStylePreset: ImageStylePreset;
   aspectRatio: ImageAspectRatio;
+  ttsNarrationStylePreset: TtsNarrationStylePreset;
+  ttsNarrationStyleNote: string;
 }
 
 interface Article {
@@ -351,6 +354,8 @@ interface TTSOptions {
   speakingRate: number;
   pitch: number;
   audioEncoding: 'MP3' | 'LINEAR16';
+  narrationStylePreset?: TtsNarrationStylePreset;
+  narrationStyleNote?: string;
 }
 
 interface VoiceInfo {

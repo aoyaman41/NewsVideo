@@ -9,6 +9,11 @@ import {
   type ImageAspectRatio,
   type ImageStylePreset,
 } from './imageStylePresets';
+import {
+  TTS_NARRATION_STYLE_PRESETS,
+  isTtsNarrationStylePreset,
+  type TtsNarrationStylePreset,
+} from './ttsNarrationStyles';
 
 export const PRESENTATION_PROFILE_PRESETS = ['news', 'explain', 'report', 'short'] as const;
 export type PresentationProfilePreset = (typeof PRESENTATION_PROFILE_PRESETS)[number];
@@ -27,6 +32,8 @@ export type PresentationProfile = {
   targetDurationPerPartSec: number;
   imageStylePreset: ImageStylePreset;
   aspectRatio: ImageAspectRatio;
+  ttsNarrationStylePreset: TtsNarrationStylePreset;
+  ttsNarrationStyleNote: string;
 };
 
 type PresentationProfileDefaults = {
@@ -65,6 +72,8 @@ const presetDefaults: Record<PresentationProfilePreset, PresentationProfile> = {
     targetDurationPerPartSec: 30,
     imageStylePreset: DEFAULT_IMAGE_STYLE_PRESET,
     aspectRatio: DEFAULT_IMAGE_ASPECT_RATIO,
+    ttsNarrationStylePreset: 'news',
+    ttsNarrationStyleNote: '',
   },
   explain: {
     preset: 'explain',
@@ -74,6 +83,8 @@ const presetDefaults: Record<PresentationProfilePreset, PresentationProfile> = {
     targetDurationPerPartSec: 40,
     imageStylePreset: DEFAULT_IMAGE_STYLE_PRESET,
     aspectRatio: DEFAULT_IMAGE_ASPECT_RATIO,
+    ttsNarrationStylePreset: 'explain',
+    ttsNarrationStyleNote: '',
   },
   report: {
     preset: 'report',
@@ -83,6 +94,8 @@ const presetDefaults: Record<PresentationProfilePreset, PresentationProfile> = {
     targetDurationPerPartSec: 25,
     imageStylePreset: DEFAULT_IMAGE_STYLE_PRESET,
     aspectRatio: DEFAULT_IMAGE_ASPECT_RATIO,
+    ttsNarrationStylePreset: 'explain',
+    ttsNarrationStyleNote: '',
   },
   short: {
     preset: 'short',
@@ -92,6 +105,8 @@ const presetDefaults: Record<PresentationProfilePreset, PresentationProfile> = {
     targetDurationPerPartSec: 15,
     imageStylePreset: DEFAULT_IMAGE_STYLE_PRESET,
     aspectRatio: DEFAULT_IMAGE_ASPECT_RATIO,
+    ttsNarrationStylePreset: 'casual',
+    ttsNarrationStyleNote: '',
   },
 };
 
@@ -114,6 +129,8 @@ export const presentationProfileSchema = z.object({
     .max(TARGET_DURATION_RANGE.max),
   imageStylePreset: z.enum(IMAGE_STYLE_PRESETS),
   aspectRatio: z.enum(IMAGE_ASPECT_RATIOS),
+  ttsNarrationStylePreset: z.enum(TTS_NARRATION_STYLE_PRESETS),
+  ttsNarrationStyleNote: z.string(),
 });
 
 export const DEFAULT_PRESENTATION_PROFILE: PresentationProfile = presetDefaults.news;
@@ -164,6 +181,11 @@ export function normalizePresentationProfile(
     ? raw.imageStylePreset
     : presetDefaults.imageStylePreset;
   const aspectRatio = isImageAspectRatio(raw.aspectRatio) ? raw.aspectRatio : presetDefaults.aspectRatio;
+  const ttsNarrationStylePreset = isTtsNarrationStylePreset(raw.ttsNarrationStylePreset)
+    ? raw.ttsNarrationStylePreset
+    : presetDefaults.ttsNarrationStylePreset;
+  const ttsNarrationStyleNote =
+    typeof raw.ttsNarrationStyleNote === 'string' ? raw.ttsNarrationStyleNote.trim() : '';
 
   return {
     preset,
@@ -173,6 +195,8 @@ export function normalizePresentationProfile(
     targetDurationPerPartSec,
     imageStylePreset,
     aspectRatio,
+    ttsNarrationStylePreset,
+    ttsNarrationStyleNote,
   };
 }
 
