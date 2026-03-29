@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import type { ImagePrompt } from '../../schemas';
 import { Badge, Button, StatusChip } from '../ui';
-import { FIXED_IMAGE_STYLE_PRESET } from '../../../shared/constants/models';
+import { IMAGE_STYLE_PRESET_LABELS } from '../../../shared/project/imageStylePresets';
 
 interface PromptEditorProps {
   prompt: ImagePrompt;
@@ -49,7 +49,6 @@ export function PromptEditor({
       ...prompt,
       prompt: editedPrompt,
       negativePrompt: editedNegativePrompt,
-      stylePreset: FIXED_IMAGE_STYLE_PRESET,
       version: prompt.version + 1,
     });
   };
@@ -59,7 +58,6 @@ export function PromptEditor({
       ...prompt,
       prompt: editedPrompt,
       negativePrompt: editedNegativePrompt,
-      stylePreset: FIXED_IMAGE_STYLE_PRESET,
     };
     onGenerate(updatedPrompt);
   };
@@ -77,6 +75,7 @@ export function PromptEditor({
         <div className="flex flex-wrap items-center gap-2">
           <StatusChip tone={hasChanges ? 'warning' : 'success'} label={hasChanges ? '未保存' : '保存済み'} />
           <Badge tone="neutral">v{prompt.version}</Badge>
+          <Badge tone="neutral">{IMAGE_STYLE_PRESET_LABELS[prompt.stylePreset]}</Badge>
           <Badge tone="info">{prompt.aspectRatio}</Badge>
         </div>
         <div className="text-xs text-slate-500">

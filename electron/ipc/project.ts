@@ -7,9 +7,25 @@ import {
   getDefaultPresentationProfile,
   normalizePresentationProfile,
 } from '../../shared/project/presentationProfile';
+import { DEFAULT_SETTINGS, normalizeSettings } from '../../shared/settings/appSettings';
 
 // プロジェクトの保存先ディレクトリ
 const getProjectsDir = () => path.join(app.getPath('userData'), 'projects');
+const getSettingsPath = () => path.join(app.getPath('userData'), 'settings.json');
+
+async function readPresentationProfileDefaults() {
+  try {
+    const content = await fs.readFile(getSettingsPath(), 'utf-8');
+    const settings = normalizeSettings(JSON.parse(content));
+    return {
+      aspectRatio: settings.defaultAspectRatio,
+    };
+  } catch {
+    return {
+      aspectRatio: DEFAULT_SETTINGS.defaultAspectRatio,
+    };
+  }
+}
 
 // プロジェクトメタデータの型
 interface ProjectMeta {
@@ -180,6 +196,7 @@ ipcMain.handle('project:create', async (_, name: string): Promise<ProjectMeta> =
   try {
     logger.debug('[project:create] Creating project', { nameLength: name.length });
     const projectsDir = getProjectsDir();
+    const presentationDefaults = await readPresentationProfileDefaults();
     logger.debug('[project:create] Projects directory resolved');
     await fs.mkdir(projectsDir, { recursive: true });
 
@@ -199,7 +216,7 @@ ipcMain.handle('project:create', async (_, name: string): Promise<ProjectMeta> =
       id,
       name,
       schemaVersion: 'v1.2',
-      presentationProfile: getDefaultPresentationProfile(),
+      presentationProfile: getDefaultPresentationProfile('news', presentationDefaults),
       createdAt: now,
       updatedAt: now,
     };
@@ -241,6 +258,7 @@ ipcMain.handle('project:create', async (_, name: string): Promise<ProjectMeta> =
 // プロジェクト読み込み
 ipcMain.handle('project:load', async (_, projectId: string) => {
   const projectsDir = getProjectsDir();
+  const presentationDefaults = await readPresentationProfileDefaults();
   const entries = await fs.readdir(projectsDir, { withFileTypes: true });
 
   for (const entry of entries) {
@@ -275,7 +293,10 @@ ipcMain.handle('project:load', async (_, projectId: string) => {
             prompts,
             audio,
             usage,
-            presentationProfile: normalizePresentationProfile(meta.presentationProfile),
+            presentationProfile: normalizePresentationProfile(
+              meta.presentationProfile,
+              presentationDefaults
+            ),
           };
         }
       } catch {
@@ -309,6 +330,7 @@ ipcMain.handle(
   ) => {
     const now = new Date().toISOString();
     const projectPath = project.path;
+    const presentationDefaults = await readPresentationProfileDefaults();
     if (!projectPath) {
       throw new Error('Project path is missing');
     }
@@ -331,7 +353,10 @@ ipcMain.handle(
     const meta = JSON.parse(metaContent);
     meta.name = project.name;
     meta.updatedAt = now;
-    meta.presentationProfile = normalizePresentationProfile(project.presentationProfile ?? meta.presentationProfile);
+    meta.presentationProfile = normalizePresentationProfile(
+      project.presentationProfile ?? meta.presentationProfile,
+      presentationDefaults
+    );
     meta.thumbnail = project.thumbnail;
     meta.autoGenerationStatus = project.autoGenerationStatus;
 

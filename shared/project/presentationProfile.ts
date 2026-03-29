@@ -1,4 +1,14 @@
 import { z } from 'zod';
+import {
+  IMAGE_ASPECT_RATIOS,
+  IMAGE_STYLE_PRESETS,
+  DEFAULT_IMAGE_ASPECT_RATIO,
+  DEFAULT_IMAGE_STYLE_PRESET,
+  isImageAspectRatio,
+  isImageStylePreset,
+  type ImageAspectRatio,
+  type ImageStylePreset,
+} from './imageStylePresets';
 
 export const PRESENTATION_PROFILE_PRESETS = ['news', 'explain', 'report', 'short'] as const;
 export type PresentationProfilePreset = (typeof PRESENTATION_PROFILE_PRESETS)[number];
@@ -15,6 +25,13 @@ export type PresentationProfile = {
   closingLineMode: ClosingLineMode;
   closingLineText: string;
   targetDurationPerPartSec: number;
+  imageStylePreset: ImageStylePreset;
+  aspectRatio: ImageAspectRatio;
+};
+
+type PresentationProfileDefaults = {
+  imageStylePreset?: ImageStylePreset;
+  aspectRatio?: ImageAspectRatio;
 };
 
 export const PRESENTATION_PROFILE_PRESET_LABELS: Record<PresentationProfilePreset, string> = {
@@ -46,6 +63,8 @@ const presetDefaults: Record<PresentationProfilePreset, PresentationProfile> = {
     closingLineMode: 'preset',
     closingLineText: '',
     targetDurationPerPartSec: 30,
+    imageStylePreset: DEFAULT_IMAGE_STYLE_PRESET,
+    aspectRatio: DEFAULT_IMAGE_ASPECT_RATIO,
   },
   explain: {
     preset: 'explain',
@@ -53,6 +72,8 @@ const presetDefaults: Record<PresentationProfilePreset, PresentationProfile> = {
     closingLineMode: 'preset',
     closingLineText: '',
     targetDurationPerPartSec: 40,
+    imageStylePreset: DEFAULT_IMAGE_STYLE_PRESET,
+    aspectRatio: DEFAULT_IMAGE_ASPECT_RATIO,
   },
   report: {
     preset: 'report',
@@ -60,6 +81,8 @@ const presetDefaults: Record<PresentationProfilePreset, PresentationProfile> = {
     closingLineMode: 'preset',
     closingLineText: '',
     targetDurationPerPartSec: 25,
+    imageStylePreset: DEFAULT_IMAGE_STYLE_PRESET,
+    aspectRatio: DEFAULT_IMAGE_ASPECT_RATIO,
   },
   short: {
     preset: 'short',
@@ -67,6 +90,8 @@ const presetDefaults: Record<PresentationProfilePreset, PresentationProfile> = {
     closingLineMode: 'preset',
     closingLineText: '',
     targetDurationPerPartSec: 15,
+    imageStylePreset: DEFAULT_IMAGE_STYLE_PRESET,
+    aspectRatio: DEFAULT_IMAGE_ASPECT_RATIO,
   },
 };
 
@@ -87,6 +112,8 @@ export const presentationProfileSchema = z.object({
     .int()
     .min(TARGET_DURATION_RANGE.min)
     .max(TARGET_DURATION_RANGE.max),
+  imageStylePreset: z.enum(IMAGE_STYLE_PRESETS),
+  aspectRatio: z.enum(IMAGE_ASPECT_RATIOS),
 });
 
 export const DEFAULT_PRESENTATION_PROFILE: PresentationProfile = presetDefaults.news;
@@ -104,19 +131,27 @@ export function isClosingLineMode(value: unknown): value is ClosingLineMode {
 }
 
 export function getDefaultPresentationProfile(
-  preset: PresentationProfilePreset = DEFAULT_PRESENTATION_PROFILE.preset
+  preset: PresentationProfilePreset = DEFAULT_PRESENTATION_PROFILE.preset,
+  defaults: PresentationProfileDefaults = {}
 ): PresentationProfile {
-  return { ...presetDefaults[preset] };
+  return {
+    ...presetDefaults[preset],
+    imageStylePreset: defaults.imageStylePreset ?? DEFAULT_IMAGE_STYLE_PRESET,
+    aspectRatio: defaults.aspectRatio ?? DEFAULT_IMAGE_ASPECT_RATIO,
+  };
 }
 
-export function normalizePresentationProfile(input: unknown): PresentationProfile {
+export function normalizePresentationProfile(
+  input: unknown,
+  defaults: PresentationProfileDefaults = {}
+): PresentationProfile {
   const raw = input && typeof input === 'object' ? (input as Record<string, unknown>) : {};
   const preset = isPresentationProfilePreset(raw.preset) ? raw.preset : DEFAULT_PRESENTATION_PROFILE.preset;
-  const defaults = getDefaultPresentationProfile(preset);
-  const tone = isScriptTone(raw.tone) ? raw.tone : defaults.tone;
+  const presetDefaults = getDefaultPresentationProfile(preset, defaults);
+  const tone = isScriptTone(raw.tone) ? raw.tone : presetDefaults.tone;
   const closingLineMode = isClosingLineMode(raw.closingLineMode)
     ? raw.closingLineMode
-    : defaults.closingLineMode;
+    : presetDefaults.closingLineMode;
   const closingLineText = typeof raw.closingLineText === 'string' ? raw.closingLineText.trim() : '';
   const targetDurationPerPartSec =
     typeof raw.targetDurationPerPartSec === 'number' &&
@@ -124,7 +159,11 @@ export function normalizePresentationProfile(input: unknown): PresentationProfil
     raw.targetDurationPerPartSec >= TARGET_DURATION_RANGE.min &&
     raw.targetDurationPerPartSec <= TARGET_DURATION_RANGE.max
       ? raw.targetDurationPerPartSec
-      : defaults.targetDurationPerPartSec;
+      : presetDefaults.targetDurationPerPartSec;
+  const imageStylePreset = isImageStylePreset(raw.imageStylePreset)
+    ? raw.imageStylePreset
+    : presetDefaults.imageStylePreset;
+  const aspectRatio = isImageAspectRatio(raw.aspectRatio) ? raw.aspectRatio : presetDefaults.aspectRatio;
 
   return {
     preset,
@@ -132,6 +171,8 @@ export function normalizePresentationProfile(input: unknown): PresentationProfil
     closingLineMode,
     closingLineText,
     targetDurationPerPartSec,
+    imageStylePreset,
+    aspectRatio,
   };
 }
 

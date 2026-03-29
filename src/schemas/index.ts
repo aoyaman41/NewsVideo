@@ -5,6 +5,7 @@ import {
   SCRIPT_TONES,
   getDefaultPresentationProfile,
 } from '../../shared/project/presentationProfile';
+import { IMAGE_ASPECT_RATIOS, IMAGE_STYLE_PRESETS } from '../../shared/project/imageStylePresets';
 
 // ============================================
 // 基本型スキーマ
@@ -51,10 +52,10 @@ export type ImageAssetRef = z.infer<typeof imageAssetRefSchema>;
 export const imagePromptSchema = z.object({
   id: z.string().uuid(),
   partId: z.string().uuid(),
-  stylePreset: z.string(),
+  stylePreset: z.enum(IMAGE_STYLE_PRESETS),
   prompt: z.string().min(1, '画像プロンプトを入力してください'),
   negativePrompt: z.string().optional(),
-  aspectRatio: z.enum(['16:9', '1:1', '9:16']),
+  aspectRatio: z.enum(IMAGE_ASPECT_RATIOS),
   version: z.number().int().nonnegative(),
   createdAt: z.string().datetime(),
 });
@@ -174,6 +175,8 @@ export const presentationProfileSchema = z.object({
   closingLineMode: z.enum(CLOSING_LINE_MODES),
   closingLineText: z.string(),
   targetDurationPerPartSec: z.number().int().min(10).max(300),
+  imageStylePreset: z.enum(IMAGE_STYLE_PRESETS),
+  aspectRatio: z.enum(IMAGE_ASPECT_RATIOS),
 });
 
 export type PresentationProfile = z.infer<typeof presentationProfileSchema>;

@@ -12,6 +12,10 @@ import type {
   type PresentationProfilePreset,
   type ScriptTone,
 } from '../../shared/project/presentationProfile';
+import type {
+  type ImageAspectRatio,
+  type ImageStylePreset,
+} from '../../shared/project/imageStylePresets';
 
 // Electron API の型定義
 
@@ -60,12 +64,14 @@ interface ElectronAPI {
     ) => Promise<{ parts: Part[]; usage?: TokenUsage | null }>;
     generateImagePrompts: (
       parts: Part[],
-      article: Article
+      article: Article,
+      options?: ImagePromptGenerationOptions
     ) => Promise<{ prompts: ImagePrompt[]; usage?: TokenUsage | null }>;
     generateImagePromptForTarget: (
       parts: Part[],
       article: Article,
-      targetId: string
+      targetId: string,
+      options?: ImagePromptGenerationOptions
     ) => Promise<{ prompt: ImagePrompt; usage?: TokenUsage | null }>;
     applyComment: (
       target: CommentTarget,
@@ -166,6 +172,8 @@ interface PresentationProfile {
   closingLineMode: ClosingLineMode;
   closingLineText: string;
   targetDurationPerPartSec: number;
+  imageStylePreset: ImageStylePreset;
+  aspectRatio: ImageAspectRatio;
 }
 
 interface Article {
@@ -257,10 +265,10 @@ interface ImageAssetRef {
 interface ImagePrompt {
   id: string;
   partId: string;
-  stylePreset: string;
+  stylePreset: ImageStylePreset;
   prompt: string;
   negativePrompt?: string;
-  aspectRatio: '16:9' | '1:1' | '9:16';
+  aspectRatio: ImageAspectRatio;
   version: number;
   createdAt: string;
 }
@@ -303,7 +311,7 @@ interface Settings {
   geminiThinkingLevel: GeminiThinkingLevel;
   imageModel: ImageModel;
   imageResolution: ImageResolution;
-  defaultAspectRatio: '16:9' | '1:1' | '9:16';
+  defaultAspectRatio: ImageAspectRatio;
   videoResolution: '1920x1080' | '1280x720' | '3840x2160';
   videoFps: number;
   videoBitrate: string;
@@ -323,6 +331,11 @@ interface ScriptOptions {
   tone?: 'formal' | 'casual' | 'news';
   targetDurationPerPartSec?: number;
   closingLine?: string | null;
+}
+
+interface ImagePromptGenerationOptions {
+  stylePreset?: ImageStylePreset;
+  aspectRatio?: ImageAspectRatio;
 }
 
 interface CommentTarget {

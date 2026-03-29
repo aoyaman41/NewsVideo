@@ -25,6 +25,13 @@ import {
   resolvePresentationClosingLine,
   type PresentationProfilePreset,
 } from '../../shared/project/presentationProfile';
+import {
+  IMAGE_ASPECT_RATIOS,
+  IMAGE_ASPECT_RATIO_LABELS,
+  IMAGE_STYLE_PRESETS,
+  IMAGE_STYLE_PRESET_DESCRIPTIONS,
+  IMAGE_STYLE_PRESET_LABELS,
+} from '../../shared/project/imageStylePresets';
 
 export function ArticleInputPage() {
   const { projectId } = useParams<{ projectId: string }>();
@@ -383,6 +390,7 @@ export function ArticleInputPage() {
     [presentationProfile]
   );
   const presetDescription = PRESENTATION_PROFILE_PRESET_DESCRIPTIONS[presentationProfile.preset];
+  const imageStyleDescription = IMAGE_STYLE_PRESET_DESCRIPTIONS[presentationProfile.imageStylePreset];
 
   const handleSubmit = async (data: ArticleInputType) => {
     if (!projectId) return;
@@ -552,7 +560,11 @@ export function ArticleInputPage() {
         if (missingParts.length > 0) {
           const promptResult = await window.electronAPI.ai.generateImagePrompts(
             missingParts,
-            baseProject.article
+            baseProject.article,
+            {
+              stylePreset: baseProject.presentationProfile.imageStylePreset,
+              aspectRatio: baseProject.presentationProfile.aspectRatio,
+            }
           );
           await ensureNotCancelled();
           promptsAdded = promptResult.prompts;
@@ -969,7 +981,7 @@ export function ArticleInputPage() {
               <ErrorDetailPanel message={error} onDismiss={() => setError(null)} />
             )}
 
-            <Card title="スクリプト生成設定" subtitle="記事入力後の分割数と話し方を指定">
+            <Card title="生成設定" subtitle="配信スタイルと画像の既定値を指定">
               <div className="grid gap-4 md:grid-cols-2">
                 <div>
                   <label className="mb-1 block text-xs font-semibold text-slate-600">
@@ -1062,6 +1074,54 @@ export function ArticleInputPage() {
                   </select>
                   <p className="mt-2 text-xs text-slate-500">
                     現在の出力予定: {closingLinePreview ?? '締め文なし'}
+                  </p>
+                </div>
+
+                <div>
+                  <label className="mb-1 block text-xs font-semibold text-slate-600">
+                    画像スタイル
+                  </label>
+                  <select
+                    value={presentationProfile.imageStylePreset}
+                    onChange={(e) =>
+                      setPresentationProfile((prev) => ({
+                        ...prev,
+                        imageStylePreset: e.target.value as PresentationProfile['imageStylePreset'],
+                      }))
+                    }
+                    className="nv-input"
+                  >
+                    {IMAGE_STYLE_PRESETS.map((preset) => (
+                      <option key={preset} value={preset}>
+                        {IMAGE_STYLE_PRESET_LABELS[preset]}
+                      </option>
+                    ))}
+                  </select>
+                  <p className="mt-2 text-xs text-slate-500">{imageStyleDescription}</p>
+                </div>
+
+                <div>
+                  <label className="mb-1 block text-xs font-semibold text-slate-600">
+                    画像アスペクト比
+                  </label>
+                  <select
+                    value={presentationProfile.aspectRatio}
+                    onChange={(e) =>
+                      setPresentationProfile((prev) => ({
+                        ...prev,
+                        aspectRatio: e.target.value as PresentationProfile['aspectRatio'],
+                      }))
+                    }
+                    className="nv-input"
+                  >
+                    {IMAGE_ASPECT_RATIOS.map((aspectRatio) => (
+                      <option key={aspectRatio} value={aspectRatio}>
+                        {IMAGE_ASPECT_RATIO_LABELS[aspectRatio]}
+                      </option>
+                    ))}
+                  </select>
+                  <p className="mt-2 text-xs text-slate-500">
+                    画像プロンプト生成と画像生成の両方で使われます。
                   </p>
                 </div>
               </div>
