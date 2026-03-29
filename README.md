@@ -152,6 +152,7 @@ npm test
 - リリース前スモークテスト: [docs/リリース前スモークテスト.md](docs/リリース前スモークテスト.md)
 - 公開リリース手順: [docs/公開リリース手順.md](docs/公開リリース手順.md)
 - 対応環境と制約: [docs/対応環境と制約.md](docs/対応環境と制約.md)
+- セキュリティ報告方針: [SECURITY.md](SECURITY.md)
 - Issue を開く前に、サポート方針と対応範囲を確認してください
 - バグ報告 / 要望 / 使い方の質問: [GitHub Issues](https://github.com/aoyaman41/NewsVideo/issues/new/choose)
 - 開発参加の前提: [CONTRIBUTING.md](CONTRIBUTING.md)
