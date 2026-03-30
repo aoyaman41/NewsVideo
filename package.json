@@ -1,6 +1,6 @@
 {
   "name": "newsvideo",
-  "version": "2.0.5",
+  "version": "2.0.6",
   "type": "module",
   "description": "報道動画自動生成アプリケーション",
   "main": "dist-electron/main.js",
