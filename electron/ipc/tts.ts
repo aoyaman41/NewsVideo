@@ -394,10 +394,7 @@ async function synthesizeGeminiTts(
   const usage = response.usageMetadata
     ? {
         inputTokens: response.usageMetadata.promptTokenCount ?? 0,
-        outputTokens:
-          response.usageMetadata.responseTokenCount ??
-          response.usageMetadata.candidatesTokenCount ??
-          0,
+        outputTokens: response.usageMetadata.candidatesTokenCount ?? 0,
         totalTokens: response.usageMetadata.totalTokenCount,
         model: GEMINI_TTS_MODEL_ID,
       }
