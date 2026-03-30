@@ -48,6 +48,7 @@ tsconfig.node.tsbuildinfo
 # Bundled binaries (generated)
 resources/ffmpeg/ffmpeg
 resources/ffmpeg/ffprobe
+resources/native-video-renderer/native-video-renderer
 
 # Testing
 coverage/
