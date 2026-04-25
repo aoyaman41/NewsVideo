@@ -6,6 +6,11 @@ import * as fs from 'fs/promises';
 import * as path from 'path';
 import { GoogleGenAI } from '@google/genai';
 import {
+  DEFAULT_GEMINI_TTS_MODEL,
+  isGeminiTtsModel,
+  type GeminiTtsModel,
+} from '../../shared/constants/models';
+import {
   DEFAULT_TTS_NARRATION_STYLE_PRESET,
   buildTtsNarrationInstruction,
   isTtsNarrationStylePreset,
@@ -20,6 +25,7 @@ type TTSEngine = 'google_tts' | 'gemini_tts' | 'macos_tts';
 
 interface TTSOptions {
   ttsEngine: TTSEngine;
+  ttsModel?: GeminiTtsModel;
   voiceName: string;
   languageCode: string;
   speakingRate: number;
@@ -305,8 +311,6 @@ async function synthesizeGoogleTts(
   };
 }
 
-const GEMINI_TTS_MODEL_ID = 'gemini-2.5-pro-preview-tts';
-
 async function synthesizeGeminiTts(
   text: string,
   options: TTSOptions,
@@ -331,13 +335,14 @@ async function synthesizeGeminiTts(
     narrationStylePreset,
     options.narrationStyleNote
   );
+  const modelId = isGeminiTtsModel(options.ttsModel) ? options.ttsModel : DEFAULT_GEMINI_TTS_MODEL;
 
   const ai = new GoogleGenAI({ apiKey });
 
   const response = await withRetry(
     async () => {
       return ai.models.generateContent({
-        model: GEMINI_TTS_MODEL_ID,
+        model: modelId,
         contents: `${narrationInstruction}\n\n${promptText}`,
         config: {
           responseModalities: ['AUDIO'],
@@ -396,7 +401,7 @@ async function synthesizeGeminiTts(
         inputTokens: response.usageMetadata.promptTokenCount ?? 0,
         outputTokens: response.usageMetadata.candidatesTokenCount ?? 0,
         totalTokens: response.usageMetadata.totalTokenCount,
-        model: GEMINI_TTS_MODEL_ID,
+        model: modelId,
       }
     : null;
 

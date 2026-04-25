@@ -8,6 +8,7 @@ import {
 describe('parseSettingsUpdate', () => {
   it('accepts valid fields and strips unknown keys', () => {
     const parsed = parseSettingsUpdate({
+      ttsModel: 'gemini-2.5-flash-preview-tts',
       imageModel: 'gemini-3-pro-image-preview',
       imageResolution: '2k',
       openaiReasoningEffort: 'high',
@@ -15,6 +16,7 @@ describe('parseSettingsUpdate', () => {
       unknownKey: 'ignored',
     });
 
+    expect(parsed.ttsModel).toBe('gemini-2.5-flash-preview-tts');
     expect(parsed.imageModel).toBe('gemini-3-pro-image-preview');
     expect(parsed.imageResolution).toBe('2k');
     expect(parsed.openaiReasoningEffort).toBe('high');
@@ -39,10 +41,19 @@ describe('normalizeSettings', () => {
     expect(normalized.ttsVoice).toBe(DEFAULT_SETTINGS.ttsVoice);
   });
 
+  it('migrates the old Gemini 3.1 Flash TTS setting to the current Flash TTS model', () => {
+    const normalized = normalizeSettings({
+      ttsModel: 'gemini-3.1-flash-tts-preview',
+    });
+
+    expect(normalized.ttsModel).toBe('gemini-2.5-flash-preview-tts');
+  });
+
   it('falls back to defaults for invalid model selections and keeps cost', () => {
     const normalized = normalizeSettings({
       scriptTextModel: 'bad-model',
       imagePromptTextModel: 'bad-model',
+      ttsModel: 'bad-model',
       openaiReasoningEffort: 'bad-effort',
       geminiThinkingLevel: 'bad-level',
       imageModel: 'bad-model',
@@ -52,6 +63,7 @@ describe('normalizeSettings', () => {
 
     expect(normalized.scriptTextModel).toBe(DEFAULT_SETTINGS.scriptTextModel);
     expect(normalized.imagePromptTextModel).toBe(DEFAULT_SETTINGS.imagePromptTextModel);
+    expect(normalized.ttsModel).toBe(DEFAULT_SETTINGS.ttsModel);
     expect(normalized.openaiReasoningEffort).toBe(DEFAULT_SETTINGS.openaiReasoningEffort);
     expect(normalized.geminiThinkingLevel).toBe(DEFAULT_SETTINGS.geminiThinkingLevel);
     expect(normalized.imageModel).toBe(DEFAULT_SETTINGS.imageModel);

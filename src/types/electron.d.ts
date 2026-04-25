@@ -1,5 +1,6 @@
 import type {
   type GeminiThinkingLevel,
+  type GeminiTtsModel,
   type ImageModel,
   type ImageResolution,
   type ImageSizeTier,
@@ -83,7 +84,11 @@ interface ElectronAPI {
 
   image: {
     generate: (prompt: ImagePrompt, projectId: string) => Promise<ImageAsset>;
-    generateBatch: (prompts: ImagePrompt[], projectId: string) => Promise<ImageAsset[]>;
+    generateBatch: (
+      prompts: ImagePrompt[],
+      projectId: string
+    ) => Promise<ImageBatchGenerationResult>;
+    cancelBatch: (projectId?: string) => Promise<{ success: boolean }>;
     delete: (filePath: string) => Promise<{ success: boolean }>;
     import: (sourcePath: string, projectId: string) => Promise<ImageAsset>;
   };
@@ -176,6 +181,8 @@ interface PresentationProfile {
   targetDurationPerPartSec: number;
   imageStylePreset: ImageStylePreset;
   aspectRatio: ImageAspectRatio;
+  styleReferenceImageIds: string[];
+  styleReferenceNote: string;
   ttsNarrationStylePreset: TtsNarrationStylePreset;
   ttsNarrationStyleNote: string;
   closingCardEnabled: boolean;
@@ -226,6 +233,8 @@ interface ImageAsset {
       imageSizeTier: ImageSizeTier;
       aspectRatio: '16:9' | '1:1' | '9:16';
       inputTokens?: number;
+      textInputTokens?: number;
+      imageInputTokens?: number;
       outputTokens?: number;
       totalTokens?: number;
     };
@@ -239,6 +248,8 @@ interface UsageRecord {
   model: string;
   operation: string;
   inputTokens?: number;
+  textInputTokens?: number;
+  imageInputTokens?: number;
   outputTokens?: number;
   cachedInputTokens?: number;
   imageCount?: number;
@@ -271,6 +282,19 @@ interface ImageAssetRef {
   displayDurationSec?: number;
 }
 
+interface ImageBatchGenerationError {
+  index: number;
+  promptId: string;
+  partId?: string;
+  error: string;
+}
+
+interface ImageBatchGenerationResult {
+  images: ImageAsset[];
+  errors: ImageBatchGenerationError[];
+  requestedCount: number;
+}
+
 interface ImagePrompt {
   id: string;
   partId: string;
@@ -278,6 +302,24 @@ interface ImagePrompt {
   prompt: string;
   negativePrompt?: string;
   aspectRatio: ImageAspectRatio;
+  visualCopy?: {
+    headline: string;
+    subhead?: string;
+    keyNumber?: string;
+    bullets: string[];
+  };
+  layoutPlan?: {
+    intent: string;
+    composition: string;
+    objects: Array<{
+      type: string;
+      role: string;
+      position: string;
+      content: string;
+      emphasis: string;
+    }>;
+  };
+  styleReferenceImageIds?: string[];
   version: number;
   createdAt: string;
 }
@@ -311,6 +353,7 @@ interface Comment {
 // 設定関連の型
 interface Settings {
   ttsEngine: TTSEngine;
+  ttsModel: GeminiTtsModel;
   ttsVoice: string;
   ttsSpeakingRate: number;
   ttsPitch: number;
@@ -345,6 +388,8 @@ interface ScriptOptions {
 interface ImagePromptGenerationOptions {
   stylePreset?: ImageStylePreset;
   aspectRatio?: ImageAspectRatio;
+  styleReferenceImageIds?: string[];
+  styleReferenceNote?: string;
 }
 
 interface CommentTarget {
@@ -355,6 +400,7 @@ interface CommentTarget {
 
 interface TTSOptions {
   ttsEngine: TTSEngine;
+  ttsModel?: GeminiTtsModel;
   voiceName: string;
   languageCode: string;
   speakingRate: number;
@@ -376,6 +422,15 @@ interface CostRates {
   openai: {
     defaultModel: string;
     textRatesByModel: Record<
+      string,
+      {
+        inputPer1MTokensUsd: number;
+        outputPer1MTokensUsd: number;
+        cachedInputPer1MTokensUsd?: number;
+      }
+    >;
+    imageModel: string;
+    imageRatesByModel: Record<
       string,
       {
         inputPer1MTokensUsd: number;

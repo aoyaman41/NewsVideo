@@ -33,6 +33,8 @@ export const imageAssetSchema = z.object({
         imageSizeTier: z.enum(['1K', '2K', '4K']),
         aspectRatio: z.enum(['16:9', '1:1', '9:16']),
         inputTokens: z.number().int().nonnegative().optional(),
+        textInputTokens: z.number().int().nonnegative().optional(),
+        imageInputTokens: z.number().int().nonnegative().optional(),
         outputTokens: z.number().int().nonnegative().optional(),
         totalTokens: z.number().int().nonnegative().optional(),
       })
@@ -58,6 +60,30 @@ export const imagePromptSchema = z.object({
   prompt: z.string().min(1, '画像プロンプトを入力してください'),
   negativePrompt: z.string().optional(),
   aspectRatio: z.enum(IMAGE_ASPECT_RATIOS),
+  visualCopy: z
+    .object({
+      headline: z.string(),
+      subhead: z.string().optional(),
+      keyNumber: z.string().optional(),
+      bullets: z.array(z.string()),
+    })
+    .optional(),
+  layoutPlan: z
+    .object({
+      intent: z.string(),
+      composition: z.string(),
+      objects: z.array(
+        z.object({
+          type: z.string(),
+          role: z.string(),
+          position: z.string(),
+          content: z.string(),
+          emphasis: z.string(),
+        })
+      ),
+    })
+    .optional(),
+  styleReferenceImageIds: z.array(z.string().uuid()).optional(),
   version: z.number().int().nonnegative(),
   createdAt: z.string().datetime(),
 });
@@ -108,6 +134,8 @@ export const usageRecordSchema = z.object({
   model: z.string(),
   operation: z.string(),
   inputTokens: z.number().int().nonnegative().optional(),
+  textInputTokens: z.number().int().nonnegative().optional(),
+  imageInputTokens: z.number().int().nonnegative().optional(),
   outputTokens: z.number().int().nonnegative().optional(),
   cachedInputTokens: z.number().int().nonnegative().optional(),
   imageCount: z.number().int().nonnegative().optional(),
@@ -179,6 +207,8 @@ export const presentationProfileSchema = z.object({
   targetDurationPerPartSec: z.number().int().min(10).max(300),
   imageStylePreset: z.enum(IMAGE_STYLE_PRESETS),
   aspectRatio: z.enum(IMAGE_ASPECT_RATIOS),
+  styleReferenceImageIds: z.array(z.string().uuid()),
+  styleReferenceNote: z.string(),
   ttsNarrationStylePreset: z.enum(TTS_NARRATION_STYLE_PRESETS),
   ttsNarrationStyleNote: z.string(),
   closingCardEnabled: z.boolean(),

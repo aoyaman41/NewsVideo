@@ -4,6 +4,8 @@ import {
   DEFAULT_IMAGE_MODEL,
   GEMINI_TEXT_COMPLETION_MODEL,
   OPENAI_TEXT_COMPLETION_MODEL,
+  getImageModelProvider,
+  isImageModel,
   type ImageResolution,
   type ImageSizeTier,
 } from '../../shared/constants/models';
@@ -19,11 +21,14 @@ type TokenUsage = {
 
 type ImageAspectRatio = '16:9' | '1:1' | '9:16';
 
-type GeminiImageUsageDetails = {
+type ImageUsageDetails = {
+  provider: 'openai' | 'gemini';
   imageCount: number;
   operation: string;
   model?: string;
   inputTokens?: number;
+  textInputTokens?: number;
+  imageInputTokens?: number;
   outputTokens?: number;
   imageResolution?: ImageResolution;
   imageSizeTier?: ImageSizeTier;
@@ -73,16 +78,22 @@ export function createGeminiTtsUsageRecord(
   };
 }
 
-export function createGeminiImageUsageRecord(details: GeminiImageUsageDetails): UsageRecord | null {
+export function createImageUsageRecord(details: ImageUsageDetails): UsageRecord | null {
   const count = clampNonNegative(details.imageCount);
   if (count <= 0) return null;
   return {
     id: crypto.randomUUID(),
-    provider: 'gemini',
+    provider: details.provider,
     category: 'image',
-    model: details.model || DEFAULT_IMAGE_MODEL,
+    model: details.model || (details.provider === 'openai' ? 'gpt-image-2' : DEFAULT_IMAGE_MODEL),
     operation: details.operation,
     inputTokens: clampNonNegative(details.inputTokens),
+    ...(details.textInputTokens !== undefined
+      ? { textInputTokens: clampNonNegative(details.textInputTokens) }
+      : {}),
+    ...(details.imageInputTokens !== undefined
+      ? { imageInputTokens: clampNonNegative(details.imageInputTokens) }
+      : {}),
     outputTokens: clampNonNegative(details.outputTokens),
     imageCount: count,
     imageResolution: details.imageResolution,
@@ -92,7 +103,7 @@ export function createGeminiImageUsageRecord(details: GeminiImageUsageDetails): 
   };
 }
 
-export function createGeminiImageUsageRecordFromAssets(
+export function createImageUsageRecordFromAssets(
   images: ImageAsset[],
   operation: string
 ): UsageRecord | null {
@@ -100,27 +111,48 @@ export function createGeminiImageUsageRecordFromAssets(
     .map((image) => image.metadata.generation)
     .filter((metadata): metadata is NonNullable<ImageAsset['metadata']['generation']> => !!metadata);
 
-  if (generated.length === 0) {
-    return createGeminiImageUsageRecord({
-      imageCount: images.length,
-      operation,
-    });
-  }
+  if (generated.length === 0) return null;
 
   const first = generated[0];
   const sameModel = generated.every((metadata) => metadata.model === first.model);
   const sameResolution = generated.every((metadata) => metadata.resolution === first.resolution);
   const sameSizeTier = generated.every((metadata) => metadata.imageSizeTier === first.imageSizeTier);
   const sameAspectRatio = generated.every((metadata) => metadata.aspectRatio === first.aspectRatio);
+  const provider = isImageModel(first.model) ? getImageModelProvider(first.model) : 'gemini';
+  const hasTextInputTokens = generated.some(
+    (metadata) => typeof metadata.textInputTokens === 'number'
+  );
+  const hasImageInputTokens = generated.some(
+    (metadata) => typeof metadata.imageInputTokens === 'number'
+  );
 
-  return createGeminiImageUsageRecord({
+  return createImageUsageRecord({
+    provider,
     imageCount: images.length,
     operation,
     model: sameModel ? first.model : undefined,
     inputTokens: generated.reduce((sum, metadata) => sum + (metadata.inputTokens ?? 0), 0),
+    ...(hasTextInputTokens
+      ? {
+          textInputTokens: generated.reduce(
+            (sum, metadata) => sum + (metadata.textInputTokens ?? 0),
+            0
+          ),
+        }
+      : {}),
+    ...(hasImageInputTokens
+      ? {
+          imageInputTokens: generated.reduce(
+            (sum, metadata) => sum + (metadata.imageInputTokens ?? 0),
+            0
+          ),
+        }
+      : {}),
     outputTokens: generated.reduce((sum, metadata) => sum + (metadata.outputTokens ?? 0), 0),
     imageResolution: sameResolution ? first.resolution : undefined,
     imageSizeTier: sameSizeTier ? first.imageSizeTier : undefined,
     imageAspectRatio: sameAspectRatio ? first.aspectRatio : undefined,
   });
 }
+
+export const createGeminiImageUsageRecordFromAssets = createImageUsageRecordFromAssets;
