@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
+  DEFAULT_GEMINI_TTS_MODEL,
   getSupportedGeminiThinkingLevels,
   getSupportedOpenAIReasoningEfforts,
+  getGeminiTtsModelLabel,
+  isGeminiTtsModel,
   supportsOpenAITemperature,
 } from './models';
 
@@ -39,5 +42,15 @@ describe('getSupportedGeminiThinkingLevels', () => {
       'medium',
       'high',
     ]);
+  });
+});
+
+describe('Gemini TTS models', () => {
+  it('includes Gemini 3.1 Flash TTS as the default selectable TTS model', () => {
+    expect(DEFAULT_GEMINI_TTS_MODEL).toBe('gemini-3.1-flash-tts-preview');
+    expect(isGeminiTtsModel('gemini-3.1-flash-tts-preview')).toBe(true);
+    expect(getGeminiTtsModelLabel('gemini-3.1-flash-tts-preview')).toBe(
+      'Gemini 3.1 Flash TTS Preview'
+    );
   });
 });

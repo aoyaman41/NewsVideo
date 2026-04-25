@@ -71,17 +71,19 @@ export const IMAGE_RESOLUTION_LABELS: Record<ImageResolution, string> = {
 };
 
 export const GEMINI_TTS_MODELS = [
+  'gemini-3.1-flash-tts-preview',
   'gemini-2.5-pro-preview-tts',
   'gemini-2.5-flash-preview-tts',
 ] as const;
 export type GeminiTtsModel = (typeof GEMINI_TTS_MODELS)[number];
 
 export const GEMINI_TTS_MODEL_LABELS: Record<GeminiTtsModel, string> = {
+  'gemini-3.1-flash-tts-preview': 'Gemini 3.1 Flash TTS Preview',
   'gemini-2.5-pro-preview-tts': 'Gemini 2.5 Pro TTS Preview',
   'gemini-2.5-flash-preview-tts': 'Gemini 2.5 Flash TTS Preview',
 };
 
-export const DEFAULT_GEMINI_TTS_MODEL: GeminiTtsModel = 'gemini-2.5-pro-preview-tts';
+export const DEFAULT_GEMINI_TTS_MODEL: GeminiTtsModel = 'gemini-3.1-flash-tts-preview';
 
 const TEXT_COMPLETION_MODEL_SET = new Set<string>(TEXT_COMPLETION_MODELS);
 const OPENAI_TEXT_COMPLETION_MODEL_SET = new Set<string>(OPENAI_TEXT_COMPLETION_MODELS);

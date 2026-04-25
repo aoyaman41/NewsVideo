@@ -147,8 +147,8 @@ const DEFAULT_GEMINI_TTS_RATES: Record<string, TokenRate> = {
     outputPer1MTokensUsd: 10.0,
   },
   'gemini-3.1-flash-tts-preview': {
-    inputPer1MTokensUsd: 0.5,
-    outputPer1MTokensUsd: 10.0,
+    inputPer1MTokensUsd: 1.0,
+    outputPer1MTokensUsd: 20.0,
   },
 };
 

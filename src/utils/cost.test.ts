@@ -172,6 +172,13 @@ describe('normalizeCostRates', () => {
       inputPer1MTokensUsd: 1.5,
       outputPer1MTokensUsd: 25,
     });
+    expect(DEFAULT_COST_RATES.gemini.ttsModel).toBe('gemini-3.1-flash-tts-preview');
+    expect(DEFAULT_COST_RATES.gemini.ttsRatesByModel['gemini-3.1-flash-tts-preview']).toMatchObject(
+      {
+        inputPer1MTokensUsd: 1,
+        outputPer1MTokensUsd: 20,
+      }
+    );
 
     const legacyImageCost = estimateUsageCostUsd(
       buildUsageRecord({
