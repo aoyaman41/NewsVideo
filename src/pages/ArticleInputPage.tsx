@@ -33,6 +33,10 @@ import {
   IMAGE_STYLE_PRESET_LABELS,
 } from '../../shared/project/imageStylePresets';
 import {
+  DEFAULT_GEMINI_TTS_MODEL,
+  type GeminiTtsModel,
+} from '../../shared/constants/models';
+import {
   TTS_NARRATION_STYLE_DESCRIPTIONS,
   TTS_NARRATION_STYLE_LABELS,
   TTS_NARRATION_STYLE_PRESETS,
@@ -335,6 +339,7 @@ export function ArticleInputPage() {
 
   const buildTtsOptions = (settings: {
     ttsEngine?: string;
+    ttsModel?: GeminiTtsModel;
     ttsVoice?: string;
     ttsSpeakingRate?: number;
     ttsPitch?: number;
@@ -345,6 +350,7 @@ export function ArticleInputPage() {
 
     return {
       ttsEngine: (settings.ttsEngine as 'google_tts' | 'gemini_tts' | 'macos_tts') || 'gemini_tts',
+      ttsModel: settings.ttsModel || DEFAULT_GEMINI_TTS_MODEL,
       voiceName,
       languageCode,
       speakingRate: Number.isFinite(settings.ttsSpeakingRate) ? settings.ttsSpeakingRate! : 1.0,

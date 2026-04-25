@@ -1,5 +1,6 @@
 import type {
   type GeminiThinkingLevel,
+  type GeminiTtsModel,
   type ImageModel,
   type ImageResolution,
   type ImageSizeTier,
@@ -311,6 +312,7 @@ interface Comment {
 // 設定関連の型
 interface Settings {
   ttsEngine: TTSEngine;
+  ttsModel: GeminiTtsModel;
   ttsVoice: string;
   ttsSpeakingRate: number;
   ttsPitch: number;
@@ -355,6 +357,7 @@ interface CommentTarget {
 
 interface TTSOptions {
   ttsEngine: TTSEngine;
+  ttsModel?: GeminiTtsModel;
   voiceName: string;
   languageCode: string;
   speakingRate: number;
@@ -376,6 +379,15 @@ interface CostRates {
   openai: {
     defaultModel: string;
     textRatesByModel: Record<
+      string,
+      {
+        inputPer1MTokensUsd: number;
+        outputPer1MTokensUsd: number;
+        cachedInputPer1MTokensUsd?: number;
+      }
+    >;
+    imageModel: string;
+    imageRatesByModel: Record<
       string,
       {
         inputPer1MTokensUsd: number;
