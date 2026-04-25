@@ -1,8 +1,9 @@
 import type { UsageRecord } from '../schemas';
 import {
+  DEFAULT_GEMINI_TTS_MODEL,
   DEFAULT_IMAGE_MODEL,
   DEFAULT_SCRIPT_TEXT_MODEL,
-  IMAGE_MODELS,
+  GEMINI_IMAGE_MODELS,
   IMAGE_SIZE_TIERS,
   type ImageResolution,
   type ImageSizeTier,
@@ -29,11 +30,15 @@ type GeminiImageRate = {
   legacyInputPerImageUsd?: number;
 };
 
+type OpenAIImageRate = TokenRate;
+
 export type CostRates = {
   currency: 'USD';
   openai: {
     defaultModel: string;
     textRatesByModel: Record<string, TokenRate>;
+    imageModel: string;
+    imageRatesByModel: Record<string, OpenAIImageRate>;
     model?: string;
     inputPer1MTokensUsd?: number;
     outputPer1MTokensUsd?: number;
@@ -93,6 +98,11 @@ function cloneImageRate(rate: GeminiImageRate): GeminiImageRate {
 }
 
 const DEFAULT_OPENAI_TEXT_RATES: Record<string, TokenRate> = {
+  'gpt-5.5': {
+    inputPer1MTokensUsd: 5.0,
+    cachedInputPer1MTokensUsd: 0.5,
+    outputPer1MTokensUsd: 30.0,
+  },
   'gpt-5.4': {
     inputPer1MTokensUsd: 2.5,
     cachedInputPer1MTokensUsd: 0.25,
@@ -102,6 +112,14 @@ const DEFAULT_OPENAI_TEXT_RATES: Record<string, TokenRate> = {
     inputPer1MTokensUsd: 1.75,
     cachedInputPer1MTokensUsd: 0.175,
     outputPer1MTokensUsd: 14.0,
+  },
+};
+
+const DEFAULT_OPENAI_IMAGE_RATES: Record<string, OpenAIImageRate> = {
+  'gpt-image-2': {
+    inputPer1MTokensUsd: 5.0,
+    cachedInputPer1MTokensUsd: 1.25,
+    outputPer1MTokensUsd: 30.0,
   },
 };
 
@@ -126,6 +144,10 @@ const DEFAULT_GEMINI_TTS_RATES: Record<string, TokenRate> = {
   'gemini-2.5-pro-preview-tts': {
     inputPer1MTokensUsd: 1.0,
     outputPer1MTokensUsd: 20.0,
+  },
+  'gemini-3.1-flash-tts-preview': {
+    inputPer1MTokensUsd: 0.5,
+    outputPer1MTokensUsd: 10.0,
   },
 };
 
@@ -154,11 +176,13 @@ export const DEFAULT_COST_RATES: CostRates = {
   openai: {
     defaultModel: DEFAULT_SCRIPT_TEXT_MODEL,
     textRatesByModel: { ...DEFAULT_OPENAI_TEXT_RATES },
+    imageModel: 'gpt-image-2',
+    imageRatesByModel: { ...DEFAULT_OPENAI_IMAGE_RATES },
   },
   gemini: {
     defaultTextModel: 'gemini-3.1-pro',
     textRatesByModel: { ...DEFAULT_GEMINI_TEXT_RATES },
-    ttsModel: 'gemini-2.5-pro-preview-tts',
+    ttsModel: DEFAULT_GEMINI_TTS_MODEL,
     ttsRatesByModel: { ...DEFAULT_GEMINI_TTS_RATES },
     imageModel: DEFAULT_IMAGE_MODEL,
     imageRatesByModel: Object.fromEntries(
@@ -307,6 +331,8 @@ export function normalizeCostRates(input?: unknown): CostRates {
     openai?: {
       defaultModel?: unknown;
       textRatesByModel?: unknown;
+      imageModel?: unknown;
+      imageRatesByModel?: unknown;
       model?: unknown;
       inputPer1MTokensUsd?: unknown;
       outputPer1MTokensUsd?: unknown;
@@ -349,6 +375,17 @@ export function normalizeCostRates(input?: unknown): CostRates {
   );
   if (legacyOpenAiRate) {
     openaiTextRatesByModel[openaiDefaultModel] = legacyOpenAiRate;
+  }
+  const openaiImageModel =
+    typeof raw.openai?.imageModel === 'string' && raw.openai.imageModel.trim().length > 0
+      ? raw.openai.imageModel
+      : base.openai.imageModel;
+  const openaiImageRatesByModel = cloneTokenRates(base.openai.imageRatesByModel);
+  if (raw.openai?.imageRatesByModel && typeof raw.openai.imageRatesByModel === 'object') {
+    for (const [model, rate] of Object.entries(raw.openai.imageRatesByModel as Record<string, unknown>)) {
+      const parsed = parseTokenRate(rate, true);
+      if (parsed) openaiImageRatesByModel[model] = parsed;
+    }
   }
 
   const geminiDefaultTextModel =
@@ -413,7 +450,7 @@ export function normalizeCostRates(input?: unknown): CostRates {
     };
   }
 
-  for (const model of IMAGE_MODELS) {
+  for (const model of GEMINI_IMAGE_MODELS) {
     if (!geminiImageRatesByModel[model]) {
       geminiImageRatesByModel[model] = cloneImageRate(DEFAULT_GEMINI_IMAGE_RATES[DEFAULT_IMAGE_MODEL]);
     }
@@ -424,6 +461,8 @@ export function normalizeCostRates(input?: unknown): CostRates {
     openai: {
       defaultModel: openaiDefaultModel,
       textRatesByModel: openaiTextRatesByModel,
+      imageModel: openaiImageModel,
+      imageRatesByModel: openaiImageRatesByModel,
       model:
         typeof raw.openai?.model === 'string' && raw.openai.model.trim().length > 0
           ? raw.openai.model
@@ -451,7 +490,27 @@ export function normalizeCostRates(input?: unknown): CostRates {
 
 export function estimateUsageCostUsd(record: UsageRecord, rates: CostRates): number {
   if (record.provider === 'openai') {
-    const rate = resolveRecordMapRate(record.model, rates.openai.defaultModel, rates.openai.textRatesByModel);
+    if (record.category === 'image') {
+      const rate = resolveRecordMapRate(
+        record.model,
+        rates.openai.imageModel,
+        rates.openai.imageRatesByModel
+      );
+      const totalInputTokens = Math.max(0, record.inputTokens ?? 0);
+      const cachedInputTokens = Math.max(0, Math.min(record.cachedInputTokens ?? 0, totalInputTokens));
+      const uncachedInputTokens = totalInputTokens - cachedInputTokens;
+      const input = (uncachedInputTokens * rate.inputPer1MTokensUsd) / 1_000_000;
+      const cachedInput =
+        (cachedInputTokens * (rate.cachedInputPer1MTokensUsd ?? rate.inputPer1MTokensUsd)) / 1_000_000;
+      const output = ((record.outputTokens ?? 0) * rate.outputPer1MTokensUsd) / 1_000_000;
+      return input + cachedInput + output;
+    }
+
+    const rate = resolveRecordMapRate(
+      record.model,
+      rates.openai.defaultModel,
+      rates.openai.textRatesByModel
+    );
     const totalInputTokens = Math.max(0, record.inputTokens ?? 0);
     const cachedInputTokens = Math.max(0, Math.min(record.cachedInputTokens ?? 0, totalInputTokens));
     const uncachedInputTokens = totalInputTokens - cachedInputTokens;

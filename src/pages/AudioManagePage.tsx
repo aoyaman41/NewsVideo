@@ -16,6 +16,11 @@ import type { AudioAsset, Project, UsageRecord } from '../schemas';
 import { toLocalFileUrl } from '../utils/toLocalFileUrl';
 import { createGeminiTtsUsageRecord } from '../utils/usage';
 import {
+  DEFAULT_GEMINI_TTS_MODEL,
+  getGeminiTtsModelLabel,
+  type GeminiTtsModel,
+} from '../../shared/constants/models';
+import {
   TTS_NARRATION_STYLE_DESCRIPTIONS,
   TTS_NARRATION_STYLE_LABELS,
 } from '../../shared/project/ttsNarrationStyles';
@@ -28,6 +33,7 @@ type TTSEngine = 'google_tts' | 'gemini_tts' | 'macos_tts';
 
 interface Settings {
   ttsEngine: TTSEngine;
+  ttsModel: GeminiTtsModel;
   ttsVoice: string;
   ttsSpeakingRate: number;
   ttsPitch: number;
@@ -35,6 +41,7 @@ interface Settings {
 
 const defaultSettings: Settings = {
   ttsEngine: 'gemini_tts',
+  ttsModel: DEFAULT_GEMINI_TTS_MODEL,
   ttsVoice: 'Charon',
   ttsSpeakingRate: 1.0,
   ttsPitch: 0,
@@ -149,6 +156,7 @@ export function AudioManagePage() {
     const narrationProfile = project?.presentationProfile;
     return {
       ttsEngine: settings.ttsEngine,
+      ttsModel: settings.ttsModel,
       voiceName: settings.ttsVoice,
       languageCode: guessLanguageCode(settings.ttsVoice),
       speakingRate: settings.ttsSpeakingRate,
@@ -562,9 +570,10 @@ export function AudioManagePage() {
                 <div className="flex flex-wrap items-center gap-2">
                   <Badge tone="info">Gemini TTS</Badge>
                   <span className="text-sm font-semibold text-slate-900">
-                    gemini-2.5-pro-preview-tts
+                    {getGeminiTtsModelLabel(settings.ttsModel)}
                   </span>
                 </div>
+                <div className="mt-2 text-xs text-slate-500">モデルID: {settings.ttsModel}</div>
                 <p className="mt-2 text-xs text-slate-500">
                   現在のアプリではこのエンジンを使用します。話速とピッチの UI 調整は未対応です。
                 </p>

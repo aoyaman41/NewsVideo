@@ -34,6 +34,21 @@ describe('estimateUsageCostUsd', () => {
     expect(cost).toBeCloseTo(0.0082, 10);
   });
 
+  it('prices GPT-5.5 text generations with default OpenAI rates', () => {
+    const record = buildUsageRecord({
+      provider: 'openai',
+      category: 'text',
+      model: 'gpt-5.5',
+      inputTokens: 1000,
+      cachedInputTokens: 500,
+      outputTokens: 200,
+    });
+
+    const cost = estimateUsageCostUsd(record, DEFAULT_COST_RATES);
+
+    expect(cost).toBeCloseTo(0.00875, 10);
+  });
+
   it('prices Gemini text generations instead of returning zero', () => {
     const record = buildUsageRecord({
       provider: 'gemini',
@@ -93,6 +108,22 @@ describe('estimateUsageCostUsd', () => {
 
     expect(cost).toBeCloseTo(0.0783, 10);
   });
+
+  it('prices OpenAI image generations with GPT Image 2 token rates', () => {
+    const record = buildUsageRecord({
+      provider: 'openai',
+      category: 'image',
+      model: 'gpt-image-2',
+      inputTokens: 2_000,
+      outputTokens: 1_290,
+      imageCount: 1,
+      imageSizeTier: '1K',
+    });
+
+    const cost = estimateUsageCostUsd(record, DEFAULT_COST_RATES);
+
+    expect(cost).toBeCloseTo(0.0487, 10);
+  });
 });
 
 describe('normalizeCostRates', () => {
@@ -105,7 +136,7 @@ describe('normalizeCostRates', () => {
         cachedInputPer1MTokensUsd: 0.2,
       },
       gemini: {
-        ttsModel: 'gemini-2.5-pro-preview-tts',
+        ttsModel: 'gemini-3.1-flash-tts-preview',
         ttsInputPer1MTokensUsd: 1.5,
         ttsOutputPer1MTokensUsd: 25,
         imageModel: 'gemini-3-pro-image-preview',
@@ -119,7 +150,7 @@ describe('normalizeCostRates', () => {
       outputPer1MTokensUsd: 10,
       cachedInputPer1MTokensUsd: 0.2,
     });
-    expect(normalized.gemini.ttsRatesByModel['gemini-2.5-pro-preview-tts']).toMatchObject({
+    expect(normalized.gemini.ttsRatesByModel['gemini-3.1-flash-tts-preview']).toMatchObject({
       inputPer1MTokensUsd: 1.5,
       outputPer1MTokensUsd: 25,
     });

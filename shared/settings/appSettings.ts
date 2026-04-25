@@ -1,10 +1,12 @@
 import { z } from 'zod';
 import {
+  DEFAULT_GEMINI_TTS_MODEL,
   DEFAULT_IMAGE_MODEL,
   DEFAULT_IMAGE_PROMPT_TEXT_MODEL,
   DEFAULT_IMAGE_RESOLUTION,
   DEFAULT_SCRIPT_TEXT_MODEL,
   GEMINI_THINKING_LEVELS,
+  GEMINI_TTS_MODELS,
   IMAGE_MODELS,
   IMAGE_RESOLUTIONS,
   OPENAI_REASONING_EFFORTS,
@@ -12,11 +14,13 @@ import {
   getDefaultGeminiThinkingLevel,
   getDefaultOpenAIReasoningEffort,
   isGeminiThinkingLevel,
+  isGeminiTtsModel,
   isImageModel,
   isImageResolution,
   isOpenAIReasoningEffort,
   isTextCompletionModel,
   type GeminiThinkingLevel,
+  type GeminiTtsModel,
   type ImageModel,
   type ImageResolution,
   type OpenAIReasoningEffort,
@@ -28,6 +32,7 @@ export type TTSEngine = (typeof TTS_ENGINES)[number];
 
 export type AppSettings = {
   ttsEngine: TTSEngine;
+  ttsModel: GeminiTtsModel;
   ttsVoice: string;
   ttsSpeakingRate: number;
   ttsPitch: number;
@@ -51,6 +56,7 @@ export type AppSettings = {
 
 export const DEFAULT_SETTINGS: AppSettings = {
   ttsEngine: 'gemini_tts',
+  ttsModel: DEFAULT_GEMINI_TTS_MODEL,
   ttsVoice: 'Charon',
   ttsSpeakingRate: 1.0,
   ttsPitch: 0,
@@ -74,6 +80,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
 export const settingsUpdateSchema = z
   .object({
     ttsEngine: z.enum(TTS_ENGINES).optional(),
+    ttsModel: z.enum(GEMINI_TTS_MODELS).optional(),
     ttsVoice: z.string().optional(),
     ttsSpeakingRate: z.number().finite().optional(),
     ttsPitch: z.number().finite().optional(),
@@ -113,6 +120,10 @@ export function normalizeSettings(input: unknown): AppSettings {
 
   // 本アプリでは Gemini TTS をデフォルト運用にする
   merged.ttsEngine = 'gemini_tts';
+
+  if (!isGeminiTtsModel(merged.ttsModel)) {
+    merged.ttsModel = DEFAULT_SETTINGS.ttsModel;
+  }
 
   // 旧Google/macos系のボイス名が残っている場合はGemini側のデフォルトへ寄せる
   if (!merged.ttsVoice || merged.ttsVoice.includes('-')) {
