@@ -40,4 +40,25 @@ describe('sanitizeImagePromptForRendering', () => {
     expect(output).toContain('- 2: +5%');
     expect(output).not.toContain('大 /');
   });
+
+  it('removes source display lines from image prompts', () => {
+    const input = `リッチニューススライド仕様
+画面コピー:
+- 見出し: 新入社員研修
+- 出典表示: 記事本文
+画面テキスト:
+- 1: チームで一枚の絵
+- 2: 出典: 記事本文
+オブジェクト配置:
+- 1: headline / upper-left / large / 主情報 / 新入社員研修
+- 2: source / bottom-band / small / 根拠 / 出典: 記事本文`;
+
+    const output = sanitizeImagePromptForRendering(input);
+
+    expect(output).toContain('- 見出し: 新入社員研修');
+    expect(output).toContain('- 1: チームで一枚の絵');
+    expect(output).not.toContain('出典表示');
+    expect(output).not.toContain('出典: 記事本文');
+    expect(output).not.toContain('source /');
+  });
 });

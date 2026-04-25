@@ -31,7 +31,7 @@ export type OpenAIReasoningEffort = (typeof OPENAI_REASONING_EFFORTS)[number];
 export const GEMINI_THINKING_LEVELS = ['default', 'low', 'medium', 'high'] as const;
 export type GeminiThinkingLevel = (typeof GEMINI_THINKING_LEVELS)[number];
 export type SelectableOpenAIReasoningEffort = Exclude<OpenAIReasoningEffort, 'default'>;
-export type SelectableGeminiThinkingLevel = Exclude<GeminiThinkingLevel, 'default' | 'medium'>;
+export type SelectableGeminiThinkingLevel = Exclude<GeminiThinkingLevel, 'default'>;
 
 export const OPENAI_IMAGE_MODELS = ['gpt-image-2'] as const;
 export const GEMINI_IMAGE_MODELS = [
@@ -72,13 +72,13 @@ export const IMAGE_RESOLUTION_LABELS: Record<ImageResolution, string> = {
 
 export const GEMINI_TTS_MODELS = [
   'gemini-2.5-pro-preview-tts',
-  'gemini-3.1-flash-tts-preview',
+  'gemini-2.5-flash-preview-tts',
 ] as const;
 export type GeminiTtsModel = (typeof GEMINI_TTS_MODELS)[number];
 
 export const GEMINI_TTS_MODEL_LABELS: Record<GeminiTtsModel, string> = {
   'gemini-2.5-pro-preview-tts': 'Gemini 2.5 Pro TTS Preview',
-  'gemini-3.1-flash-tts-preview': 'Gemini 3.1 Flash TTS Preview',
+  'gemini-2.5-flash-preview-tts': 'Gemini 2.5 Flash TTS Preview',
 };
 
 export const DEFAULT_GEMINI_TTS_MODEL: GeminiTtsModel = 'gemini-2.5-pro-preview-tts';
@@ -144,7 +144,7 @@ const GEMINI_THINKING_LEVELS_BY_MODEL: Record<
   GeminiTextCompletionModel,
   readonly SelectableGeminiThinkingLevel[]
 > = {
-  'gemini-3.1-pro': ['low', 'high'],
+  'gemini-3.1-pro': ['low', 'medium', 'high'],
 };
 
 export function getSupportedOpenAIReasoningEfforts(

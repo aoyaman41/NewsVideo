@@ -355,7 +355,7 @@ export function SettingsPage() {
 
       if (activeGeminiModel) {
         const supported = getSupportedGeminiThinkingLevels(activeGeminiModel);
-        if (!supported.includes(prev.geminiThinkingLevel as Exclude<GeminiThinkingLevel, 'default' | 'medium'>)) {
+        if (!supported.includes(prev.geminiThinkingLevel as Exclude<GeminiThinkingLevel, 'default'>)) {
           next.geminiThinkingLevel = getDefaultGeminiThinkingLevel(activeGeminiModel);
           changed = true;
         }

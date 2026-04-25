@@ -110,7 +110,7 @@ describe('settings IPC handlers', () => {
     await handler({}, {
       imageModel: 'gemini-3-pro-image-preview',
       ttsEngine: 'google_tts',
-      ttsModel: 'gemini-3.1-flash-tts-preview',
+      ttsModel: 'gemini-2.5-flash-preview-tts',
       openaiReasoningEffort: 'high',
       geminiThinkingLevel: 'low',
       unknown: true,
@@ -123,7 +123,7 @@ describe('settings IPC handlers', () => {
     const saved = JSON.parse(String(content));
     expect(saved.imageModel).toBe('gemini-3-pro-image-preview');
     expect(saved.ttsEngine).toBe('gemini_tts');
-    expect(saved.ttsModel).toBe('gemini-3.1-flash-tts-preview');
+    expect(saved.ttsModel).toBe('gemini-2.5-flash-preview-tts');
     expect(saved.openaiReasoningEffort).toBe('high');
     expect(saved.geminiThinkingLevel).toBe('low');
     expect(saved.unknown).toBeUndefined();

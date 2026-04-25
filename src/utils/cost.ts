@@ -30,7 +30,10 @@ type GeminiImageRate = {
   legacyInputPerImageUsd?: number;
 };
 
-type OpenAIImageRate = TokenRate;
+type OpenAIImageRate = TokenRate & {
+  imageInputPer1MTokensUsd?: number;
+  imageCachedInputPer1MTokensUsd?: number;
+};
 
 export type CostRates = {
   currency: 'USD';
@@ -59,27 +62,12 @@ export type CostRates = {
 };
 
 const LEGACY_IMAGE_INPUT_PER_IMAGE_USD = 0.0011;
-const GEMINI_FLASH_IMAGE_OUTPUT_PER_1M_TOKENS_USD = 30;
-const GEMINI_FLASH_IMAGE_OUTPUT_TOKENS_BY_SIZE: Record<ImageSizeTier, number> = {
-  '1K': 1290,
-  '2K': 5160,
-  '4K': 20640,
+const GEMINI_FLASH_IMAGE_OUTPUT_PER_1M_TOKENS_USD = 60;
+const GEMINI_FLASH_IMAGE_OUTPUT_PER_IMAGE_USD_BY_SIZE: Record<ImageSizeTier, number> = {
+  '1K': 0.067,
+  '2K': 0.101,
+  '4K': 0.151,
 };
-
-function createAreaScaledFlashImageFallback(): Record<ImageSizeTier, number> {
-  return IMAGE_SIZE_TIERS.reduce(
-    (acc, sizeTier) => {
-      acc[sizeTier] =
-        (GEMINI_FLASH_IMAGE_OUTPUT_TOKENS_BY_SIZE[sizeTier] *
-          GEMINI_FLASH_IMAGE_OUTPUT_PER_1M_TOKENS_USD) /
-        1_000_000;
-      return acc;
-    },
-    {} as Record<ImageSizeTier, number>
-  );
-}
-
-const DEFAULT_GEMINI_FLASH_IMAGE_FALLBACK = createAreaScaledFlashImageFallback();
 
 function cloneSizeMap(
   value: Partial<Record<ImageSizeTier, number>> | undefined
@@ -119,24 +107,33 @@ const DEFAULT_OPENAI_IMAGE_RATES: Record<string, OpenAIImageRate> = {
   'gpt-image-2': {
     inputPer1MTokensUsd: 5.0,
     cachedInputPer1MTokensUsd: 1.25,
+    imageInputPer1MTokensUsd: 8.0,
+    imageCachedInputPer1MTokensUsd: 2.0,
     outputPer1MTokensUsd: 30.0,
   },
 };
 
 const DEFAULT_GEMINI_TEXT_RATES: Record<string, GeminiTextRate> = {
   'gemini-3.1-pro': {
-    inputPer1MTokensUsd: 1.25,
-    outputPer1MTokensUsd: 10.0,
+    inputPer1MTokensUsd: 2.0,
+    outputPer1MTokensUsd: 12.0,
     thresholdTokens: 200_000,
-    inputOverThresholdPer1MTokensUsd: 2.5,
-    outputOverThresholdPer1MTokensUsd: 15.0,
+    inputOverThresholdPer1MTokensUsd: 4.0,
+    outputOverThresholdPer1MTokensUsd: 18.0,
+  },
+  'gemini-3.1-pro-preview': {
+    inputPer1MTokensUsd: 2.0,
+    outputPer1MTokensUsd: 12.0,
+    thresholdTokens: 200_000,
+    inputOverThresholdPer1MTokensUsd: 4.0,
+    outputOverThresholdPer1MTokensUsd: 18.0,
   },
   'gemini-3-pro-preview': {
-    inputPer1MTokensUsd: 1.25,
-    outputPer1MTokensUsd: 10.0,
+    inputPer1MTokensUsd: 2.0,
+    outputPer1MTokensUsd: 12.0,
     thresholdTokens: 200_000,
-    inputOverThresholdPer1MTokensUsd: 2.5,
-    outputOverThresholdPer1MTokensUsd: 15.0,
+    inputOverThresholdPer1MTokensUsd: 4.0,
+    outputOverThresholdPer1MTokensUsd: 18.0,
   },
 };
 
@@ -144,6 +141,10 @@ const DEFAULT_GEMINI_TTS_RATES: Record<string, TokenRate> = {
   'gemini-2.5-pro-preview-tts': {
     inputPer1MTokensUsd: 1.0,
     outputPer1MTokensUsd: 20.0,
+  },
+  'gemini-2.5-flash-preview-tts': {
+    inputPer1MTokensUsd: 0.5,
+    outputPer1MTokensUsd: 10.0,
   },
   'gemini-3.1-flash-tts-preview': {
     inputPer1MTokensUsd: 0.5,
@@ -154,18 +155,18 @@ const DEFAULT_GEMINI_TTS_RATES: Record<string, TokenRate> = {
 const DEFAULT_GEMINI_IMAGE_RATES: Record<string, GeminiImageRate> = {
   'gemini-3.1-flash-image-preview': {
     billingMode: 'per_token',
-    textInputPer1MTokensUsd: 0.3,
+    textInputPer1MTokensUsd: 0.5,
     outputPer1MTokensUsd: GEMINI_FLASH_IMAGE_OUTPUT_PER_1M_TOKENS_USD,
-    fallbackOutputPerImageUsdBySize: DEFAULT_GEMINI_FLASH_IMAGE_FALLBACK,
+    fallbackOutputPerImageUsdBySize: GEMINI_FLASH_IMAGE_OUTPUT_PER_IMAGE_USD_BY_SIZE,
     legacyInputPerImageUsd: LEGACY_IMAGE_INPUT_PER_IMAGE_USD,
   },
   'gemini-3-pro-image-preview': {
     billingMode: 'per_image',
-    textInputPer1MTokensUsd: 0.3,
+    textInputPer1MTokensUsd: 2.0,
     outputPerImageUsdBySize: {
-      '1K': 0.02,
-      '2K': 0.039,
-      '4K': 0.16,
+      '1K': 0.134,
+      '2K': 0.134,
+      '4K': 0.24,
     },
     legacyInputPerImageUsd: LEGACY_IMAGE_INPUT_PER_IMAGE_USD,
   },
@@ -239,6 +240,19 @@ function parseTokenRate(input: unknown, withCache: boolean): TokenRate | null {
     inputPer1MTokensUsd,
     outputPer1MTokensUsd,
     ...(cachedInputPer1MTokensUsd !== undefined ? { cachedInputPer1MTokensUsd } : {}),
+  };
+}
+
+function parseOpenAIImageRate(input: unknown): OpenAIImageRate | null {
+  const base = parseTokenRate(input, true);
+  if (!base || !input || typeof input !== 'object') return null;
+  const raw = input as Record<string, unknown>;
+  return {
+    ...base,
+    imageInputPer1MTokensUsd:
+      toNonNegativeNumber(raw.imageInputPer1MTokensUsd) ?? undefined,
+    imageCachedInputPer1MTokensUsd:
+      toNonNegativeNumber(raw.imageCachedInputPer1MTokensUsd) ?? undefined,
   };
 }
 
@@ -323,6 +337,39 @@ function getImageOutputPerImageUsd(
   return typeof firstDefined === 'number' ? firstDefined : 0;
 }
 
+function estimateOpenAITextCost(record: UsageRecord, rate: TokenRate): number {
+  const totalInputTokens = Math.max(0, record.inputTokens ?? 0);
+  const cachedInputTokens = Math.max(0, Math.min(record.cachedInputTokens ?? 0, totalInputTokens));
+  const uncachedInputTokens = totalInputTokens - cachedInputTokens;
+  const input = (uncachedInputTokens * rate.inputPer1MTokensUsd) / 1_000_000;
+  const cachedInput =
+    (cachedInputTokens * (rate.cachedInputPer1MTokensUsd ?? rate.inputPer1MTokensUsd)) /
+    1_000_000;
+  const output = ((record.outputTokens ?? 0) * rate.outputPer1MTokensUsd) / 1_000_000;
+  return input + cachedInput + output;
+}
+
+function estimateOpenAIImageCost(record: UsageRecord, rate: OpenAIImageRate): number {
+  const totalInputTokens = Math.max(0, record.inputTokens ?? 0);
+  const hasModalityBreakdown =
+    typeof record.textInputTokens === 'number' || typeof record.imageInputTokens === 'number';
+
+  if (!hasModalityBreakdown) {
+    return estimateOpenAITextCost(record, rate);
+  }
+
+  const imageInputTokens = Math.max(0, record.imageInputTokens ?? 0);
+  const textInputTokens = Math.max(
+    0,
+    record.textInputTokens ?? Math.max(0, totalInputTokens - imageInputTokens)
+  );
+  const textInput = (textInputTokens * rate.inputPer1MTokensUsd) / 1_000_000;
+  const imageInput =
+    (imageInputTokens * (rate.imageInputPer1MTokensUsd ?? rate.inputPer1MTokensUsd)) / 1_000_000;
+  const output = ((record.outputTokens ?? 0) * rate.outputPer1MTokensUsd) / 1_000_000;
+  return textInput + imageInput + output;
+}
+
 export function normalizeCostRates(input?: unknown): CostRates {
   const base = DEFAULT_COST_RATES;
   if (!input || typeof input !== 'object') return base;
@@ -383,7 +430,7 @@ export function normalizeCostRates(input?: unknown): CostRates {
   const openaiImageRatesByModel = cloneTokenRates(base.openai.imageRatesByModel);
   if (raw.openai?.imageRatesByModel && typeof raw.openai.imageRatesByModel === 'object') {
     for (const [model, rate] of Object.entries(raw.openai.imageRatesByModel as Record<string, unknown>)) {
-      const parsed = parseTokenRate(rate, true);
+      const parsed = parseOpenAIImageRate(rate);
       if (parsed) openaiImageRatesByModel[model] = parsed;
     }
   }
@@ -496,14 +543,7 @@ export function estimateUsageCostUsd(record: UsageRecord, rates: CostRates): num
         rates.openai.imageModel,
         rates.openai.imageRatesByModel
       );
-      const totalInputTokens = Math.max(0, record.inputTokens ?? 0);
-      const cachedInputTokens = Math.max(0, Math.min(record.cachedInputTokens ?? 0, totalInputTokens));
-      const uncachedInputTokens = totalInputTokens - cachedInputTokens;
-      const input = (uncachedInputTokens * rate.inputPer1MTokensUsd) / 1_000_000;
-      const cachedInput =
-        (cachedInputTokens * (rate.cachedInputPer1MTokensUsd ?? rate.inputPer1MTokensUsd)) / 1_000_000;
-      const output = ((record.outputTokens ?? 0) * rate.outputPer1MTokensUsd) / 1_000_000;
-      return input + cachedInput + output;
+      return estimateOpenAIImageCost(record, rate);
     }
 
     const rate = resolveRecordMapRate(
@@ -511,14 +551,7 @@ export function estimateUsageCostUsd(record: UsageRecord, rates: CostRates): num
       rates.openai.defaultModel,
       rates.openai.textRatesByModel
     );
-    const totalInputTokens = Math.max(0, record.inputTokens ?? 0);
-    const cachedInputTokens = Math.max(0, Math.min(record.cachedInputTokens ?? 0, totalInputTokens));
-    const uncachedInputTokens = totalInputTokens - cachedInputTokens;
-    const input = (uncachedInputTokens * rate.inputPer1MTokensUsd) / 1_000_000;
-    const cachedInput =
-      (cachedInputTokens * (rate.cachedInputPer1MTokensUsd ?? rate.inputPer1MTokensUsd)) / 1_000_000;
-    const output = ((record.outputTokens ?? 0) * rate.outputPer1MTokensUsd) / 1_000_000;
-    return input + cachedInput + output;
+    return estimateOpenAITextCost(record, rate);
   }
 
   if (record.provider !== 'gemini') {

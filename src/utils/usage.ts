@@ -27,6 +27,8 @@ type ImageUsageDetails = {
   operation: string;
   model?: string;
   inputTokens?: number;
+  textInputTokens?: number;
+  imageInputTokens?: number;
   outputTokens?: number;
   imageResolution?: ImageResolution;
   imageSizeTier?: ImageSizeTier;
@@ -86,6 +88,12 @@ export function createImageUsageRecord(details: ImageUsageDetails): UsageRecord 
     model: details.model || (details.provider === 'openai' ? 'gpt-image-2' : DEFAULT_IMAGE_MODEL),
     operation: details.operation,
     inputTokens: clampNonNegative(details.inputTokens),
+    ...(details.textInputTokens !== undefined
+      ? { textInputTokens: clampNonNegative(details.textInputTokens) }
+      : {}),
+    ...(details.imageInputTokens !== undefined
+      ? { imageInputTokens: clampNonNegative(details.imageInputTokens) }
+      : {}),
     outputTokens: clampNonNegative(details.outputTokens),
     imageCount: count,
     imageResolution: details.imageResolution,
@@ -111,6 +119,12 @@ export function createImageUsageRecordFromAssets(
   const sameSizeTier = generated.every((metadata) => metadata.imageSizeTier === first.imageSizeTier);
   const sameAspectRatio = generated.every((metadata) => metadata.aspectRatio === first.aspectRatio);
   const provider = isImageModel(first.model) ? getImageModelProvider(first.model) : 'gemini';
+  const hasTextInputTokens = generated.some(
+    (metadata) => typeof metadata.textInputTokens === 'number'
+  );
+  const hasImageInputTokens = generated.some(
+    (metadata) => typeof metadata.imageInputTokens === 'number'
+  );
 
   return createImageUsageRecord({
     provider,
@@ -118,6 +132,22 @@ export function createImageUsageRecordFromAssets(
     operation,
     model: sameModel ? first.model : undefined,
     inputTokens: generated.reduce((sum, metadata) => sum + (metadata.inputTokens ?? 0), 0),
+    ...(hasTextInputTokens
+      ? {
+          textInputTokens: generated.reduce(
+            (sum, metadata) => sum + (metadata.textInputTokens ?? 0),
+            0
+          ),
+        }
+      : {}),
+    ...(hasImageInputTokens
+      ? {
+          imageInputTokens: generated.reduce(
+            (sum, metadata) => sum + (metadata.imageInputTokens ?? 0),
+            0
+          ),
+        }
+      : {}),
     outputTokens: generated.reduce((sum, metadata) => sum + (metadata.outputTokens ?? 0), 0),
     imageResolution: sameResolution ? first.resolution : undefined,
     imageSizeTier: sameSizeTier ? first.imageSizeTier : undefined,

@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { getSupportedOpenAIReasoningEfforts, supportsOpenAITemperature } from './models';
+import {
+  getSupportedGeminiThinkingLevels,
+  getSupportedOpenAIReasoningEfforts,
+  supportsOpenAITemperature,
+} from './models';
 
 describe('supportsOpenAITemperature', () => {
   it('allows temperature only when reasoning effort is none for GPT-5 models', () => {
@@ -24,6 +28,16 @@ describe('supportsOpenAITemperature', () => {
       'medium',
       'high',
       'xhigh',
+    ]);
+  });
+});
+
+describe('getSupportedGeminiThinkingLevels', () => {
+  it('offers all Gemini 3.1 Pro thinking levels supported by the API', () => {
+    expect(getSupportedGeminiThinkingLevels('gemini-3.1-pro')).toEqual([
+      'low',
+      'medium',
+      'high',
     ]);
   });
 });

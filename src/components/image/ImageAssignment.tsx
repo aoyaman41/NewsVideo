@@ -152,7 +152,7 @@ export function ImageAssignment({
           {filteredCandidates.length === 0 ? (
             <div className="rounded-[8px] border border-[var(--nv-color-border)] bg-slate-50 px-3 py-12 text-center text-sm text-slate-500">
               {uniqueCandidates.length === 0
-                ? '候補画像がありません（先に画像を生成してください）'
+                ? '候補画像がありません（画像を生成するか、記事関連画像を追加してください）'
                 : 'このフィルタに一致する候補画像がありません'}
             </div>
           ) : (

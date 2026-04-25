@@ -8,7 +8,7 @@ import {
 describe('parseSettingsUpdate', () => {
   it('accepts valid fields and strips unknown keys', () => {
     const parsed = parseSettingsUpdate({
-      ttsModel: 'gemini-3.1-flash-tts-preview',
+      ttsModel: 'gemini-2.5-flash-preview-tts',
       imageModel: 'gemini-3-pro-image-preview',
       imageResolution: '2k',
       openaiReasoningEffort: 'high',
@@ -16,7 +16,7 @@ describe('parseSettingsUpdate', () => {
       unknownKey: 'ignored',
     });
 
-    expect(parsed.ttsModel).toBe('gemini-3.1-flash-tts-preview');
+    expect(parsed.ttsModel).toBe('gemini-2.5-flash-preview-tts');
     expect(parsed.imageModel).toBe('gemini-3-pro-image-preview');
     expect(parsed.imageResolution).toBe('2k');
     expect(parsed.openaiReasoningEffort).toBe('high');
@@ -39,6 +39,14 @@ describe('normalizeSettings', () => {
 
     expect(normalized.ttsEngine).toBe('gemini_tts');
     expect(normalized.ttsVoice).toBe(DEFAULT_SETTINGS.ttsVoice);
+  });
+
+  it('migrates the old Gemini 3.1 Flash TTS setting to the current Flash TTS model', () => {
+    const normalized = normalizeSettings({
+      ttsModel: 'gemini-3.1-flash-tts-preview',
+    });
+
+    expect(normalized.ttsModel).toBe('gemini-2.5-flash-preview-tts');
   });
 
   it('falls back to defaults for invalid model selections and keeps cost', () => {

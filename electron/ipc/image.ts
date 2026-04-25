@@ -1,9 +1,10 @@
 import { ipcMain, app, safeStorage } from 'electron';
+import { createReadStream } from 'node:fs';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { GoogleGenAI } from '@google/genai';
-import OpenAI from 'openai';
+import OpenAI, { toFile } from 'openai';
 import {
   DEFAULT_IMAGE_MODEL,
   DEFAULT_IMAGE_RESOLUTION,
@@ -109,6 +110,24 @@ interface ImagePrompt {
   prompt: string;
   negativePrompt?: string;
   aspectRatio: ImageAspectRatio;
+  visualCopy?: {
+    headline: string;
+    subhead?: string;
+    keyNumber?: string;
+    bullets: string[];
+  };
+  layoutPlan?: {
+    intent: string;
+    composition: string;
+    objects: Array<{
+      type: string;
+      role: string;
+      position: string;
+      content: string;
+      emphasis: string;
+    }>;
+  };
+  styleReferenceImageIds?: string[];
   version: number;
   createdAt: string;
 }
@@ -119,17 +138,24 @@ const IMAGE_SYSTEM_POLICY_CORE = `タスク:
 制約:
 - 構図・要素配置・情報優先度は「指示」ブロックを最優先の描画仕様として扱う。
 - 「指示」にない要素・見出し・数値・キャプションを追加しない。
-- 画面内文字として描画してよいのは「指示」内の「画面テキスト」欄にある項目のみ。
-- 「配置」「レイアウト方針」「要素」「情報の優先順位」などの見出し・説明文は描画しない。
+- 画面内文字として描画してよいのは「指示」内の「画面コピー」「画面テキスト」「テキスト」欄にある項目のみ。
+- 「配置」「オブジェクト配置」「レイアウト方針」「要素」「情報の優先順位」などの見出し・説明文は描画しない。
 - レイアウト用の割合値・サイズメモ・座標メモは構図メタ情報として扱い、文字として描画しない。
 - 割合値は「画面テキスト」欄に明示されたものだけを文字として扱う。
-- 文字を配置する場合は短いラベルまたは数値のみ。長文を配置しない。
+- 指定された見出し、サブ見出し、要点、数値は正確に描画する。出典表示や「出典: 記事本文」は描画しない。
 - 写実表現は禁止。`;
 
 // 異常な長文入力のみを防ぐための非常上限（通常運用では切り詰めない）
 const MAX_USER_PROMPT_CHARS = 12000;
 const MAX_NEGATIVE_PROMPT_CHARS = 4000;
 const MAX_MODEL_INPUT_PROMPT_CHARS = 20000;
+const IMAGE_BATCH_CONCURRENCY = 3;
+
+type ImageBatchRunState = {
+  cancelRequested: boolean;
+};
+
+const runningImageBatchProjects = new Map<string, ImageBatchRunState>();
 
 function truncateTextByChars(value: string, maxChars: number): string {
   const trimmed = value.trim();
@@ -277,19 +303,39 @@ interface ImageAsset {
       imageSizeTier: ImageSizeTier;
       aspectRatio: ImageAspectRatio;
       inputTokens?: number;
+      textInputTokens?: number;
+      imageInputTokens?: number;
       outputTokens?: number;
       totalTokens?: number;
     };
   };
 }
 
+interface ImageBatchGenerationError {
+  index: number;
+  promptId: string;
+  partId?: string;
+  error: string;
+}
+
+interface ImageBatchGenerationResult {
+  images: ImageAsset[];
+  errors: ImageBatchGenerationError[];
+  requestedCount: number;
+}
+
+type StyleReferenceImage = {
+  id: string;
+  filePath: string;
+  mimeType: string;
+};
+
 // アスペクト比から寸法を計算
 function getDimensions(
   aspectRatio: ImageAspectRatio,
   imageResolution: ImageResolution
 ): { width: number; height: number } {
-  const longEdge =
-    imageResolution === '4k' ? 3840 : imageResolution === '2k' ? 2560 : 1920;
+  const longEdge = imageResolution === '4k' ? 3840 : imageResolution === '2k' ? 2560 : 1920;
 
   switch (aspectRatio) {
     case '16:9':
@@ -326,6 +372,53 @@ async function getProjectPath(projectId: string): Promise<string> {
   }
 
   throw new Error(`Project not found: ${projectId}`);
+}
+
+async function fileExists(filePath: string): Promise<boolean> {
+  try {
+    await fs.access(filePath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function resolveStyleReferenceImages(
+  projectPath: string,
+  prompt: ImagePrompt
+): Promise<StyleReferenceImage[]> {
+  const ids = Array.isArray(prompt.styleReferenceImageIds)
+    ? Array.from(new Set(prompt.styleReferenceImageIds)).slice(0, 3)
+    : [];
+  if (ids.length === 0) return [];
+
+  const [generatedImages, article] = await Promise.all([
+    fs
+      .readFile(path.join(projectPath, 'images.json'), 'utf-8')
+      .then((content) => JSON.parse(content) as ImageAsset[])
+      .catch(() => []),
+    fs
+      .readFile(path.join(projectPath, 'article.json'), 'utf-8')
+      .then((content) => JSON.parse(content) as { importedImages?: ImageAsset[] })
+      .catch(() => ({ importedImages: [] })),
+  ]);
+
+  const byId = new Map<string, ImageAsset>();
+  for (const image of generatedImages) byId.set(image.id, image);
+  for (const image of article.importedImages ?? []) byId.set(image.id, image);
+
+  const references: StyleReferenceImage[] = [];
+  for (const id of ids) {
+    const image = byId.get(id);
+    if (!image || !(await fileExists(image.filePath))) continue;
+    references.push({
+      id,
+      filePath: image.filePath,
+      mimeType: image.metadata.mimeType || 'image/png',
+    });
+  }
+
+  return references;
 }
 
 // 画像をファイルに保存
@@ -383,7 +476,9 @@ function getOpenAiRequestedSize(
   return `${width}x${height}`;
 }
 
-function getOpenAiFallbackSize(aspectRatio: ImageAspectRatio): '1536x1024' | '1024x1024' | '1024x1536' {
+function getOpenAiFallbackSize(
+  aspectRatio: ImageAspectRatio
+): '1536x1024' | '1024x1024' | '1024x1536' {
   switch (aspectRatio) {
     case '1:1':
       return '1024x1024';
@@ -419,20 +514,22 @@ function extractOpenAiImageUsage(
         total_tokens?: number;
         input_tokens_details?: {
           text_tokens?: number;
+          image_tokens?: number;
         };
       }
     | undefined
 ): {
   inputTokens?: number;
+  textInputTokens?: number;
+  imageInputTokens?: number;
   outputTokens?: number;
   totalTokens?: number;
 } | null {
   if (!usage) return null;
 
-  const inputTokens = Math.max(
-    0,
-    usage.input_tokens_details?.text_tokens ?? usage.input_tokens ?? 0
-  );
+  const textInputTokens = Math.max(0, usage.input_tokens_details?.text_tokens ?? 0);
+  const imageInputTokens = Math.max(0, usage.input_tokens_details?.image_tokens ?? 0);
+  const inputTokens = Math.max(0, usage.input_tokens ?? textInputTokens + imageInputTokens);
   const outputTokens = Math.max(0, usage.output_tokens ?? 0);
   const totalTokens = Math.max(0, usage.total_tokens ?? 0);
 
@@ -442,6 +539,8 @@ function extractOpenAiImageUsage(
 
   return {
     inputTokens: inputTokens > 0 ? inputTokens : undefined,
+    textInputTokens: textInputTokens > 0 ? textInputTokens : undefined,
+    imageInputTokens: imageInputTokens > 0 ? imageInputTokens : undefined,
     outputTokens: outputTokens > 0 ? outputTokens : undefined,
     totalTokens: totalTokens > 0 ? totalTokens : undefined,
   };
@@ -454,12 +553,24 @@ async function generateGeminiImageAsset(params: {
   imageModel: ImageModel;
   imageResolution: ImageResolution;
   genAI: GoogleGenAI;
+  styleReferenceImages: StyleReferenceImage[];
 }): Promise<ImageAsset> {
-  const { prompt, projectPath, imageId, imageModel, imageResolution, genAI } = params;
+  const { prompt, projectPath, imageId, imageModel, imageResolution, genAI, styleReferenceImages } =
+    params;
   const enhancedPrompt = buildImagePromptText(prompt);
   const systemInstruction = buildImageSystemInstruction(prompt);
   const imageSize = getImageSize(imageResolution);
   const dimensions = getDimensions(prompt.aspectRatio, imageResolution);
+  const referenceParts = await Promise.all(
+    styleReferenceImages.map(async (reference) => ({
+      inlineData: {
+        data: await fs.readFile(reference.filePath, 'base64'),
+        mimeType: reference.mimeType,
+      },
+    }))
+  );
+  const contents =
+    referenceParts.length > 0 ? [{ text: enhancedPrompt }, ...referenceParts] : enhancedPrompt;
 
   logger.debug('[image:generate] Request prepared', {
     promptChars: enhancedPrompt.length,
@@ -467,12 +578,13 @@ async function generateGeminiImageAsset(params: {
     imageModel,
     imageResolution,
     imageSize,
+    styleReferenceCount: styleReferenceImages.length,
   });
 
   const response = await withRetry(async () => {
     return genAI.models.generateContent({
       model: imageModel,
-      contents: enhancedPrompt,
+      contents,
       config: {
         systemInstruction,
         responseModalities: ['IMAGE'],
@@ -525,6 +637,7 @@ async function generateGeminiImageAsset(params: {
         imageSizeTier: imageSize,
         aspectRatio: prompt.aspectRatio,
         inputTokens: usage?.inputTokens,
+        textInputTokens: usage?.inputTokens,
         outputTokens: usage?.outputTokens,
         totalTokens: usage?.totalTokens,
       },
@@ -539,25 +652,58 @@ async function generateOpenAiImageAsset(params: {
   imageModel: ImageModel;
   imageResolution: ImageResolution;
   openai: OpenAI;
+  styleReferenceImages: StyleReferenceImage[];
 }): Promise<ImageAsset> {
-  const { prompt, projectPath, imageId, imageModel, imageResolution, openai } = params;
+  const {
+    prompt,
+    projectPath,
+    imageId,
+    imageModel,
+    imageResolution,
+    openai,
+    styleReferenceImages,
+  } = params;
   const imageSizeTier = getImageSize(imageResolution);
   const requestedSize = getOpenAiRequestedSize(prompt.aspectRatio, imageResolution);
   const fallbackSize = getOpenAiFallbackSize(prompt.aspectRatio);
   const quality = getOpenAiImageQuality(imageResolution);
   const promptText = buildOpenAiImagePrompt(prompt);
+  const openAiReferenceFiles =
+    styleReferenceImages.length > 0
+      ? await Promise.all(
+          styleReferenceImages.map((reference) =>
+            toFile(createReadStream(reference.filePath), path.basename(reference.filePath), {
+              type: reference.mimeType,
+            })
+          )
+        )
+      : [];
+
+  const requestImage = async (size: string) => {
+    if (openAiReferenceFiles.length > 0) {
+      return openai.images.edit({
+        model: imageModel,
+        image: openAiReferenceFiles,
+        prompt: promptText,
+        size: size as '1024x1024',
+        quality,
+        output_format: 'png',
+      });
+    }
+    return openai.images.generate({
+      model: imageModel,
+      prompt: promptText,
+      size: size as '1024x1024',
+      quality,
+      output_format: 'png',
+    });
+  };
 
   let finalSize = requestedSize;
   let response;
   try {
     response = await withRetry(async () => {
-      return openai.images.generate({
-        model: imageModel,
-        prompt: promptText,
-        size: requestedSize as '1024x1024',
-        quality,
-        output_format: 'png',
-      });
+      return requestImage(requestedSize);
     });
   } catch (error) {
     if (requestedSize === fallbackSize || !shouldRetryOpenAiWithFallback(error)) {
@@ -571,13 +717,7 @@ async function generateOpenAiImageAsset(params: {
     });
     finalSize = fallbackSize;
     response = await withRetry(async () => {
-      return openai.images.generate({
-        model: imageModel,
-        prompt: promptText,
-        size: fallbackSize,
-        quality,
-        output_format: 'png',
-      });
+      return requestImage(fallbackSize);
     });
   }
 
@@ -616,6 +756,8 @@ async function generateOpenAiImageAsset(params: {
         imageSizeTier,
         aspectRatio: prompt.aspectRatio,
         inputTokens: usage?.inputTokens,
+        textInputTokens: usage?.textInputTokens,
+        imageInputTokens: usage?.imageInputTokens,
         outputTokens: usage?.outputTokens,
         totalTokens: usage?.totalTokens,
       },
@@ -630,10 +772,12 @@ async function generateImageAsset(params: {
   imageResolution: ImageResolution;
   googleGenAI?: GoogleGenAI;
   openai?: OpenAI;
+  styleReferenceImages?: StyleReferenceImage[];
 }): Promise<ImageAsset> {
   const { prompt, projectPath, imageModel, imageResolution } = params;
   const imageId = randomUUID();
   const provider = getImageModelProvider(imageModel);
+  const styleReferenceImages = params.styleReferenceImages ?? [];
 
   if (provider === 'openai') {
     if (!params.openai) {
@@ -646,6 +790,7 @@ async function generateImageAsset(params: {
       imageModel,
       imageResolution,
       openai: params.openai,
+      styleReferenceImages,
     });
   }
 
@@ -659,29 +804,31 @@ async function generateImageAsset(params: {
     imageModel,
     imageResolution,
     genAI: params.googleGenAI,
+    styleReferenceImages,
   });
 }
 
 // 単一画像生成ハンドラ
 ipcMain.handle(
   'image:generate',
-  async (
-    _,
-    prompt: ImagePrompt,
-    projectId: string
-  ): Promise<ImageAsset> => {
+  async (_, prompt: ImagePrompt, projectId: string): Promise<ImageAsset> => {
     const { imageModel, imageResolution } = await readImageGenerationSettings();
     const provider = getImageModelProvider(imageModel);
     const openaiApiKey = provider === 'openai' ? await readApiKey('openai') : null;
     const googleApiKey = provider === 'gemini' ? await readApiKey('google_ai') : null;
     if (provider === 'openai' && !openaiApiKey) {
-      throw new Error('OpenAI APIキーが設定されていません。設定画面からAPIキーを入力してください。');
+      throw new Error(
+        'OpenAI APIキーが設定されていません。設定画面からAPIキーを入力してください。'
+      );
     }
     if (provider === 'gemini' && !googleApiKey) {
-      throw new Error('Google AI APIキーが設定されていません。設定画面からAPIキーを入力してください。');
+      throw new Error(
+        'Google AI APIキーが設定されていません。設定画面からAPIキーを入力してください。'
+      );
     }
 
     const projectPath = await getProjectPath(projectId);
+    const styleReferenceImages = await resolveStyleReferenceImages(projectPath, prompt);
     logger.debug('[image:generate] Start', {
       projectId,
       promptId: prompt.id,
@@ -689,6 +836,7 @@ ipcMain.handle(
       provider,
       imageModel,
       imageResolution,
+      styleReferenceCount: styleReferenceImages.length,
     });
 
     return generateImageAsset({
@@ -698,6 +846,7 @@ ipcMain.handle(
       imageResolution,
       googleGenAI: googleApiKey ? new GoogleGenAI({ apiKey: googleApiKey }) : undefined,
       openai: openaiApiKey ? new OpenAI({ apiKey: openaiApiKey }) : undefined,
+      styleReferenceImages,
     });
   }
 );
@@ -705,107 +854,203 @@ ipcMain.handle(
 // バッチ画像生成ハンドラ
 ipcMain.handle(
   'image:generateBatch',
-  async (
-    _,
-    prompts: ImagePrompt[],
-    projectId: string
-  ): Promise<ImageAsset[]> => {
+  async (_, prompts: ImagePrompt[], projectId: string): Promise<ImageBatchGenerationResult> => {
+    if (runningImageBatchProjects.has(projectId)) {
+      throw new Error('このプロジェクトの画像一括生成は既に実行中です。完了を待ってください。');
+    }
+
+    if (prompts.length === 0) {
+      return {
+        images: [],
+        errors: [],
+        requestedCount: 0,
+      };
+    }
+
     const { imageModel, imageResolution } = await readImageGenerationSettings();
     const provider = getImageModelProvider(imageModel);
     const openaiApiKey = provider === 'openai' ? await readApiKey('openai') : null;
     const googleApiKey = provider === 'gemini' ? await readApiKey('google_ai') : null;
     if (provider === 'openai' && !openaiApiKey) {
-      throw new Error('OpenAI APIキーが設定されていません。設定画面からAPIキーを入力してください。');
+      throw new Error(
+        'OpenAI APIキーが設定されていません。設定画面からAPIキーを入力してください。'
+      );
     }
     if (provider === 'gemini' && !googleApiKey) {
-      throw new Error('Google AI APIキーが設定されていません。設定画面からAPIキーを入力してください。');
+      throw new Error(
+        'Google AI APIキーが設定されていません。設定画面からAPIキーを入力してください。'
+      );
     }
 
     const projectPath = await getProjectPath(projectId);
     const openai = openaiApiKey ? new OpenAI({ apiKey: openaiApiKey }) : undefined;
     const genAI = googleApiKey ? new GoogleGenAI({ apiKey: googleApiKey }) : undefined;
+    const runState: ImageBatchRunState = { cancelRequested: false };
 
-    logger.info('[image:generateBatch] Start', { projectId, count: prompts.length, provider, imageModel });
+    runningImageBatchProjects.set(projectId, runState);
+    logger.info('[image:generateBatch] Start', {
+      projectId,
+      count: prompts.length,
+      provider,
+      imageModel,
+      concurrency: Math.min(IMAGE_BATCH_CONCURRENCY, prompts.length),
+    });
 
-    const settled = await Promise.all(
-      prompts.map(async (prompt, index) => {
-        try {
-          logger.debug('[image:generateBatch] Request prepared', {
-            index: index + 1,
-            total: prompts.length,
-            promptId: prompt.id,
-            imageModel,
-            imageResolution,
-          });
-
-          const imageAsset = await generateImageAsset({
-            prompt,
-            projectPath,
-            imageModel,
-            imageResolution,
-            googleGenAI: genAI,
-            openai,
-          });
-
-          return { ok: true as const, index, imageAsset };
-        } catch (error) {
-          return {
-            ok: false as const,
-            index,
-            error: error instanceof Error ? error.message : String(error),
+    try {
+      type TaskResult =
+        | { ok: true; index: number; imageAsset: ImageAsset }
+        | {
+            ok: false;
+            index: number;
+            promptId: string;
+            partId?: string;
+            error: string;
           };
-        }
-      })
-    );
 
-    const results: ImageAsset[] = [];
-    const errors: { index: number; error: string }[] = [];
+      const settled: Array<TaskResult | undefined> = new Array(prompts.length);
+      const workerCount = Math.max(1, Math.min(IMAGE_BATCH_CONCURRENCY, prompts.length));
+      let cursor = 0;
 
-    for (const item of settled) {
-      if (item.ok) {
-        results.push(item.imageAsset);
-      } else {
-        errors.push({ index: item.index, error: item.error });
+      await Promise.all(
+        Array.from({ length: workerCount }, async () => {
+          while (true) {
+            if (runState.cancelRequested) return;
+
+            const index = cursor;
+            cursor += 1;
+            if (index >= prompts.length) return;
+
+            const prompt = prompts[index];
+            try {
+              logger.debug('[image:generateBatch] Request prepared', {
+                index: index + 1,
+                total: prompts.length,
+                promptId: prompt.id,
+                imageModel,
+                imageResolution,
+              });
+
+              const styleReferenceImages = await resolveStyleReferenceImages(projectPath, prompt);
+              if (runState.cancelRequested) return;
+
+              const imageAsset = await generateImageAsset({
+                prompt,
+                projectPath,
+                imageModel,
+                imageResolution,
+                googleGenAI: genAI,
+                openai,
+                styleReferenceImages,
+              });
+              if (runState.cancelRequested) return;
+
+              logger.info('[image:generateBatch] Item complete', {
+                index: index + 1,
+                total: prompts.length,
+                promptId: prompt.id,
+                imageId: imageAsset.id,
+              });
+
+              settled[index] = { ok: true, index, imageAsset };
+            } catch (error) {
+              const message = error instanceof Error ? error.message : String(error);
+              logger.warn('[image:generateBatch] Item failed', {
+                index: index + 1,
+                total: prompts.length,
+                promptId: prompt.id,
+                error: message,
+              });
+              settled[index] = {
+                ok: false,
+                index,
+                promptId: prompt.id,
+                partId: prompt.partId,
+                error: message,
+              };
+            }
+          }
+        })
+      );
+
+      if (runState.cancelRequested) {
+        throw new Error('キャンセルしました');
       }
-    }
 
-    if (errors.length > 0) {
-      logger.warn('[image:generateBatch] Partial failure', {
+      const results: ImageAsset[] = [];
+      const errors: ImageBatchGenerationError[] = [];
+
+      for (const item of settled) {
+        if (!item) continue;
+        if (item.ok) {
+          results.push(item.imageAsset);
+        } else {
+          errors.push({
+            index: item.index,
+            promptId: item.promptId,
+            partId: item.partId,
+            error: item.error,
+          });
+        }
+      }
+
+      logger.info('[image:generateBatch] Complete', {
         successCount: results.length,
         errorCount: errors.length,
       });
+
+      if (errors.length > 0) {
+        logger.warn('[image:generateBatch] Partial failure', {
+          successCount: results.length,
+          errorCount: errors.length,
+        });
+      }
+
+      if (errors.length > 0 && results.length === 0) {
+        throw new Error(`全ての画像生成に失敗しました: ${errors.map((e) => e.error).join(', ')}`);
+      }
+
+      return {
+        images: results,
+        errors,
+        requestedCount: prompts.length,
+      };
+    } finally {
+      runningImageBatchProjects.delete(projectId);
+    }
+  }
+);
+
+ipcMain.handle(
+  'image:cancelBatch',
+  async (_, projectId?: string): Promise<{ success: boolean }> => {
+    if (typeof projectId === 'string' && projectId.trim().length > 0) {
+      const runState = runningImageBatchProjects.get(projectId);
+      if (runState) runState.cancelRequested = true;
+      return { success: true };
     }
 
-    if (errors.length > 0 && results.length === 0) {
-      throw new Error(`全ての画像生成に失敗しました: ${errors.map(e => e.error).join(', ')}`);
+    for (const runState of runningImageBatchProjects.values()) {
+      runState.cancelRequested = true;
     }
-
-    return results;
+    return { success: true };
   }
 );
 
 // 画像削除ハンドラ
-ipcMain.handle(
-  'image:delete',
-  async (_, filePath: string): Promise<{ success: boolean }> => {
-    try {
-      await fs.unlink(filePath);
-      return { success: true };
-    } catch (error) {
-      logger.error('Failed to delete image', error);
-      return { success: false };
-    }
+ipcMain.handle('image:delete', async (_, filePath: string): Promise<{ success: boolean }> => {
+  try {
+    await fs.unlink(filePath);
+    return { success: true };
+  } catch (error) {
+    logger.error('Failed to delete image', error);
+    return { success: false };
   }
-);
+});
 
 // 画像コピーハンドラ（インポート用）
 ipcMain.handle(
   'image:import',
-  async (
-    _,
-    sourcePath: string,
-    projectId: string
-  ): Promise<ImageAsset> => {
+  async (_, sourcePath: string, projectId: string): Promise<ImageAsset> => {
     // プロジェクトパスを取得
     const projectPath = await getProjectPath(projectId);
 

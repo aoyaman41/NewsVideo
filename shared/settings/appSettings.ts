@@ -111,7 +111,11 @@ export function parseSettingsUpdate(input: unknown): SettingsUpdate {
 
 export function normalizeSettings(input: unknown): AppSettings {
   const raw = input && typeof input === 'object' ? (input as Record<string, unknown>) : {};
-  const merged = { ...DEFAULT_SETTINGS, ...(raw as Partial<AppSettings>) };
+  const migratedRaw = { ...raw };
+  if (migratedRaw.ttsModel === 'gemini-3.1-flash-tts-preview') {
+    migratedRaw.ttsModel = 'gemini-2.5-flash-preview-tts';
+  }
+  const merged = { ...DEFAULT_SETTINGS, ...(migratedRaw as Partial<AppSettings>) };
 
   // 旧ボイス名の移行
   if (merged.ttsVoice === 'ja-JP-Chirp3-HD-Aoife') {

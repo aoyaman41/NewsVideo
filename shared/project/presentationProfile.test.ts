@@ -41,6 +41,8 @@ describe('normalizePresentationProfile', () => {
       targetDurationPerPartSec: 18,
       imageStylePreset: 'editorial',
       aspectRatio: '1:1',
+      styleReferenceImageIds: ['11111111-1111-4111-8111-111111111111'],
+      styleReferenceNote: '見出しを太めに',
       ttsNarrationStylePreset: 'promo',
       ttsNarrationStyleNote: '語尾はやわらかめに',
       closingCardEnabled: false,
@@ -58,6 +60,8 @@ describe('normalizePresentationProfile', () => {
       targetDurationPerPartSec: 18,
       imageStylePreset: 'editorial',
       aspectRatio: '1:1',
+      styleReferenceImageIds: ['11111111-1111-4111-8111-111111111111'],
+      styleReferenceNote: '見出しを太めに',
       ttsNarrationStylePreset: 'promo',
       ttsNarrationStyleNote: '語尾はやわらかめに',
       closingCardEnabled: false,
@@ -119,9 +123,9 @@ describe('resolvePresentationClosingLine', () => {
 
 describe('resolvePresentationSourceLine', () => {
   it('uses the article source in auto mode', () => {
-    expect(resolvePresentationSourceLine(getDefaultPresentationProfile('news'), '架空ニュース通信')).toBe(
-      '出典: 架空ニュース通信'
-    );
+    expect(
+      resolvePresentationSourceLine(getDefaultPresentationProfile('news'), '架空ニュース通信')
+    ).toBe('出典: 架空ニュース通信');
   });
 
   it('returns null when source display is hidden', () => {

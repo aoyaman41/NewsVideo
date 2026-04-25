@@ -32,10 +32,7 @@ import {
   IMAGE_STYLE_PRESET_DESCRIPTIONS,
   IMAGE_STYLE_PRESET_LABELS,
 } from '../../shared/project/imageStylePresets';
-import {
-  DEFAULT_GEMINI_TTS_MODEL,
-  type GeminiTtsModel,
-} from '../../shared/constants/models';
+import { DEFAULT_GEMINI_TTS_MODEL, type GeminiTtsModel } from '../../shared/constants/models';
 import {
   TTS_NARRATION_STYLE_DESCRIPTIONS,
   TTS_NARRATION_STYLE_LABELS,
@@ -337,13 +334,16 @@ export function ArticleInputPage() {
     }
   };
 
-  const buildTtsOptions = (settings: {
-    ttsEngine?: string;
-    ttsModel?: GeminiTtsModel;
-    ttsVoice?: string;
-    ttsSpeakingRate?: number;
-    ttsPitch?: number;
-  }, profile: PresentationProfile) => {
+  const buildTtsOptions = (
+    settings: {
+      ttsEngine?: string;
+      ttsModel?: GeminiTtsModel;
+      ttsVoice?: string;
+      ttsSpeakingRate?: number;
+      ttsPitch?: number;
+    },
+    profile: PresentationProfile
+  ) => {
     const voiceName = settings.ttsVoice || 'Charon';
     const match = voiceName.match(/^([a-z]{2}-[A-Z]{2})/);
     const languageCode = match?.[1] || 'ja-JP';
@@ -403,7 +403,8 @@ export function ArticleInputPage() {
     [presentationProfile]
   );
   const presetDescription = PRESENTATION_PROFILE_PRESET_DESCRIPTIONS[presentationProfile.preset];
-  const imageStyleDescription = IMAGE_STYLE_PRESET_DESCRIPTIONS[presentationProfile.imageStylePreset];
+  const imageStyleDescription =
+    IMAGE_STYLE_PRESET_DESCRIPTIONS[presentationProfile.imageStylePreset];
   const ttsStyleDescription =
     TTS_NARRATION_STYLE_DESCRIPTIONS[presentationProfile.ttsNarrationStylePreset];
 
@@ -555,6 +556,7 @@ export function ArticleInputPage() {
         imagesAdded: ImageAsset[];
         partImageById: Map<string, string>;
         usageRecords: Project['usage'];
+        errors: string[];
       };
 
       type AudioPipelineResult = {
@@ -566,6 +568,7 @@ export function ArticleInputPage() {
 
       const runImagePipeline = async (baseProject: Project): Promise<ImagePipelineResult> => {
         const usageRecords: Project['usage'] = [];
+        const errors: string[] = [];
         const partById = new Map(baseProject.parts.map((part) => [part.id, part]));
         const existingPrompts = baseProject.prompts.filter((prompt) => partById.has(prompt.partId));
         const promptsByPart = new Set(existingPrompts.map((prompt) => prompt.partId));
@@ -579,6 +582,8 @@ export function ArticleInputPage() {
             {
               stylePreset: baseProject.presentationProfile.imageStylePreset,
               aspectRatio: baseProject.presentationProfile.aspectRatio,
+              styleReferenceImageIds: baseProject.presentationProfile.styleReferenceImageIds,
+              styleReferenceNote: baseProject.presentationProfile.styleReferenceNote,
             }
           );
           await ensureNotCancelled();
@@ -623,8 +628,29 @@ export function ArticleInputPage() {
             if (!projectId) {
               throw new Error('projectId が指定されていません');
             }
-            imagesAdded = await window.electronAPI.image.generateBatch(promptsToGenerate, projectId);
-            await ensureNotCancelled();
+            try {
+              const batchResult = await window.electronAPI.image.generateBatch(
+                promptsToGenerate.map((prompt) => ({
+                  ...prompt,
+                  styleReferenceImageIds: baseProject.presentationProfile.styleReferenceImageIds,
+                })),
+                projectId
+              );
+              imagesAdded = batchResult.images;
+              errors.push(
+                ...batchResult.errors.map((error) => {
+                  const part = error.partId ? partById.get(error.partId) : undefined;
+                  const label = part ? `パート${part.index + 1}` : `項目${error.index + 1}`;
+                  return `${label}: ${error.error}`;
+                })
+              );
+              await ensureNotCancelled();
+            } catch (error) {
+              if (error instanceof Error && error.message.includes('キャンセル')) {
+                throw error;
+              }
+              errors.push(error instanceof Error ? error.message : String(error));
+            }
           }
 
           const imageUsage = createGeminiImageUsageRecordFromAssets(
@@ -648,6 +674,7 @@ export function ArticleInputPage() {
           imagesAdded,
           partImageById,
           usageRecords,
+          errors,
         };
       };
 
@@ -698,7 +725,11 @@ export function ArticleInputPage() {
                 if (!scriptText) {
                   throw new Error('スクリプトが空です');
                 }
-                const result = await window.electronAPI.tts.generate(scriptText, ttsOptions, projectId);
+                const result = await window.electronAPI.tts.generate(
+                  scriptText,
+                  ttsOptions,
+                  projectId
+                );
                 await ensureNotCancelled();
                 const usageRecord = createGeminiTtsUsageRecord('tts_generate', result.usage);
                 taskResults[taskIndex] = {
@@ -769,6 +800,7 @@ export function ArticleInputPage() {
           if (imageResult.usageRecords.length > 0) {
             project.usage = [...project.usage, ...imageResult.usageRecords];
           }
+          pipelineErrors.push(...imageResult.errors);
           if (imageResult.partImageById.size > 0) {
             project.parts = project.parts.map((part) => {
               const imageId = imageResult.partImageById.get(part.id);
@@ -936,7 +968,10 @@ export function ArticleInputPage() {
         await window.electronAPI.project.save(latest);
         setProjectSafe(latest);
       }
-      await window.electronAPI.video.cancelRender();
+      await Promise.allSettled([
+        window.electronAPI.image.cancelBatch(projectId),
+        window.electronAPI.video.cancelRender(),
+      ]);
     } catch {
       // ignore
     }
@@ -992,9 +1027,7 @@ export function ArticleInputPage() {
       <div className="flex-1 overflow-auto p-5">
         <div className="mx-auto grid w-full max-w-7xl gap-4 lg:grid-cols-[2fr_1fr]">
           <div className="space-y-4">
-            {error && (
-              <ErrorDetailPanel message={error} onDismiss={() => setError(null)} />
-            )}
+            {error && <ErrorDetailPanel message={error} onDismiss={() => setError(null)} />}
 
             <Card title="生成設定" subtitle="配信スタイルと画像の既定値を指定">
               <div className="grid gap-4 md:grid-cols-2">
@@ -1004,7 +1037,9 @@ export function ArticleInputPage() {
                   </label>
                   <select
                     value={presentationProfile.preset}
-                    onChange={(e) => applyPresentationPreset(e.target.value as PresentationProfilePreset)}
+                    onChange={(e) =>
+                      applyPresentationPreset(e.target.value as PresentationProfilePreset)
+                    }
                     className="nv-input"
                   >
                     {PRESENTATION_PROFILE_PRESETS.map((preset) => (
@@ -1068,9 +1103,7 @@ export function ArticleInputPage() {
                 </div>
 
                 <div>
-                  <label className="mb-1 block text-xs font-semibold text-slate-600">
-                    締め文
-                  </label>
+                  <label className="mb-1 block text-xs font-semibold text-slate-600">締め文</label>
                   <select
                     value={presentationProfile.closingLineMode}
                     onChange={(e) =>
@@ -1149,8 +1182,8 @@ export function ArticleInputPage() {
                     onChange={(e) =>
                       setPresentationProfile((prev) => ({
                         ...prev,
-                        ttsNarrationStylePreset:
-                          e.target.value as PresentationProfile['ttsNarrationStylePreset'],
+                        ttsNarrationStylePreset: e.target
+                          .value as PresentationProfile['ttsNarrationStylePreset'],
                       }))
                     }
                     className="nv-input"
@@ -1231,13 +1264,16 @@ export function ArticleInputPage() {
                   <Badge tone="info">記事保存 → スクリプト → 画像 → 音声 → 動画</Badge>
                 </div>
                 <p className="text-xs text-slate-500">
-                  上部の Workflow が全体進捗を示します。このカードでは現在の自動生成状態だけを表示します。
+                  上部の Workflow
+                  が全体進捗を示します。このカードでは現在の自動生成状態だけを表示します。
                 </p>
                 <div className="rounded-[8px] border border-[var(--nv-color-border)] bg-slate-50 px-3 py-3 text-xs">
                   {autoRunning && currentAutoStatus ? (
                     <span className="text-blue-700">自動生成中: {currentAutoStatus}</span>
                   ) : (
-                    <span className="text-slate-600">必要なときに「記事から動画まで自動生成」を実行できます。</span>
+                    <span className="text-slate-600">
+                      必要なときに「記事から動画まで自動生成」を実行できます。
+                    </span>
                   )}
                 </div>
               </div>
