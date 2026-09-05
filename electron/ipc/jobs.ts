@@ -1,4 +1,5 @@
-import { app, BrowserWindow, ipcMain } from 'electron';
+import { registerOperation } from './operations';
+import { app, BrowserWindow } from 'electron';
 import { z } from 'zod';
 import { GenerationJobEngine } from '../jobs/engine';
 import { getProjectRepository } from './project';
@@ -27,11 +28,11 @@ const optionsSchema = z.object({
   budgetUsd: z.number().nonnegative().optional(),
   restart: z.boolean().optional(),
 });
-ipcMain.handle('jobs:start', async (_, id: unknown, options: unknown) => {
+registerOperation('jobs:start', async (_, id: unknown, options: unknown) => {
   await ready;
   return engine.start(z.string().uuid().parse(id), optionsSchema.parse(options));
 });
-ipcMain.handle('jobs:cancel', async (_, id: unknown) => {
+registerOperation('jobs:cancel', async (_, id: unknown) => {
   await ready;
   await engine.cancel(z.string().uuid().parse(id));
   return { success: true };

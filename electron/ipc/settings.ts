@@ -75,14 +75,16 @@ registerOperation('settings:set', async (_, settings: unknown) => {
 });
 
 // APIキー取得（暗号化ストレージから）
-registerOperation('settings:getApiKey', async (_, service: ApiKeyService): Promise<string | null> => {
-  return readApiKey(service);
+registerOperation('settings:hasApiKey', async (_, service: ApiKeyService): Promise<boolean> => {
+  if (!['openai', 'google_ai'].includes(service)) throw new Error('未対応のサービスです。');
+  return Boolean(await readApiKey(service));
 });
 
 // APIキー保存（暗号化ストレージへ）
 registerOperation(
   'settings:setApiKey',
   async (_, service: ApiKeyService, apiKey: string): Promise<{ success: boolean }> => {
+    if (!['openai', 'google_ai'].includes(service) || typeof apiKey !== 'string' || apiKey.length > 4096) throw new Error('APIキーの入力が不正です。');
     if (!safeStorage.isEncryptionAvailable()) {
       throw new Error('Encryption is not available');
     }
@@ -116,6 +118,7 @@ registerOperation(
     service: ApiKeyService,
     inputApiKey?: string
   ): Promise<{ success: boolean; message: string; latencyMs?: number }> => {
+    if (!['openai', 'google_ai'].includes(service) || (inputApiKey !== undefined && typeof inputApiKey !== 'string')) throw new Error('未対応のサービスです。');
     const startTime = Date.now();
 
     try {

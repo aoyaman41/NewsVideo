@@ -1,3 +1,4 @@
+import { fileAccess } from '../utils/fileAccess';
 import { retryTransient, limitedOpenAIFetch } from '../utils/generationPolicy';
 import { generationSettings } from '../utils/generationContext';
 import { registerOperation } from './operations';
@@ -382,7 +383,9 @@ async function resolveStyleReferenceImages(
   const references: StyleReferenceImage[] = [];
   for (const id of ids) {
     const image = byId.get(id);
-    if (!image || !(await fileExists(image.filePath))) continue;
+    if (!image) continue;
+    await fileAccess().media(image.filePath);
+    if (!(await fileExists(image.filePath))) continue;
     references.push({
       id,
       filePath: image.filePath,
@@ -973,6 +976,8 @@ registerOperation(
 
 // 画像削除ハンドラ
 registerOperation('image:delete', async (_, filePath: string): Promise<{ success: boolean }> => {
+  filePath = await fileAccess().media(filePath, true);
+  if (!/\.(png|jpe?g|gif|webp|avif)$/i.test(filePath)) throw new Error('画像ファイルを指定してください。');
   try {
     await fs.unlink(filePath);
     return { success: true };
@@ -986,6 +991,7 @@ registerOperation('image:delete', async (_, filePath: string): Promise<{ success
 registerOperation(
   'image:import',
   async (_, sourcePath: string, projectId: string): Promise<ImageAsset> => {
+    sourcePath = await fileAccess().media(sourcePath);
     // プロジェクトパスを取得
     const projectPath = await getProjectPath(projectId);
 

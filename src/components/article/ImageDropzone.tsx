@@ -1,3 +1,4 @@
+import { toLocalFileUrl } from '../../utils/toLocalFileUrl';
 import { useCallback, useState } from 'react';
 import { useDropzone, type FileWithPath } from 'react-dropzone';
 import type { ImageAsset } from '../../schemas';
@@ -126,7 +127,7 @@ export function ImageDropzone({
               {/* 画像 */}
               <div className="aspect-video">
                 <img
-                  src={blobUrlMap.get(image.id) || `file://${image.filePath}`}
+                  src={blobUrlMap.get(image.id) || toLocalFileUrl(image.filePath)}
                   alt=""
                   className="w-full h-full object-cover"
                 />

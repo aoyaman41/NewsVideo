@@ -1,3 +1,4 @@
+import { contentSecurityPolicy } from './shared/project/contentSecurityPolicy';
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import electron from 'vite-plugin-electron';
@@ -90,6 +91,7 @@ const buildPreloadPlugin = () => ({
 
 export default defineConfig({
   plugins: [
+    { name: 'renderer-csp', transformIndexHtml(html, context) { return html.replace('__NEWSVIDEO_CSP__', contentSecurityPolicy(context.server ? (context.server.resolvedUrls?.local[0] ?? 'http://localhost:5173') : undefined)); } },
     react(),
     buildPreloadPlugin(),
     electron([

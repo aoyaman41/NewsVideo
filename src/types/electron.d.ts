@@ -59,7 +59,7 @@ interface ElectronAPI {
   settings: {
     get: () => Promise<Settings>;
     set: (settings: Partial<Settings>) => Promise<{ success: boolean }>;
-    getApiKey: (service: ApiKeyService) => Promise<string | null>;
+    hasApiKey: (service: ApiKeyService) => Promise<boolean>;
     setApiKey: (service: ApiKeyService, apiKey: string) => Promise<{ success: boolean }>;
     testConnection: (
       service: ApiKeyService,
@@ -128,8 +128,6 @@ interface ElectronAPI {
   file: {
     selectFile: (options: FileDialogOptions) => Promise<string | null>;
     selectDirectory: () => Promise<string | null>;
-    readFile: (filePath: string) => Promise<Buffer>;
-    writeFile: (filePath: string, content: Buffer) => Promise<{ success: boolean }>;
     exists: (filePath: string) => Promise<boolean>;
     listFiles: (dirPath: string) => Promise<FileEntry[]>;
     revealInFinder: (targetPath: string) => Promise<{ success: boolean }>;

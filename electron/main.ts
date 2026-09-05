@@ -1,4 +1,7 @@
-import { app, BrowserWindow, protocol, ipcMain } from 'electron';
+import { fileAccess } from './utils/fileAccess';
+import { isTrustedRenderer } from './utils/ipcOrigin';
+import { contentSecurityPolicy } from '../shared/project/contentSecurityPolicy';
+import { app, BrowserWindow, protocol, ipcMain, shell } from 'electron';
 import * as fs from 'node:fs';
 import * as fsPromises from 'node:fs/promises';
 import { Readable } from 'node:stream';
@@ -30,7 +33,7 @@ protocol.registerSchemesAsPrivileged([
       standard: true,
       corsEnabled: true,
       supportFetchAPI: true,
-      bypassCSP: true,
+      bypassCSP: false,
       stream: true,
     },
   },
@@ -116,10 +119,20 @@ function createWindow(): void {
       preload: path.join(__dirname, 'preload.cjs'),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: false,
+      sandbox: true,
     },
     titleBarStyle: 'hiddenInset',
     show: false,
+  });
+
+  const rendererOrigin = rendererUrlOverride || process.env.VITE_DEV_SERVER_URL || 'http://localhost:5173';
+  mainWindow.webContents.session.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
+  mainWindow.webContents.session.setPermissionCheckHandler(() => false);
+  mainWindow.webContents.session.webRequest.onHeadersReceived((details, callback) => callback({ responseHeaders: { ...details.responseHeaders, 'Content-Security-Policy': [contentSecurityPolicy(isDev ? rendererOrigin : undefined) + "; frame-ancestors 'none'"] } }));
+  const openExternal = (url: string) => { try { if (['https:', 'http:'].includes(new URL(url).protocol)) void shell.openExternal(url); } catch { /* Ignore malformed external links. */ } };
+  mainWindow.webContents.setWindowOpenHandler(({ url }) => { openExternal(url); return { action: 'deny' }; });
+  mainWindow.webContents.on('will-navigate', (event, url) => {
+    if (!isTrustedRenderer(url, app.isPackaged, app.getAppPath(), rendererOrigin)) { event.preventDefault(); openExternal(url); }
   });
 
   const revealWindow = () => {
@@ -171,9 +184,12 @@ function createWindow(): void {
 app.whenReady().then(() => {
   // カスタムプロトコルハンドラを登録
   protocol.handle('local-file', async (request) => {
-    const filePath = parseLocalFileRequestUrl(request.url);
-
     try {
+      if (!['GET', 'HEAD', 'OPTIONS'].includes(request.method)) return new Response('Method not allowed', { status: 405 });
+      const origin = request.headers.get('origin');
+      const devOrigin = new URL(rendererUrlOverride || process.env.VITE_DEV_SERVER_URL || 'http://localhost:5173').origin;
+      if (origin && origin !== 'null' && (!isDev || origin !== devOrigin)) return new Response('Forbidden', { status: 403 });
+      const filePath = await fileAccess().media(parseLocalFileRequestUrl(request.url));
       const stat = await fsPromises.stat(filePath);
       if (!stat.isFile()) {
         return new Response('Not found', { status: 404 });
@@ -190,7 +206,8 @@ app.whenReady().then(() => {
       baseHeaders.set('Pragma', 'no-cache');
       baseHeaders.set('Expires', '0');
       // fetch()/Range を使う場合に備えて CORS を緩める（アプリ内のローカル用途）
-      baseHeaders.set('Access-Control-Allow-Origin', '*');
+      baseHeaders.set('Access-Control-Allow-Origin', origin || 'null');
+      baseHeaders.set('Vary', 'Origin');
       baseHeaders.set('Access-Control-Allow-Headers', 'Range, Content-Type, Origin, Accept');
       baseHeaders.set('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS');
 

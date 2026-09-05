@@ -10,7 +10,8 @@ vi.mock('electron', () => ({
     handle: (name: string, handler: (...args: unknown[]) => Promise<unknown>) =>
       mocks.handlers.set(name, handler),
   },
-  app: { getPath: () => '/tmp/test' },
+  app: {
+    isPackaged: false, getAppPath: () => '/app', getPath: () => '/tmp/test' },
   safeStorage: {
     isEncryptionAvailable: () => true,
     decryptString: () => JSON.stringify(mocks.secrets),
@@ -56,7 +57,7 @@ const prompt = {
 };
 
 it('routes individual image generation through OpenAI without a Google key', async () => {
-  const asset = await mocks.handlers.get('image:generate')!(null, prompt, 'project');
+  const asset = await mocks.handlers.get('image:generate')!({ senderFrame: { url: 'http://localhost:5173', parent: null } }, prompt, 'project');
   expect(mocks.generate).toHaveBeenCalledWith(
     expect.objectContaining({ model: 'gpt-image-2', size: '2560x1440' })
   );
@@ -68,7 +69,7 @@ it('routes individual image generation through OpenAI without a Google key', asy
 it('keeps successful batch assets when one request fails', async () => {
   mocks.generate.mockRejectedValueOnce(new Error('failed part'));
   const assets = await mocks.handlers.get('image:generateBatch')!(
-    null,
+    { senderFrame: { url: 'http://localhost:5173', parent: null } },
     [prompt, { ...prompt, id: 'second' }],
     'project'
   );
@@ -78,7 +79,7 @@ it('keeps successful batch assets when one request fails', async () => {
 
 it('reports the OpenAI key requirement before generating', async () => {
   mocks.secrets = {};
-  await expect(mocks.handlers.get('image:generate')!(null, prompt, 'project')).rejects.toThrow(
+  await expect(mocks.handlers.get('image:generate')!({ senderFrame: { url: 'http://localhost:5173', parent: null } }, prompt, 'project')).rejects.toThrow(
     'OpenAI APIキー'
   );
   expect(mocks.generate).not.toHaveBeenCalled();

@@ -1,3 +1,4 @@
+import { fileAccess } from '../utils/fileAccess';
 import { resolutionForAspect, type RenderOptions, renderOptionsSchema } from '../../shared/project/videoFormat';
 import { generationSettings } from '../utils/generationContext';
 import { registerOperation } from './operations';
@@ -304,6 +305,7 @@ async function normalizeVideoToSpec(
   options: RenderOptions,
   job: VideoJob
 ): Promise<void> {
+  inputPath = await fileAccess().media(inputPath);
   const { width, height } = parseResolution(options.resolution);
 
   if (backend.id === 'native') {
@@ -396,7 +398,7 @@ async function renderPartVideo(
     throw new Error(`画像未割り当てのパートがあります: ${part.index + 1} ${part.title}`);
   }
 
-  const audioPath = part.audio.filePath;
+  const audioPath = await fileAccess().media(part.audio.filePath);
   if (!(await fileExists(audioPath))) {
     throw new Error(`音声ファイルが見つかりません: ${audioPath}`);
   }
@@ -407,6 +409,8 @@ async function renderPartVideo(
     if (!p) throw new Error(`画像が見つかりません (imageId=${ref.imageId})`);
     return p;
   });
+
+  await Promise.all(imagePaths.map((file) => fileAccess().media(file)));
 
   const clampedLeadInSec =
     Number.isFinite(leadInSec) && leadInSec > 0 ? Math.min(2, Math.max(0, leadInSec)) : 0;
@@ -796,6 +800,7 @@ async function requestVideoPathReauthorization(
     filters: [{ name: 'Video', extensions: ['mp4', 'mov', 'm4v', 'webm'] }],
   });
   if (result.canceled) return null;
+  if (result.filePaths[0]) await fileAccess().grant(result.filePaths[0], false);
   return result.filePaths[0] ?? null;
 }
 
@@ -804,6 +809,7 @@ async function stageVideoInputForFfmpeg(
   tempDir: string,
   baseName: 'opening' | 'ending'
 ): Promise<string> {
+  sourcePath = await fileAccess().media(sourcePath);
   const ext = path.extname(sourcePath) || '.mp4';
   const stagedPath = path.join(tempDir, `${baseName}.source${ext}`);
   try {
@@ -970,6 +976,12 @@ registerOperation(
     options = renderOptionsSchema.parse(options);
     const validated = projectSchema.parse(project);
     const persisted = await new ProjectRepository(path.join(app.getPath('userData'), 'projects')).load(validated.id);
+    project = { ...validated, path: persisted.path };
+    outputPath = await fileAccess().media(outputPath, true);
+    for (const part of validated.parts) {
+      if (part.audio) await fileAccess().media(part.audio.filePath);
+      for (const ref of part.panelImages) { const image = [...validated.images, ...validated.article.importedImages].find((asset) => asset.id === ref.imageId); if (image) await fileAccess().media(image.filePath); }
+    }
     if (persisted.revision !== validated.revision) throw new Error('保存後にプロジェクトが変更されました。再度書き出してください。');
     validated.integrity = { ...validated.integrity!, missingFiles: persisted.integrity?.missingFiles ?? [] };
     if (validated.parts.some((part) => { const state = partFreshness(validated, part); return state.script !== 'current' || state.image !== 'current' || state.audio !== 'current'; })) throw new Error('更新が必要な台本・画像・音声があります。再生成または内容を確認して維持してから書き出してください。');

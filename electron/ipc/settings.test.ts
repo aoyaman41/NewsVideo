@@ -17,6 +17,7 @@ vi.mock('electron', () => ({
     handle: mockHandle,
   },
   app: {
+    isPackaged: false, getAppPath: () => '/app',
     getPath: vi.fn(() => '/tmp/newsvideo-test'),
   },
   safeStorage: {
@@ -58,7 +59,7 @@ describe('settings IPC handlers', () => {
   it('registers expected channels', () => {
     expect(handlers.has('settings:get')).toBe(true);
     expect(handlers.has('settings:set')).toBe(true);
-    expect(handlers.has('settings:getApiKey')).toBe(true);
+    expect(handlers.has('settings:hasApiKey')).toBe(true);
     expect(handlers.has('settings:setApiKey')).toBe(true);
     expect(handlers.has('settings:testConnection')).toBe(true);
   });
@@ -80,7 +81,7 @@ describe('settings IPC handlers', () => {
     );
 
     const handler = getHandler('settings:get');
-    const result = (await handler({})) as typeof DEFAULT_SETTINGS & { cost?: unknown };
+    const result = (await handler({ senderFrame: { url: 'http://localhost:5173', parent: null } })) as typeof DEFAULT_SETTINGS & { cost?: unknown };
 
     expect(result.ttsEngine).toBe('gemini_tts');
     expect(result.ttsVoice).toBe(DEFAULT_SETTINGS.ttsVoice);
@@ -98,7 +99,7 @@ describe('settings IPC handlers', () => {
     readFileMock.mockResolvedValueOnce(JSON.stringify(DEFAULT_SETTINGS));
     const handler = getHandler('settings:set');
 
-    await expect(handler({}, { videoFps: 'fast' })).rejects.toThrow();
+    await expect(handler({ senderFrame: { url: 'http://localhost:5173', parent: null } }, { videoFps: 'fast' })).rejects.toThrow();
     expect(writeFileMock).not.toHaveBeenCalled();
   });
 
@@ -108,7 +109,7 @@ describe('settings IPC handlers', () => {
 
     const handler = getHandler('settings:set');
     await handler(
-      {},
+      { senderFrame: { url: 'http://localhost:5173', parent: null } },
       {
         scriptTextModel: 'gpt-5.6-terra',
         imagePromptTextModel: 'gpt-5.6-luna',

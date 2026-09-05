@@ -1,5 +1,6 @@
+import { registerOperation } from './operations';
 import { getProjectProgress } from '../../shared/project/progress';
-import { ipcMain, app, BrowserWindow } from 'electron';
+import { app, BrowserWindow } from 'electron';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import { z } from 'zod';
@@ -18,7 +19,7 @@ function changed(id: string, revision?: number) {
     window.webContents.send('project:changed', { id, revision });
 }
 
-ipcMain.handle('project:list', async () => {
+registerOperation('project:list', async () => {
   const repo = getProjectRepository();
   const results = await Promise.all(
     (await repo.directories()).map(async (directory) => {
@@ -49,7 +50,7 @@ ipcMain.handle('project:list', async () => {
   return results.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
 });
 
-ipcMain.handle('project:create', async (_, input: unknown) => {
+registerOperation('project:create', async (_, input: unknown) => {
   const name = z.string().trim().min(1).max(200).parse(input);
   const project = createNewProject(name, '');
   try {
@@ -64,15 +65,15 @@ ipcMain.handle('project:create', async (_, input: unknown) => {
   changed(created.id, created.revision);
   return created;
 });
-ipcMain.handle('project:load', (_, id: unknown) =>
+registerOperation('project:load', (_, id: unknown) =>
   getProjectRepository().load(z.string().uuid().parse(id))
 );
-ipcMain.handle('project:save', async (_, input: unknown) => {
+registerOperation('project:save', async (_, input: unknown) => {
   const saved = await getProjectRepository().save(input);
   changed(saved.id, saved.revision);
   return { success: true, savedAt: saved.updatedAt, revision: saved.revision, project: saved };
 });
-ipcMain.handle('project:delete', async (_, input: unknown) => {
+registerOperation('project:delete', async (_, input: unknown) => {
   const id = z.string().uuid().parse(input);
   const repo = getProjectRepository();
   const directory = await repo.resolve(id);

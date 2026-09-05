@@ -249,7 +249,7 @@ export function SettingsPage() {
 
     for (const service of services) {
       try {
-        const key = await window.electronAPI.settings.getApiKey(service);
+        const key = await window.electronAPI.settings.hasApiKey(service);
         keys[service] = key ? '••••••••••••••••' : '';
       } catch {
         keys[service] = '';

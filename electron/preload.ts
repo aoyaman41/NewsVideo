@@ -40,7 +40,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   settings: {
     get: () => ipcRenderer.invoke('settings:get'),
     set: (settings: unknown) => ipcRenderer.invoke('settings:set', settings),
-    getApiKey: (service: string) => ipcRenderer.invoke('settings:getApiKey', service),
+    hasApiKey: (service: string) => ipcRenderer.invoke('settings:hasApiKey', service),
     setApiKey: (service: string, apiKey: string) =>
       ipcRenderer.invoke('settings:setApiKey', service, apiKey),
     testConnection: (service: string, apiKey?: string) =>
@@ -97,9 +97,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
   file: {
     selectFile: (options: unknown) => ipcRenderer.invoke('file:selectFile', options),
     selectDirectory: () => ipcRenderer.invoke('file:selectDirectory'),
-    readFile: (filePath: string) => ipcRenderer.invoke('file:readFile', filePath),
-    writeFile: (filePath: string, content: unknown) =>
-      ipcRenderer.invoke('file:writeFile', filePath, content),
     exists: (filePath: string) => ipcRenderer.invoke('file:exists', filePath),
     listFiles: (dirPath: string) => ipcRenderer.invoke('file:listFiles', dirPath),
     revealInFinder: (targetPath: string) => ipcRenderer.invoke('file:revealInFinder', targetPath),
