@@ -238,6 +238,12 @@ export type ProjectMeta = z.infer<typeof projectMetaSchema>;
 export const projectSchema = projectMetaSchema.extend({
   schemaVersion: z.string(),
   revision: z.number().int().nonnegative().optional(),
+  integrity: z.object({
+    parts: z.record(z.string(), z.object({ script: z.string().optional(), prompt: z.string().optional(), image: z.string().optional(), audio: z.string().optional(), approvedAt: z.string().optional() })),
+    video: z.string().optional(),
+    missingFiles: z.array(z.string()),
+  }).optional(),
+  outputSettings: z.object({ resolution: z.string(), fps: z.number(), videoBitrate: z.string(), audioBitrate: z.string(), includeOpening: z.boolean(), includeEnding: z.boolean() }).optional(),
   article: articleSchema.extend({ title: z.string(), bodyText: z.string() }),
   parts: z.array(partSchema.extend({ title: z.string(), scriptText: z.string() })),
   images: z.array(imageAssetSchema),

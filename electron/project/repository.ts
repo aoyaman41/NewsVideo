@@ -1,6 +1,7 @@
 import * as fs from 'node:fs/promises';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { deriveIntegrity } from '../../shared/project/integrity';
 import { projectSchema, type Project } from '../../shared/project/schema';
 import { normalizePresentationProfile } from '../../shared/project/presentationProfile';
 
@@ -67,12 +68,38 @@ export class ProjectRepository {
       );
       data = { ...meta, ...Object.fromEntries(fields.map((field, i) => [field, values[i]])) };
     }
-    return projectSchema.parse({
+    const project = projectSchema.parse({
       ...data,
       revision: data.revision ?? 0,
       path: directory,
       presentationProfile: normalizePresentationProfile(data.presentationProfile),
     });
+    const files = [
+      ...project.images,
+      ...project.article.importedImages,
+      ...project.audio,
+      ...project.parts.flatMap((part) => (part.audio ? [part.audio] : [])),
+    ].map((asset) => asset.filePath);
+    if (project.autoGenerationStatus?.lastVideoPath)
+      files.push(project.autoGenerationStatus.lastVideoPath);
+    const missingFiles = (
+      await Promise.all(
+        [...new Set(files)].map(async (file) => {
+          try {
+            await fs.access(file);
+            return null;
+          } catch {
+            return file;
+          }
+        })
+      )
+    ).filter((file): file is string => file !== null);
+    project.integrity = {
+      ...project.integrity,
+      parts: project.integrity?.parts ?? {},
+      missingFiles,
+    };
+    return project;
   }
 
   async readDirectory(directory: string): Promise<Project> {
@@ -166,6 +193,7 @@ export class ProjectRepository {
         revision: (current.revision ?? 0) + 1,
         updatedAt: new Date().toISOString(),
       };
+      next.integrity = deriveIntegrity(current, next);
       // Materialize legacy data as a complete backup before changing the commit point.
       await this.atomicWrite(
         path.join(directory, 'project.previous.json'),

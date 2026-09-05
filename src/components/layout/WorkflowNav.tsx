@@ -1,3 +1,4 @@
+import { partFreshness } from '../../../shared/project/integrity';
 import { projectClient, useProjectState } from '../../stores/projectStore';
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
@@ -49,7 +50,7 @@ function computeStepStatuses(
   }
 
   const hasArticle = hasText(project.article?.title) && hasText(project.article?.bodyText);
-  const hasScript = summary.partCount > 0;
+  const hasScript = summary.partCount > 0 && project.parts.every((part) => partFreshness(project, part).script === 'current');
   const hasImage = hasScript && summary.missingPrompts === 0 && summary.missingImages === 0;
   const hasAudio = hasScript && summary.missingAudio === 0;
   const hasVideo = summary.hasVideoOutput;

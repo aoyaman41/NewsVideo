@@ -1,3 +1,4 @@
+import { AssetReview } from '../components/script/AssetReview';
 import { projectClient, useProjectState, useProjectSaveStatus } from '../stores/projectStore';
 import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
@@ -289,6 +290,7 @@ export function ScriptEditPage() {
             </ul>
           </Card>
 
+          {selectedPart && <AssetReview project={project} part={selectedPart} onChange={setProject} />}
           {selectedPart && (
             <Card title="選択中パート" subtitle={`No.${selectedPart.index + 1}`}>
               <div className="space-y-2 text-xs text-slate-600">

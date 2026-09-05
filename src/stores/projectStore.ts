@@ -1,3 +1,4 @@
+import { deriveIntegrity } from '../../shared/project/integrity';
 import { useCallback, useSyncExternalStore } from 'react';
 import type { Project } from '../schemas';
 
@@ -38,6 +39,7 @@ function update(id: string, project: Project | null) {
     notify();
     return;
   }
+  if (project) project = { ...project, integrity: deriveIntegrity(previous.saved, project) };
   entries.set(id, { ...previous, project });
   notify();
   if (project && comparable(project) !== comparable(previous.saved)) {
@@ -133,7 +135,8 @@ export const projectClient = {
     }
     update(project.id, project);
     await flush(project.id);
-    project.revision = read(project.id).project?.revision;
+    const stored = read(project.id).project;
+    if (stored) Object.assign(project, { revision: stored.revision, integrity: stored.integrity, updatedAt: stored.updatedAt, schemaVersion: stored.schemaVersion });
   },
   flush,
   async flushAll() {

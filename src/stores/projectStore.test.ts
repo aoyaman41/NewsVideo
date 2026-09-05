@@ -28,7 +28,7 @@ it('retains the entered draft after a failed write and retries without calling a
   expect((await projectClient.load(project.id)).article.bodyText).toBe('unsubmitted draft');
   await projectClient.flush(project.id);
   expect(save).toHaveBeenCalledTimes(2);
-  expect(edited.revision).toBe(1);
+  expect((await projectClient.load(project.id)).revision).toBe(1);
 });
 
 it('keeps newer input while an earlier save is in flight', async () => {

@@ -1,3 +1,4 @@
+import { partFreshness } from '../../shared/project/integrity';
 import { projectClient, useProjectState } from '../stores/projectStore';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
@@ -150,7 +151,7 @@ export function AudioManagePage() {
 
   const missingAudioCount = useMemo(() => {
     if (!project) return 0;
-    return project.parts.filter((p) => !p.audio).length;
+    return project.parts.filter((p) => partFreshness(project, p).audio !== 'current').length;
   }, [project]);
 
   const ttsOptions = useMemo(() => {
@@ -261,7 +262,7 @@ export function AudioManagePage() {
     if (project.parts.length === 0) return;
 
     const targets = generateOnlyMissing
-      ? project.parts.filter((p) => !p.audio && p.scriptText.trim())
+      ? project.parts.filter((p) => partFreshness(project, p).audio !== 'current' && p.scriptText.trim())
       : project.parts.filter((p) => p.scriptText.trim());
 
     if (targets.length === 0) {
@@ -536,7 +537,7 @@ export function AudioManagePage() {
                   </div>
                   <div className="mt-1 flex items-center gap-1 text-[11px]">
                     <Badge tone={part.audio ? 'success' : 'warning'}>
-                      {part.audio ? '生成済み' : '未生成'}
+                      {partFreshness(project, part).audio === 'current' ? '最新' : part.audio ? '更新が必要' : '未生成'}
                     </Badge>
                     {part.audio && (
                       <Badge tone="neutral">{formatTtsEngineLabel(part.audio.ttsEngine)}</Badge>

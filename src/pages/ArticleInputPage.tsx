@@ -1,3 +1,4 @@
+import { partFreshness, isVideoCurrent, videoInput } from '../../shared/project/integrity';
 import { projectClient, useProjectState } from '../stores/projectStore';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
@@ -507,16 +508,16 @@ export function ArticleInputPage() {
       const computeStepState = (p: Project) => {
         const parts = p.parts ?? [];
         const total = parts.length;
-        const script = total > 0;
+        const script = total > 0 && parts.every((part) => partFreshness(p, part).script === 'current');
         const partIdSet = new Set(parts.map((part) => part.id));
         const promptsCount = p.prompts
           ? new Set(p.prompts.filter((prompt) => partIdSet.has(prompt.partId)).map((p) => p.partId))
               .size
           : 0;
         const prompts = script && promptsCount === total;
-        const images = script && parts.every((part) => (part.panelImages?.length ?? 0) > 0);
-        const audio = script && parts.every((part) => Boolean(part.audio));
-        const video = Boolean(p.autoGenerationStatus?.lastVideoPath);
+        const images = script && parts.every((part) => partFreshness(p, part).image === 'current');
+        const audio = script && parts.every((part) => partFreshness(p, part).audio === 'current');
+        const video = isVideoCurrent(p);
         return { script, prompts, images, audio, video };
       };
 
@@ -573,7 +574,7 @@ export function ArticleInputPage() {
         const partById = new Map(baseProject.parts.map((part) => [part.id, part]));
         const existingPrompts = baseProject.prompts.filter((prompt) => partById.has(prompt.partId));
         const promptsByPart = new Set(existingPrompts.map((prompt) => prompt.partId));
-        const missingParts = baseProject.parts.filter((part) => !promptsByPart.has(part.id));
+        const missingParts = baseProject.parts.filter((part) => !promptsByPart.has(part.id) || partFreshness(baseProject, part).prompt !== 'current');
 
         let promptsAdded: Project['prompts'] = [];
         if (missingParts.length > 0) {
@@ -614,7 +615,7 @@ export function ArticleInputPage() {
 
           const promptsToGenerate: Project['prompts'] = [];
           for (const part of baseProject.parts) {
-            if ((part.panelImages?.length ?? 0) > 0) continue;
+            if (partFreshness(baseProject, part).image === 'current') continue;
             const prompt = latestPromptByPart.get(part.id);
             if (!prompt) continue;
             const existingImage = imagesByPrompt.get(prompt.id);
@@ -687,7 +688,7 @@ export function ArticleInputPage() {
         const partAudioById = new Map<string, Project['audio'][number]>();
         const audioAdded: Project['audio'] = [];
         const errors: string[] = [];
-        const targets = baseProject.parts.filter((part) => !part.audio);
+        const targets = baseProject.parts.filter((part) => partFreshness(baseProject, part).audio !== 'current');
         const AUDIO_GENERATION_CONCURRENCY = 5;
 
         if (!projectId) {
@@ -806,7 +807,7 @@ export function ArticleInputPage() {
             project.parts = project.parts.map((part) => {
               const imageId = imageResult.partImageById.get(part.id);
               if (!imageId) return part;
-              if ((part.panelImages?.length ?? 0) > 0) return part;
+              if (partFreshness(project, part).image === 'current') return part;
               return {
                 ...part,
                 panelImages: [{ imageId }],
@@ -892,12 +893,15 @@ export function ArticleInputPage() {
         await updateAutoStatus(project, { running: true, step: '動画を書き出し中...' });
         const settings = await window.electronAPI.settings.get();
         const videoOptions = resolveVideoOptions(settings, project);
+        project.outputSettings = videoOptions.renderOptions;
+        await projectClient.save(project);
         await ensureNotCancelled();
         const renderResult = await window.electronAPI.video.render(
           project,
           videoOptions.renderOptions,
           videoOptions.outputPath
         );
+        project.integrity = { ...project.integrity!, video: videoInput(project) };
         await updateAutoStatus(project, {
           running: false,
           step: '完了',

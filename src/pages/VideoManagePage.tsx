@@ -1,3 +1,4 @@
+import { videoInput } from '../../shared/project/integrity';
 import { projectClient, useProjectState } from '../stores/projectStore';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
@@ -452,7 +453,9 @@ export function VideoManagePage() {
       const renderProject: Project = {
         ...project,
         presentationProfile,
+        outputSettings: renderOptions,
       };
+      await projectClient.save(renderProject);
       const res = await window.electronAPI.video.render(renderProject, renderOptions, outputPath.trim());
       forceReloadVideoAsset(res.outputPath);
       try {
@@ -471,13 +474,14 @@ export function VideoManagePage() {
         };
         const updatedProject: Project = {
           ...renderProject,
+          integrity: { ...renderProject.integrity!, video: videoInput(renderProject) },
           autoGenerationStatus: nextStatus,
           updatedAt: now,
         };
         await projectClient.save(updatedProject);
         setProject(updatedProject);
-      } catch {
-        // ignore
+      } catch (error) {
+        throw new Error(`動画は出力されましたが保存状態の更新に失敗しました: ${String(error)}`);
       }
       setTimeout(() => {
         if (videoRef.current) videoRef.current.currentTime = 0;

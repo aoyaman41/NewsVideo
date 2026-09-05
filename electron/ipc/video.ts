@@ -1,3 +1,5 @@
+import { projectSchema } from '../../shared/project/schema';
+import { partFreshness } from '../../shared/project/integrity';
 import { ProjectRepository } from '../project/repository';
 import { BrowserWindow, app, dialog, ipcMain } from 'electron';
 import * as fs from 'fs/promises';
@@ -966,6 +968,12 @@ ipcMain.handle(
 ipcMain.handle(
   'video:render',
   async (_, project: ProjectLike, options: RenderOptions, outputPath: string): Promise<{ outputPath: string }> => {
+    if (currentJob) throw new Error('別の動画処理が実行中です');
+    const validated = projectSchema.parse(project);
+    const persisted = await new ProjectRepository(path.join(app.getPath('userData'), 'projects')).load(validated.id);
+    if (persisted.revision !== validated.revision) throw new Error('保存後にプロジェクトが変更されました。再度書き出してください。');
+    validated.integrity = { ...validated.integrity!, missingFiles: persisted.integrity?.missingFiles ?? [] };
+    if (validated.parts.some((part) => { const state = partFreshness(validated, part); return state.script !== 'current' || state.image !== 'current' || state.audio !== 'current'; })) throw new Error('更新が必要な台本・画像・音声があります。再生成または内容を確認して維持してから書き出してください。');
     if (currentJob) throw new Error('別の動画処理が実行中です');
     const job: VideoJob = { canceled: false, processes: new Set() };
     currentJob = job;
