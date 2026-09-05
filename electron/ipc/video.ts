@@ -1,3 +1,4 @@
+import { resolutionForAspect, type RenderOptions, renderOptionsSchema } from '../../shared/project/videoFormat';
 import { generationSettings } from '../utils/generationContext';
 import { registerOperation } from './operations';
 import { projectSchema } from '../../shared/project/schema';
@@ -36,14 +37,7 @@ interface ProgressUpdatePayload {
   meta?: Record<string, unknown>;
 }
 
-type RenderOptions = {
-  resolution: '1920x1080' | '1280x720' | '3840x2160';
-  fps: number;
-  videoBitrate: string;
-  audioBitrate: string;
-  includeOpening: boolean;
-  includeEnding: boolean;
-};
+
 
 type Settings = {
   openingVideoPath?: string;
@@ -55,6 +49,7 @@ type ImageAssetLike = { id: string; filePath: string };
 type AudioAssetLike = { id: string; filePath: string; durationSec: number };
 type ImageAssetRefLike = { imageId: string; displayDurationSec?: number };
 type PresentationProfileLike = {
+  aspectRatio?: '16:9' | '1:1' | '9:16';
   closingCardEnabled?: boolean;
   closingCardHeadline?: string;
   closingCardCtaText?: string;
@@ -879,6 +874,7 @@ async function findProjectByPartId(partId: string): Promise<{ projectPath: strin
         images,
         audio,
         article,
+        presentationProfile: meta.presentationProfile,
       };
       return { projectPath, project, part: hit };
     } catch {
@@ -924,7 +920,7 @@ registerOperation(
       const previewPath = path.join(previewDir, `preview-part-${part.index + 1}-${part.id.slice(0, 8)}.mp4`);
 
       const previewOptions: RenderOptions = {
-        resolution: '1280x720',
+        resolution: resolutionForAspect('1280x720', project.presentationProfile?.aspectRatio ?? '16:9'),
         fps: 30,
         videoBitrate: '2M',
         audioBitrate: '128k',
@@ -971,6 +967,7 @@ registerOperation(
   'video:render',
   async (_, project: ProjectLike, options: RenderOptions, outputPath: string): Promise<{ outputPath: string }> => {
     if (currentJob) throw new Error('別の動画処理が実行中です');
+    options = renderOptionsSchema.parse(options);
     const validated = projectSchema.parse(project);
     const persisted = await new ProjectRepository(path.join(app.getPath('userData'), 'projects')).load(validated.id);
     if (persisted.revision !== validated.revision) throw new Error('保存後にプロジェクトが変更されました。再度書き出してください。');

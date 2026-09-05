@@ -1,3 +1,4 @@
+import type { RenderOptions } from '../../shared/project/videoFormat';
 import type { Project, ProjectMeta, Article, Part, ImageAsset, ImagePrompt, AudioAsset } from '../../shared/project/schema';
 import type {
   type GeminiThinkingLevel,
@@ -308,14 +309,7 @@ interface CostRates {
   };
 }
 
-interface RenderOptions {
-  resolution: '1920x1080' | '1280x720' | '3840x2160';
-  fps: number;
-  videoBitrate: string;
-  audioBitrate: string;
-  includeOpening: boolean;
-  includeEnding: boolean;
-}
+
 
 interface FileDialogOptions {
   title?: string;

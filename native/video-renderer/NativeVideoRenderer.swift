@@ -503,11 +503,12 @@ func renderClosingCardImage(
   ).setFill()
   NSBezierPath(rect: NSRect(x: 0, y: 0, width: width, height: height)).fill()
 
+  let textScale = CGFloat(min(width, height)) / 1080.0
   func drawCenteredText(_ text: String, fontSize: CGFloat, color: NSColor, centerY: CGFloat) {
     let paragraph = NSMutableParagraphStyle()
     paragraph.alignment = .center
     let attributes: [NSAttributedString.Key: Any] = [
-      .font: NSFont.systemFont(ofSize: fontSize, weight: .semibold),
+      .font: NSFont.systemFont(ofSize: fontSize * textScale, weight: .semibold),
       .foregroundColor: color,
       .paragraphStyle: paragraph,
     ]

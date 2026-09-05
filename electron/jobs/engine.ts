@@ -1,3 +1,4 @@
+import { resolutionForAspect } from '../../shared/project/videoFormat';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import {
@@ -394,7 +395,7 @@ export class GenerationJobEngine {
       await this.review(id, '素材と公開内容の確認');
       project = await this.checkpoint(id, '動画');
       project.outputSettings = {
-        resolution: settings.videoResolution,
+        resolution: resolutionForAspect(settings.videoResolution, project.presentationProfile.aspectRatio),
         fps: settings.videoFps,
         videoBitrate: settings.videoBitrate,
         audioBitrate: settings.audioBitrate,

@@ -1,3 +1,4 @@
+import { resolutionForAspect, type RenderOptions } from '../../shared/project/videoFormat';
 import { videoInput } from '../../shared/project/integrity';
 import { projectClient, useProjectState } from '../stores/projectStore';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -23,14 +24,7 @@ import {
   resolvePresentationSourceLine,
 } from '../../shared/project/presentationProfile';
 
-type RenderOptions = {
-  resolution: '1920x1080' | '1280x720' | '3840x2160';
-  fps: number;
-  videoBitrate: string;
-  audioBitrate: string;
-  includeOpening: boolean;
-  includeEnding: boolean;
-};
+
 
 type Settings = {
   videoResolution: RenderOptions['resolution'];
@@ -299,14 +293,14 @@ export function VideoManagePage() {
         setSelectedPartId(normalizedProject.parts[0]?.id ?? null);
 
         const defaults: RenderOptions = {
-          resolution: normalizedSettings.videoResolution,
+          resolution: resolutionForAspect(normalizedSettings.videoResolution, normalizedProject.presentationProfile.aspectRatio),
           fps: normalizedSettings.videoFps,
           videoBitrate: normalizedSettings.videoBitrate,
           audioBitrate: normalizedSettings.audioBitrate,
           includeOpening: Boolean(normalizedSettings.openingVideoPath),
           includeEnding: Boolean(normalizedSettings.endingVideoPath),
         };
-        setRenderOptions(defaults);
+        setRenderOptions(normalizedProject.outputSettings ? { ...defaults, ...normalizedProject.outputSettings, resolution: resolutionForAspect(normalizedProject.outputSettings.resolution, normalizedProject.presentationProfile.aspectRatio) } : defaults);
 
         const safeName = normalizedProject.name.replace(/[\\/:*?"<>|]/g, '_').slice(0, 80) || 'output';
         setOutputPath(`${normalizedProject.path}/output/${safeName}.mp4`);
@@ -450,13 +444,14 @@ export function VideoManagePage() {
       setShowProgress(true);
       setProgress({ stage: 'preparing', percent: 0, message: '準備中...' });
 
+      const effectiveOptions = { ...renderOptions, resolution: resolutionForAspect(renderOptions.resolution, presentationProfile.aspectRatio) };
       const renderProject: Project = {
         ...project,
         presentationProfile,
-        outputSettings: renderOptions,
+        outputSettings: effectiveOptions,
       };
       await projectClient.save(renderProject);
-      const res = await window.electronAPI.video.render(renderProject, renderOptions, outputPath.trim());
+      const res = await window.electronAPI.video.render(renderProject, effectiveOptions, outputPath.trim());
       forceReloadVideoAsset(res.outputPath);
       try {
         const now = new Date().toISOString();
@@ -631,7 +626,7 @@ export function VideoManagePage() {
           className="overflow-auto"
         >
           <div className="space-y-3">
-            <div className="aspect-video w-full overflow-hidden rounded-[12px] bg-black">
+            <div className="w-full overflow-hidden rounded-[12px] bg-black" style={{ aspectRatio: presentationProfile.aspectRatio.replace(':', ' / ') }}>
               {videoSrc ? (
                 <video
                   key={videoSrc}
@@ -840,7 +835,7 @@ export function VideoManagePage() {
                 <div className="grid gap-2 sm:grid-cols-2 text-xs text-slate-600">
                   <div>
                     <div className="font-semibold text-slate-700">既定解像度</div>
-                    <div className="mt-1 text-sm text-slate-900">{renderOptions.resolution}</div>
+                    <div className="mt-1 text-sm text-slate-900">{resolutionForAspect(renderOptions.resolution, presentationProfile.aspectRatio)}</div>
                   </div>
                   <div>
                     <div className="font-semibold text-slate-700">既定FPS</div>
