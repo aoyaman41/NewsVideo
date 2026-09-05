@@ -1,4 +1,6 @@
-import { ipcMain, app, safeStorage } from 'electron';
+import { configureGenerationConcurrency } from '../utils/generationPolicy';
+import { registerOperation } from './operations';
+import { app, safeStorage, BrowserWindow } from 'electron';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import {
@@ -26,7 +28,9 @@ async function readSettings(): Promise<Settings> {
   try {
     const settingsPath = getSettingsPath();
     const content = await fs.readFile(settingsPath, 'utf-8');
-    return normalizeSettings(JSON.parse(content));
+    const settings = normalizeSettings(JSON.parse(content));
+    configureGenerationConcurrency(settings.generationConcurrency);
+    return settings;
   } catch {
     return normalizeSettings(DEFAULT_SETTINGS);
   }
@@ -54,30 +58,77 @@ async function readApiKey(service: ApiKeyService): Promise<string | null> {
 // ============================================
 
 // 設定取得
-ipcMain.handle('settings:get', async (): Promise<Settings> => {
+registerOperation('settings:get', async (): Promise<Settings> => {
   return readSettings();
 });
 
 // 設定保存
-ipcMain.handle('settings:set', async (_, settings: unknown) => {
+registerOperation('settings:set', async (_, settings: unknown) => {
   const settingsPath = getSettingsPath();
   const currentSettings = await readSettings();
   const validatedSettings = parseSettingsUpdate(settings);
   const newSettings = normalizeSettings({ ...currentSettings, ...validatedSettings });
+  configureGenerationConcurrency(newSettings.generationConcurrency);
 
   await fs.writeFile(settingsPath, JSON.stringify(newSettings, null, 2));
+  const generationKeys = [
+    'readingDictionary',
+    'scriptTextModel',
+    'imagePromptTextModel',
+    'openaiReasoningEffort',
+    'geminiThinkingLevel',
+    'imageModel',
+    'imageResolution',
+    'ttsEngine',
+    'ttsModel',
+    'ttsVoice',
+    'ttsSpeakingRate',
+    'ttsPitch',
+  ] as const;
+  const changedGenerationKeys = generationKeys.filter(
+    (key) => JSON.stringify(currentSettings[key]) !== JSON.stringify(newSettings[key])
+  );
+  if (changedGenerationKeys.length) {
+    const { getProjectRepository } = await import('./project');
+    const repo = getProjectRepository();
+    for (const directory of await repo.directories()) {
+      try {
+        const project = await repo.readDirectory(directory);
+        if (project.job && ['running', 'queued'].includes(project.job.status)) continue;
+        const saved = await repo.update(project.id, (data) => {
+          data.generationConfig = {
+            ...data.generationConfig,
+            ...Object.fromEntries(changedGenerationKeys.map((key) => [key, newSettings[key]])),
+          };
+        });
+        for (const window of BrowserWindow.getAllWindows())
+          window.webContents.send('project:changed', { id: saved.id, revision: saved.revision });
+      } catch (error) {
+        logger.warn('Generation setting invalidation failed', {
+          code: (error as NodeJS.ErrnoException).code,
+        });
+      }
+    }
+  }
   return { success: true };
 });
 
 // APIキー取得（暗号化ストレージから）
-ipcMain.handle('settings:getApiKey', async (_, service: ApiKeyService): Promise<string | null> => {
-  return readApiKey(service);
+registerOperation('settings:hasApiKey', async (_, service: ApiKeyService): Promise<boolean> => {
+  if (!['openai', 'google_ai'].includes(service)) throw new Error('未対応のサービスです。');
+  return Boolean(await readApiKey(service));
 });
 
 // APIキー保存（暗号化ストレージへ）
-ipcMain.handle(
+registerOperation(
   'settings:setApiKey',
   async (_, service: ApiKeyService, apiKey: string): Promise<{ success: boolean }> => {
+    if (
+      !['openai', 'google_ai'].includes(service) ||
+      typeof apiKey !== 'string' ||
+      apiKey.length > 4096
+    )
+      throw new Error('APIキーの入力が不正です。');
     if (!safeStorage.isEncryptionAvailable()) {
       throw new Error('Encryption is not available');
     }
@@ -104,13 +155,18 @@ ipcMain.handle(
 );
 
 // 接続テスト
-ipcMain.handle(
+registerOperation(
   'settings:testConnection',
   async (
     _,
     service: ApiKeyService,
     inputApiKey?: string
   ): Promise<{ success: boolean; message: string; latencyMs?: number }> => {
+    if (
+      !['openai', 'google_ai'].includes(service) ||
+      (inputApiKey !== undefined && typeof inputApiKey !== 'string')
+    )
+      throw new Error('未対応のサービスです。');
     const startTime = Date.now();
 
     try {
@@ -137,9 +193,7 @@ ipcMain.handle(
           break;
 
         case 'google_tts':
-          response = await fetch(
-            `https://texttospeech.googleapis.com/v1/voices?key=${apiKey}`
-          );
+          response = await fetch(`https://texttospeech.googleapis.com/v1/voices?key=${apiKey}`);
           break;
 
         default:

@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useModalFocus } from '../../hooks/useModalFocus';
 import type { ImageAsset } from '../../schemas';
 import { toLocalFileUrl } from '../../utils/toLocalFileUrl';
 
@@ -9,14 +9,7 @@ interface ImagePreviewModalProps {
 }
 
 export function ImagePreviewModal({ image, open, onClose }: ImagePreviewModalProps) {
-  useEffect(() => {
-    if (!open) return;
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') onClose();
-    };
-    window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
-  }, [open, onClose]);
+  const ref = useModalFocus(open, onClose);
 
   if (!open || !image) return null;
 
@@ -26,6 +19,9 @@ export function ImagePreviewModal({ image, open, onClose }: ImagePreviewModalPro
       onClick={onClose}
       role="dialog"
       aria-modal="true"
+      aria-label="画像プレビュー"
+      ref={ref}
+      tabIndex={-1}
     >
       <div
         className="bg-white rounded-lg shadow-xl max-w-5xl w-[92vw] max-h-[90vh] overflow-hidden"
@@ -33,7 +29,8 @@ export function ImagePreviewModal({ image, open, onClose }: ImagePreviewModalPro
       >
         <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200">
           <div className="text-sm text-gray-600">
-            {image.sourceType === 'generated' ? 'AI生成' : 'インポート'} / {image.metadata.width}×{image.metadata.height}
+            {image.sourceType === 'generated' ? 'AI生成' : 'インポート'} / {image.metadata.width}×
+            {image.metadata.height}
           </div>
           <button
             onClick={onClose}
@@ -45,7 +42,7 @@ export function ImagePreviewModal({ image, open, onClose }: ImagePreviewModalPro
         <div className="bg-black flex items-center justify-center p-3">
           <img
             src={toLocalFileUrl(image.filePath)}
-            alt=""
+            alt="選択した素材画像"
             className="max-h-[80vh] max-w-full object-contain"
           />
         </div>

@@ -1,18 +1,23 @@
-export const TEXT_COMPLETION_MODELS = [
+export const OPENAI_TEXT_COMPLETION_MODELS = [
+  'gpt-6-astra',
+  'gpt-5.6-sol',
+  'gpt-5.6-terra',
+  'gpt-5.6-luna',
   'gpt-5.5',
   'gpt-5.4',
   'gpt-5.2',
-  'gemini-3.1-pro',
+] as const;
+export const GEMINI_TEXT_COMPLETION_MODELS = ['gemini-3.1-pro'] as const;
+export const TEXT_COMPLETION_MODELS = [
+  ...OPENAI_TEXT_COMPLETION_MODELS,
+  ...GEMINI_TEXT_COMPLETION_MODELS,
 ] as const;
 export type TextCompletionModel = (typeof TEXT_COMPLETION_MODELS)[number];
-
-export const OPENAI_TEXT_COMPLETION_MODELS = ['gpt-5.5', 'gpt-5.4', 'gpt-5.2'] as const;
-export const GEMINI_TEXT_COMPLETION_MODELS = ['gemini-3.1-pro'] as const;
 export type OpenAITextCompletionModel = (typeof OPENAI_TEXT_COMPLETION_MODELS)[number];
 export type GeminiTextCompletionModel = (typeof GEMINI_TEXT_COMPLETION_MODELS)[number];
 export type TextCompletionProvider = 'openai' | 'gemini';
 
-export const OPENAI_TEXT_COMPLETION_MODEL: TextCompletionModel = 'gpt-5.2';
+export const OPENAI_TEXT_COMPLETION_MODEL: OpenAITextCompletionModel = 'gpt-5.2';
 export const DEFAULT_SCRIPT_TEXT_MODEL: TextCompletionModel = OPENAI_TEXT_COMPLETION_MODEL;
 export const DEFAULT_IMAGE_PROMPT_TEXT_MODEL: TextCompletionModel = OPENAI_TEXT_COMPLETION_MODEL;
 export const GEMINI_TEXT_COMPLETION_MODEL: TextCompletionModel = 'gemini-3.1-pro';
@@ -25,6 +30,7 @@ export const OPENAI_REASONING_EFFORTS = [
   'medium',
   'high',
   'xhigh',
+  'max',
 ] as const;
 export type OpenAIReasoningEffort = (typeof OPENAI_REASONING_EFFORTS)[number];
 
@@ -52,6 +58,10 @@ export const IMAGE_SIZE_TIERS = ['1K', '2K', '4K'] as const;
 export type ImageSizeTier = (typeof IMAGE_SIZE_TIERS)[number];
 
 export const TEXT_COMPLETION_MODEL_LABELS: Record<TextCompletionModel, string> = {
+  'gpt-6-astra': 'GPT-6 Astra',
+  'gpt-5.6-sol': 'GPT-5.6 Sol',
+  'gpt-5.6-terra': 'GPT-5.6 Terra',
+  'gpt-5.6-luna': 'GPT-5.6 Luna',
   'gpt-5.5': 'GPT-5.5',
   'gpt-5.4': 'GPT-5.4',
   'gpt-5.2': 'GPT-5.2',
@@ -128,15 +138,36 @@ const OPENAI_REASONING_EFFORTS_BY_MODEL: Record<
   OpenAITextCompletionModel,
   readonly SelectableOpenAIReasoningEffort[]
 > = {
+  'gpt-6-astra': ['low', 'medium', 'high', 'xhigh', 'max'],
+  'gpt-5.6-sol': ['none', 'low', 'medium', 'high', 'xhigh', 'max'],
+  'gpt-5.6-terra': ['none', 'low', 'medium', 'high', 'xhigh', 'max'],
+  'gpt-5.6-luna': ['none', 'low', 'medium', 'high', 'xhigh', 'max'],
   'gpt-5.5': ['none', 'low', 'medium', 'high', 'xhigh'],
-  'gpt-5.4': ['none', 'minimal', 'low', 'medium', 'high', 'xhigh'],
-  'gpt-5.2': ['none', 'minimal', 'low', 'medium', 'high', 'xhigh'],
+  'gpt-5.4': ['none', 'low', 'medium', 'high', 'xhigh'],
+  'gpt-5.2': ['none', 'low', 'medium', 'high', 'xhigh'],
+};
+
+const OPENAI_DEFAULT_REASONING_EFFORT_BY_MODEL: Record<
+  OpenAITextCompletionModel,
+  SelectableOpenAIReasoningEffort
+> = {
+  'gpt-6-astra': 'medium',
+  'gpt-5.6-sol': 'medium',
+  'gpt-5.6-terra': 'medium',
+  'gpt-5.6-luna': 'medium',
+  'gpt-5.5': 'none',
+  'gpt-5.4': 'none',
+  'gpt-5.2': 'none',
 };
 
 const OPENAI_TEMPERATURE_SUPPORTED_EFFORTS_BY_MODEL: Record<
   OpenAITextCompletionModel,
   readonly SelectableOpenAIReasoningEffort[]
 > = {
+  'gpt-6-astra': [],
+  'gpt-5.6-sol': [],
+  'gpt-5.6-terra': [],
+  'gpt-5.6-luna': [],
   'gpt-5.5': ['none'],
   'gpt-5.4': ['none'],
   'gpt-5.2': ['none'],
@@ -155,6 +186,16 @@ export function getSupportedOpenAIReasoningEfforts(
   return OPENAI_REASONING_EFFORTS_BY_MODEL[model];
 }
 
+export function getCommonSupportedOpenAIReasoningEfforts(
+  models: readonly OpenAITextCompletionModel[]
+): readonly SelectableOpenAIReasoningEffort[] {
+  if (models.length === 0) return [];
+  const [firstModel, ...otherModels] = models;
+  return getSupportedOpenAIReasoningEfforts(firstModel).filter((effort) =>
+    otherModels.every((model) => getSupportedOpenAIReasoningEfforts(model).includes(effort))
+  );
+}
+
 export function supportsOpenAITemperature(
   model: OpenAITextCompletionModel,
   reasoningEffort: OpenAIReasoningEffort | null
@@ -168,7 +209,7 @@ export function supportsOpenAITemperature(
 export function getDefaultOpenAIReasoningEffort(
   model: OpenAITextCompletionModel
 ): SelectableOpenAIReasoningEffort {
-  return OPENAI_REASONING_EFFORTS_BY_MODEL[model][0];
+  return OPENAI_DEFAULT_REASONING_EFFORT_BY_MODEL[model];
 }
 
 export function getSupportedGeminiThinkingLevels(

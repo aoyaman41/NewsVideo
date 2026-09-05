@@ -87,7 +87,7 @@ export function ImageAssignment({
       <div className="grid gap-4 xl:grid-cols-[220px_minmax(0,1fr)]">
         <section className="nv-surface-muted h-fit p-3">
           <div className="mb-2 flex items-center justify-between">
-            <h4 className="text-xs font-semibold tracking-wide text-slate-500">使用中</h4>
+            <h4 className="text-xs font-semibold tracking-wide text-slate-600">使用中</h4>
             {assignedImageId ? <Badge tone="success">設定済み</Badge> : <Badge tone="warning">未設定</Badge>}
           </div>
 
@@ -105,7 +105,7 @@ export function ImageAssignment({
               </div>
             )
           ) : (
-            <div className="rounded-[8px] border border-dashed border-slate-300 bg-white px-3 py-8 text-center text-xs text-slate-500">
+            <div className="rounded-[8px] border border-dashed border-slate-300 bg-white px-3 py-8 text-center text-xs text-slate-600">
               候補から1枚選択してください
             </div>
           )}
@@ -121,7 +121,7 @@ export function ImageAssignment({
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div>
               <h4 className="text-sm font-semibold text-slate-900">候補画像</h4>
-              <p className="text-xs text-slate-500">
+              <p className="text-xs text-slate-600">
                 カードをクリックで即割り当て。拡大確認は右上のアイコンから。
               </p>
             </div>
@@ -150,7 +150,7 @@ export function ImageAssignment({
           </div>
 
           {filteredCandidates.length === 0 ? (
-            <div className="rounded-[8px] border border-[var(--nv-color-border)] bg-slate-50 px-3 py-12 text-center text-sm text-slate-500">
+            <div className="rounded-[8px] border border-[var(--nv-color-border)] bg-slate-50 px-3 py-12 text-center text-sm text-slate-600">
               {uniqueCandidates.length === 0
                 ? '候補画像がありません（画像を生成するか、記事関連画像を追加してください）'
                 : 'このフィルタに一致する候補画像がありません'}

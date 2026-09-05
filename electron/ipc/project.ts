@@ -1,403 +1,166 @@
-import { ipcMain, app } from 'electron';
+import { productionMetrics } from '../../shared/project/metrics';
+import { PURPOSES } from '../../shared/project/purposes';
+import { populateSample } from '../project/sample';
+import { ProjectLifecycle } from '../project/lifecycle';
+import { fileAccess } from '../utils/fileAccess';
+import { dialog } from 'electron';
+import { registerOperation } from './operations';
+import { getProjectProgress } from '../../shared/project/progress';
+import { app, BrowserWindow } from 'electron';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
-import { randomUUID } from 'node:crypto';
-import { logger } from '../utils/logger';
-import {
-  getDefaultPresentationProfile,
-  normalizePresentationProfile,
-} from '../../shared/project/presentationProfile';
-import { DEFAULT_SETTINGS, normalizeSettings } from '../../shared/settings/appSettings';
+import { z } from 'zod';
+import { ProjectRepository } from '../project/repository';
+import { createNewProject } from '../../shared/project/schema';
+import { normalizeSettings } from '../../shared/settings/appSettings';
 
-// プロジェクトの保存先ディレクトリ
-const getProjectsDir = () => path.join(app.getPath('userData'), 'projects');
-const getSettingsPath = () => path.join(app.getPath('userData'), 'settings.json');
+export const getProjectRepository = () => {
+  repository ??= new ProjectRepository(path.join(app.getPath('userData'), 'projects'));
+  return repository;
+};
+let repository: ProjectRepository | undefined;
 
-async function readPresentationProfileDefaults() {
+function changed(id: string, revision?: number) {
+  for (const window of BrowserWindow.getAllWindows())
+    window.webContents.send('project:changed', { id, revision });
+}
+
+registerOperation('project:list', async () => {
+  const repo = getProjectRepository();
+  const results = await Promise.all(
+    (await repo.directories()).map(async (directory) => {
+      try {
+        const project = await repo.readDirectory(directory);
+        return {
+          id: project.id,
+          name: project.name,
+          createdAt: project.createdAt,
+          updatedAt: project.updatedAt,
+          path: directory,
+          articleTitle: project.article.title,
+          metrics: productionMetrics(project),
+          archived: project.archived,
+          template: project.template,
+          durationSec: project.metrics?.outputDurationSec,
+          thumbnailPath: [...project.images, ...project.article.importedImages].find(
+            (image) =>
+              image.id === (project.thumbnail?.imageId ?? project.parts[0]?.panelImages[0]?.imageId)
+          )?.filePath,
+          lastVideoPath: project.autoGenerationStatus?.lastVideoPath,
+          thumbnailImageId: project.thumbnail?.imageId,
+          summary: getProjectProgress(project),
+        };
+      } catch (error) {
+        return {
+          id: path.basename(directory),
+          name: path.basename(directory),
+          path: directory,
+          createdAt: '',
+          updatedAt: '',
+          storageError: error instanceof Error ? error.message : String(error),
+        };
+      }
+    })
+  );
+  return results.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+});
+
+registerOperation('project:create', async (_, input: unknown) => {
+  const request = z
+    .union([
+      z.string(),
+      z.object({
+        name: z.string(),
+        purpose: z.enum(['short', 'explain', 'news']).optional(),
+        sample: z.boolean().optional(),
+      }),
+    ])
+    .parse(input);
+  const name = z
+    .string()
+    .trim()
+    .min(1)
+    .max(200)
+    .parse(typeof request === 'string' ? request : request.name || '新しい動画');
+  const project = createNewProject(name, '');
   try {
-    const content = await fs.readFile(getSettingsPath(), 'utf-8');
-    const settings = normalizeSettings(JSON.parse(content));
-    return {
-      aspectRatio: settings.defaultAspectRatio,
-    };
+    const settings = normalizeSettings(
+      JSON.parse(await fs.readFile(path.join(app.getPath('userData'), 'settings.json'), 'utf8'))
+    );
+    project.presentationProfile.aspectRatio = settings.defaultAspectRatio;
   } catch {
-    return {
-      aspectRatio: DEFAULT_SETTINGS.defaultAspectRatio,
-    };
+    /* Defaults work before settings exist. */
   }
-}
-
-// プロジェクトメタデータの型
-interface ProjectMeta {
-  id: string;
-  name: string;
-  createdAt: string;
-  updatedAt: string;
-  path: string;
-}
-
-type WorkflowStage = 'article' | 'script' | 'image' | 'audio' | 'video';
-
-interface ProjectProgressSummary {
-  stage: WorkflowStage;
-  completedSteps: number;
-  totalSteps: 5;
-  partCount: number;
-  missingPrompts: number;
-  missingImages: number;
-  missingAudio: number;
-  hasVideoOutput: boolean;
-}
-
-interface ProjectListItem extends ProjectMeta {
-  articleTitle?: string;
-  thumbnailImageId?: string;
-  summary?: ProjectProgressSummary;
-}
-
-interface ProjectSnapshot {
-  article?: { title?: string; bodyText?: string };
-  parts?: Array<{ id: string; panelImages?: unknown[]; audio?: unknown }>;
-  prompts?: Array<{ partId: string; createdAt: string }>;
-  autoGenerationStatus?: { lastVideoPath?: string };
-}
-
-function hasText(value: string | undefined): boolean {
-  return Boolean(value && value.trim().length > 0);
-}
-
-function summarizeProject(snapshot: ProjectSnapshot): ProjectProgressSummary {
-  const parts = Array.isArray(snapshot.parts) ? snapshot.parts : [];
-  const prompts = Array.isArray(snapshot.prompts) ? snapshot.prompts : [];
-
-  const latestPromptByPart = new Map<string, string>();
-  for (const prompt of prompts) {
-    if (!prompt?.partId) continue;
-    const currentCreatedAt = latestPromptByPart.get(prompt.partId);
-    if (!currentCreatedAt || prompt.createdAt >= currentCreatedAt) {
-      latestPromptByPart.set(prompt.partId, prompt.createdAt);
-    }
+  if (typeof request !== 'string' && request.purpose) {
+    const purpose = PURPOSES.find((item) => item.id === request.purpose)!;
+    project.presentationProfile = structuredClone(purpose.profile);
+    project.generationConfig = { targetPartCount: purpose.parts };
   }
-
-  const partCount = parts.length;
-  const missingPrompts = parts.reduce((count, part) => {
-    return latestPromptByPart.has(part.id) ? count : count + 1;
-  }, 0);
-  const missingImages = parts.reduce((count, part) => {
-    return (part.panelImages?.length ?? 0) > 0 ? count : count + 1;
-  }, 0);
-  const missingAudio = parts.reduce((count, part) => {
-    return part.audio ? count : count + 1;
-  }, 0);
-
-  const hasArticle = hasText(snapshot.article?.title) && hasText(snapshot.article?.bodyText);
-  const hasScript = partCount > 0;
-  const hasImage = hasScript && missingPrompts === 0 && missingImages === 0;
-  const hasAudio = hasScript && missingAudio === 0;
-  const hasVideoOutput = Boolean(snapshot.autoGenerationStatus?.lastVideoPath);
-
-  let stage: WorkflowStage = 'video';
-  if (!hasArticle) {
-    stage = 'article';
-  } else if (!hasScript) {
-    stage = 'script';
-  } else if (!hasImage) {
-    stage = 'image';
-  } else if (!hasAudio) {
-    stage = 'audio';
-  }
-
-  const completedSteps = [hasArticle, hasScript, hasImage, hasAudio, hasVideoOutput].filter(
-    Boolean
-  ).length;
-
-  return {
-    stage,
-    completedSteps,
-    totalSteps: 5,
-    partCount,
-    missingPrompts,
-    missingImages,
-    missingAudio,
-    hasVideoOutput,
-  };
-}
-
-// プロジェクト一覧取得
-ipcMain.handle('project:list', async (): Promise<ProjectListItem[]> => {
-  const projectsDir = getProjectsDir();
-
-  try {
-    await fs.mkdir(projectsDir, { recursive: true });
-    const entries = await fs.readdir(projectsDir, { withFileTypes: true });
-
-    const projects: ProjectListItem[] = [];
-
-    for (const entry of entries) {
-      if (entry.isDirectory() && entry.name.endsWith('.newsproj')) {
-        const projectPath = path.join(projectsDir, entry.name);
-        const metaPath = path.join(projectPath, 'project.json');
-
-        try {
-          const metaContent = await fs.readFile(metaPath, 'utf-8');
-          const meta = JSON.parse(metaContent);
-
-          const [article, parts, prompts] = await Promise.all([
-            fs
-              .readFile(path.join(projectPath, 'article.json'), 'utf-8')
-              .then(JSON.parse)
-              .catch(() => null),
-            fs
-              .readFile(path.join(projectPath, 'parts.json'), 'utf-8')
-              .then(JSON.parse)
-              .catch(() => []),
-            fs
-              .readFile(path.join(projectPath, 'prompts.json'), 'utf-8')
-              .then(JSON.parse)
-              .catch(() => []),
-          ]);
-
-          const summary = summarizeProject({
-            article: article ?? undefined,
-            parts: Array.isArray(parts) ? parts : [],
-            prompts: Array.isArray(prompts) ? prompts : [],
-            autoGenerationStatus: meta.autoGenerationStatus,
-          });
-
-          projects.push({
-            id: meta.id,
-            name: meta.name,
-            createdAt: meta.createdAt,
-            updatedAt: meta.updatedAt,
-            path: projectPath,
-            articleTitle: typeof article?.title === 'string' ? article.title : undefined,
-            thumbnailImageId:
-              typeof meta.thumbnail?.imageId === 'string' ? meta.thumbnail.imageId : undefined,
-            summary,
-          });
-        } catch {
-          // メタファイルが読めない場合はスキップ
-        }
-      }
-    }
-
-    // 更新日時の降順でソート
-    projects.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
-
-    return projects;
-  } catch (error) {
-    logger.error('Failed to list projects', error);
-    return [];
-  }
+  const created = await getProjectRepository().create(project);
+  if (typeof request !== 'string' && request.sample)
+    return populateSample(getProjectRepository(), created);
+  changed(created.id, created.revision);
+  return created;
 });
-
-// プロジェクト作成
-ipcMain.handle('project:create', async (_, name: string): Promise<ProjectMeta> => {
-  try {
-    logger.debug('[project:create] Creating project', { nameLength: name.length });
-    const projectsDir = getProjectsDir();
-    const presentationDefaults = await readPresentationProfileDefaults();
-    logger.debug('[project:create] Projects directory resolved');
-    await fs.mkdir(projectsDir, { recursive: true });
-
-    const id = randomUUID();
-    const now = new Date().toISOString();
-    const projectDirName = `${name.replace(/[^a-zA-Z0-9\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FAF]/g, '_')}_${id.slice(0, 8)}.newsproj`;
-    const projectPath = path.join(projectsDir, projectDirName);
-
-    // プロジェクトディレクトリ構造を作成
-    await fs.mkdir(projectPath, { recursive: true });
-    await fs.mkdir(path.join(projectPath, 'images', 'imported'), { recursive: true });
-    await fs.mkdir(path.join(projectPath, 'audio'), { recursive: true });
-    await fs.mkdir(path.join(projectPath, 'output'), { recursive: true });
-
-    // プロジェクトメタデータ
-    const projectMeta = {
-      id,
-      name,
-      schemaVersion: 'v1.2',
-      presentationProfile: getDefaultPresentationProfile('news', presentationDefaults),
-      createdAt: now,
-      updatedAt: now,
-    };
-
-    // 空の記事データ
-    const article = {
-      title: '',
-      source: '',
-      bodyText: '',
-      importedImages: [],
-    };
-
-    // 初期ファイルを保存
-    await fs.writeFile(
-      path.join(projectPath, 'project.json'),
-      JSON.stringify(projectMeta, null, 2)
-    );
-    await fs.writeFile(path.join(projectPath, 'article.json'), JSON.stringify(article, null, 2));
-    await fs.writeFile(path.join(projectPath, 'parts.json'), JSON.stringify([], null, 2));
-    await fs.writeFile(path.join(projectPath, 'images.json'), JSON.stringify([], null, 2));
-    await fs.writeFile(path.join(projectPath, 'prompts.json'), JSON.stringify([], null, 2));
-    await fs.writeFile(path.join(projectPath, 'audio.json'), JSON.stringify([], null, 2));
-    await fs.writeFile(path.join(projectPath, 'usage.json'), JSON.stringify([], null, 2));
-
-    logger.info('[project:create] Project created', { id });
-    return {
-      id,
-      name,
-      createdAt: now,
-      updatedAt: now,
-      path: projectPath,
-    };
-  } catch (error) {
-    logger.error('[project:create] Error', error);
-    throw error;
-  }
-});
-
-// プロジェクト読み込み
-ipcMain.handle('project:load', async (_, projectId: string) => {
-  const projectsDir = getProjectsDir();
-  const presentationDefaults = await readPresentationProfileDefaults();
-  const entries = await fs.readdir(projectsDir, { withFileTypes: true });
-
-  for (const entry of entries) {
-    if (entry.isDirectory() && entry.name.endsWith('.newsproj')) {
-      const projectPath = path.join(projectsDir, entry.name);
-      const metaPath = path.join(projectPath, 'project.json');
-
-      try {
-        const metaContent = await fs.readFile(metaPath, 'utf-8');
-        const meta = JSON.parse(metaContent);
-
-        if (meta.id === projectId) {
-          // 全データを読み込み
-          const [article, parts, images, prompts, audio, usage] = await Promise.all([
-            fs.readFile(path.join(projectPath, 'article.json'), 'utf-8').then(JSON.parse),
-            fs.readFile(path.join(projectPath, 'parts.json'), 'utf-8').then(JSON.parse),
-            fs.readFile(path.join(projectPath, 'images.json'), 'utf-8').then(JSON.parse),
-            fs.readFile(path.join(projectPath, 'prompts.json'), 'utf-8').then(JSON.parse),
-            fs.readFile(path.join(projectPath, 'audio.json'), 'utf-8').then(JSON.parse),
-            fs
-              .readFile(path.join(projectPath, 'usage.json'), 'utf-8')
-              .then(JSON.parse)
-              .catch(() => []),
-          ]);
-
-          return {
-            ...meta,
-            path: projectPath,
-            article,
-            parts,
-            images,
-            prompts,
-            audio,
-            usage,
-            presentationProfile: normalizePresentationProfile(
-              meta.presentationProfile,
-              presentationDefaults
-            ),
-          };
-        }
-      } catch {
-        // 読み込み失敗時はスキップ
-      }
-    }
-  }
-
-  throw new Error(`Project not found: ${projectId}`);
-});
-
-// プロジェクト保存
-ipcMain.handle(
-  'project:save',
-  async (
-    _,
-    project: {
-      id: string;
-      name: string;
-      path: string;
-      article: unknown;
-      parts: unknown;
-      images: unknown;
-      prompts: unknown;
-      audio: unknown;
-      usage?: unknown;
-      presentationProfile?: unknown;
-      thumbnail?: unknown;
-      autoGenerationStatus?: unknown;
-    }
-  ) => {
-    const now = new Date().toISOString();
-    const projectPath = project.path;
-    const presentationDefaults = await readPresentationProfileDefaults();
-    if (!projectPath) {
-      throw new Error('Project path is missing');
-    }
-
-    const safeArticle = project.article ?? {
-      title: '',
-      source: '',
-      bodyText: '',
-      importedImages: [],
-    };
-    const safeParts = project.parts ?? [];
-    const safeImages = project.images ?? [];
-    const safePrompts = project.prompts ?? [];
-    const safeAudio = project.audio ?? [];
-    const safeUsage = project.usage ?? [];
-
-    // メタデータ更新
-    const metaPath = path.join(projectPath, 'project.json');
-    const metaContent = await fs.readFile(metaPath, 'utf-8');
-    const meta = JSON.parse(metaContent);
-    meta.name = project.name;
-    meta.updatedAt = now;
-    meta.presentationProfile = normalizePresentationProfile(
-      project.presentationProfile ?? meta.presentationProfile,
-      presentationDefaults
-    );
-    meta.thumbnail = project.thumbnail;
-    meta.autoGenerationStatus = project.autoGenerationStatus;
-
-    // 全データを保存
-    await Promise.all([
-      fs.writeFile(metaPath, JSON.stringify(meta, null, 2)),
-      fs.writeFile(path.join(projectPath, 'article.json'), JSON.stringify(safeArticle, null, 2)),
-      fs.writeFile(path.join(projectPath, 'parts.json'), JSON.stringify(safeParts, null, 2)),
-      fs.writeFile(path.join(projectPath, 'images.json'), JSON.stringify(safeImages, null, 2)),
-      fs.writeFile(path.join(projectPath, 'prompts.json'), JSON.stringify(safePrompts, null, 2)),
-      fs.writeFile(path.join(projectPath, 'audio.json'), JSON.stringify(safeAudio, null, 2)),
-      fs.writeFile(path.join(projectPath, 'usage.json'), JSON.stringify(safeUsage, null, 2)),
-    ]);
-
-    return { success: true, savedAt: now };
-  }
+registerOperation('project:load', (_, id: unknown) =>
+  getProjectRepository().load(z.string().uuid().parse(id))
 );
+registerOperation('project:save', async (_, input: unknown) => {
+  const saved = await getProjectRepository().save(input);
+  changed(saved.id, saved.revision);
+  return { success: true, savedAt: saved.updatedAt, revision: saved.revision, project: saved };
+});
+registerOperation('project:delete', async (_, input: unknown) => {
+  const id = z.string().uuid().parse(input);
+  const repo = getProjectRepository();
+  const project = await repo.load(id);
+  if (project.job && ['running', 'queued'].includes(project.job.status))
+    throw new Error('生成を停止してからごみ箱へ移動してください。');
+  const directory = await repo.resolve(id);
+  const trash = path.join(path.dirname(repo.root), 'trash');
+  await fs.mkdir(trash, { recursive: true });
+  await fs.rename(directory, path.join(trash, `${Date.now()}-${path.basename(directory)}`));
+  changed(id);
+  return { success: true };
+});
 
-// プロジェクト削除
-ipcMain.handle('project:delete', async (_, projectId: string) => {
-  const projectsDir = getProjectsDir();
-  const entries = await fs.readdir(projectsDir, { withFileTypes: true });
-
-  for (const entry of entries) {
-    if (entry.isDirectory() && entry.name.endsWith('.newsproj')) {
-      const projectPath = path.join(projectsDir, entry.name);
-      const metaPath = path.join(projectPath, 'project.json');
-
-      try {
-        const metaContent = await fs.readFile(metaPath, 'utf-8');
-        const meta = JSON.parse(metaContent);
-
-        if (meta.id === projectId) {
-          await fs.rm(projectPath, { recursive: true });
-          return { success: true };
-        }
-      } catch {
-        // 読み込み失敗時はスキップ
-      }
-    }
+registerOperation('project:manage', async (_, request: unknown) => {
+  const input = z
+    .discriminatedUnion('action', [
+      z.object({
+        action: z.literal('clone'),
+        id: z.string().uuid(),
+        template: z.boolean().optional(),
+      }),
+      z.object({ action: z.literal('archive'), id: z.string().uuid(), archived: z.boolean() }),
+      z.object({ action: z.literal('export'), id: z.string().uuid() }),
+      z.object({ action: z.literal('import') }),
+      z.object({ action: z.literal('trash') }),
+      z.object({ action: z.literal('restore'), key: z.string() }),
+    ])
+    .parse(request);
+  const lifecycle = new ProjectLifecycle(getProjectRepository(), (file) =>
+    fileAccess().media(file)
+  );
+  if (input.action === 'trash') return lifecycle.trash();
+  if (input.action === 'archive') {
+    const project = await getProjectRepository().update(input.id, (data) => {
+      data.archived = input.archived;
+    });
+    changed(project.id, project.revision);
+    return project;
   }
-
-  throw new Error(`Project not found: ${projectId}`);
+  if (input.action === 'clone') return lifecycle.clone(input.id, input.template);
+  if (input.action === 'restore') return lifecycle.restore(input.key);
+  const selection = await dialog.showOpenDialog({
+    title: input.action === 'export' ? 'バックアップの保存先' : '復元する .newsbackup フォルダー',
+    properties: ['openDirectory'],
+  });
+  if (selection.canceled || !selection.filePaths[0]) return null;
+  const selected = selection.filePaths[0];
+  if (input.action === 'export') {
+    await fileAccess().grant(selected, true, true);
+    return lifecycle.export(input.id, selected);
+  }
+  return lifecycle.import(selected);
 });

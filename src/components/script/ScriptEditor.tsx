@@ -28,13 +28,11 @@ export function ScriptEditor({
   isProcessing,
   lastCommentAppliedAt,
   autoSaveStatus,
-  autoSaveDelayMs = 1500,
   diffPreview,
 }: ScriptEditorProps) {
   const [showCommentInput, setShowCommentInput] = useState(false);
   const [comment, setComment] = useState('');
   const [showAppliedPulse, setShowAppliedPulse] = useState(false);
-  const autoSaveTimerRef = useRef<NodeJS.Timeout | null>(null);
   const prevPartIdRef = useRef<string | null>(null);
 
   const {
@@ -96,32 +94,10 @@ export function ScriptEditor({
   const estimateCharCount = (text?: string) => text?.length ?? 0;
   const estimateDuration = (text?: string) => Math.round((text?.length ?? 0) / 4);
 
-  const [watchedTitle = '', watchedSummary = '', watchedScript = ''] = useWatch({
+  const watchedScript = useWatch({
     control,
-    name: ['title', 'summary', 'scriptText'],
+    name: 'scriptText',
   });
-
-  useEffect(() => {
-    if (!isDirty || isProcessing) return;
-    if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current);
-    autoSaveTimerRef.current = setTimeout(() => {
-      onSave(part.id, { title: watchedTitle, summary: watchedSummary, scriptText: watchedScript });
-      reset({ title: watchedTitle, summary: watchedSummary, scriptText: watchedScript });
-    }, autoSaveDelayMs);
-    return () => {
-      if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current);
-    };
-  }, [
-    autoSaveDelayMs,
-    isDirty,
-    isProcessing,
-    onSave,
-    part.id,
-    reset,
-    watchedTitle,
-    watchedSummary,
-    watchedScript,
-  ]);
 
   const saveStatusLabel = useMemo(() => {
     if (!autoSaveStatus) return null;
@@ -132,7 +108,7 @@ export function ScriptEditor({
   }, [autoSaveStatus]);
 
   return (
-    <div className="flex h-full min-h-0 flex-col gap-3 p-3">
+    <div className="flex min-h-0 flex-col gap-3 p-3">
       <Card
         title={`パート ${part.index + 1} 編集`}
         subtitle="タイトル・要約・原稿を編集"
@@ -157,18 +133,43 @@ export function ScriptEditor({
           </div>
         }
       >
-        <form className="space-y-3">
+        <form className="space-y-3" onChange={() => onSave(part.id, getValues())}>
           <div>
-            <label className="mb-1 block text-xs font-semibold text-slate-600">
+            <label
+              htmlFor="scene-title"
+              className="mb-1 block text-xs font-semibold text-slate-600"
+            >
               パートタイトル
             </label>
-            <input type="text" {...register('title')} className="nv-input" />
-            {errors.title && <p className="mt-1 text-xs text-red-600">{errors.title.message}</p>}
+            <input
+              id="scene-title"
+              aria-invalid={!!errors.title}
+              aria-describedby={errors.title ? 'scene-title-error' : undefined}
+              type="text"
+              {...register('title')}
+              className="nv-input"
+            />
+            {errors.title && (
+              <p id="scene-title-error" className="mt-1 text-xs text-red-600">
+                {errors.title.message}
+              </p>
+            )}
           </div>
 
           <div>
-            <label className="mb-1 block text-xs font-semibold text-slate-600">要約</label>
-            <textarea {...register('summary')} rows={2} className="nv-input resize-y" />
+            <label
+              htmlFor="scene-summary"
+              className="mb-1 block text-xs font-semibold text-slate-600"
+            >
+              要約
+            </label>
+            <textarea
+              id="scene-summary"
+              aria-invalid={!!errors.summary}
+              {...register('summary')}
+              rows={2}
+              className="nv-input resize-y"
+            />
             {errors.summary && (
               <p className="mt-1 text-xs text-red-600">{errors.summary.message}</p>
             )}
@@ -176,18 +177,25 @@ export function ScriptEditor({
 
           <div>
             <div className="mb-1 flex items-center justify-between">
-              <label className="block text-xs font-semibold text-slate-600">ナレーション原稿</label>
-              <span className="text-xs text-slate-500">
+              <label htmlFor="scene-script" className="block text-xs font-semibold text-slate-600">
+                ナレーション原稿
+              </label>
+              <span className="text-xs text-slate-600">
                 {estimateCharCount(watchedScript)}文字 / 約{estimateDuration(watchedScript)}秒
               </span>
             </div>
             <textarea
+              id="scene-script"
+              aria-invalid={!!errors.scriptText}
+              aria-describedby={errors.scriptText ? 'scene-script-error' : undefined}
               {...register('scriptText')}
-              rows={12}
+              rows={8}
               className="nv-input resize-y font-mono text-sm"
             />
             {errors.scriptText && (
-              <p className="mt-1 text-xs text-red-600">{errors.scriptText.message}</p>
+              <p id="scene-script-error" className="mt-1 text-xs text-red-600">
+                {errors.scriptText.message}
+              </p>
             )}
           </div>
         </form>
@@ -197,6 +205,7 @@ export function ScriptEditor({
         <Card title="コメントで再生成" subtitle="改善点を短く指定してAIで書き直し">
           <div className="space-y-2">
             <textarea
+              aria-label="AIへの修正指示"
               value={comment}
               onChange={(e) => setComment(e.target.value)}
               rows={2}
@@ -223,7 +232,7 @@ export function ScriptEditor({
         <Card title="再生成差分" subtitle="直近のAI修正（前後比較）" className="min-h-0">
           <div className="grid gap-2 md:grid-cols-2">
             <div className="min-h-24 rounded-[8px] border border-[var(--nv-color-border)] bg-slate-50 p-2 text-xs text-slate-700">
-              <div className="mb-1 font-semibold text-slate-500">Before</div>
+              <div className="mb-1 font-semibold text-slate-600">Before</div>
               <div className="max-h-40 overflow-auto whitespace-pre-wrap">{diffPreview.before}</div>
             </div>
             <div className="min-h-24 rounded-[8px] border border-emerald-200 bg-emerald-50 p-2 text-xs text-emerald-800">
@@ -234,7 +243,7 @@ export function ScriptEditor({
         </Card>
       )}
 
-      <div className="px-1 text-[11px] text-slate-400">
+      <div className="px-1 text-xs text-slate-600">
         生成日時: {new Date(part.scriptGeneratedAt).toLocaleString('ja-JP')} / 更新日時:{' '}
         {new Date(part.updatedAt).toLocaleString('ja-JP')}
       </div>

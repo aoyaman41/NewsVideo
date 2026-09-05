@@ -43,14 +43,9 @@ function SortablePartItem({
   onDelete,
   formatDuration,
 }: SortablePartItemProps) {
-  const {
-    attributes,
-    listeners,
-    setNodeRef,
-    transform,
-    transition,
-    isDragging,
-  } = useSortable({ id: part.id });
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
+    id: part.id,
+  });
 
   const style = {
     transform: CSS.Transform.toString(transform),
@@ -68,10 +63,18 @@ function SortablePartItem({
           : 'border-[var(--nv-color-border)] bg-white hover:bg-slate-50'
       } ${isDragging ? 'z-50 shadow-[var(--nv-shadow-md)]' : ''}`}
       onClick={onSelect}
+      tabIndex={0}
+      aria-current={isSelected ? 'true' : undefined}
+      onKeyDown={(event) => {
+        if (event.target === event.currentTarget && (event.key === 'Enter' || event.key === ' ')) {
+          event.preventDefault();
+          onSelect();
+        }
+      }}
     >
       <div className="flex items-start gap-3 p-3">
         <button
-          className="mt-0.5 rounded-[8px] p-1 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600 cursor-grab active:cursor-grabbing touch-none"
+          className="mt-0.5 rounded-[8px] p-1 text-slate-600 transition-colors hover:bg-slate-100 hover:text-slate-600 cursor-grab active:cursor-grabbing touch-none"
           {...attributes}
           {...listeners}
           onClick={(e) => e.stopPropagation()}
@@ -87,14 +90,12 @@ function SortablePartItem({
             <Badge tone={isSelected ? 'info' : 'neutral'}>{index + 1}</Badge>
             <h4 className="truncate text-sm font-semibold text-slate-900">{part.title}</h4>
           </div>
-          <p className="mt-1 line-clamp-2 text-xs text-slate-500">
+          <p className="mt-1 line-clamp-2 text-xs text-slate-600">
             {part.summary || part.scriptText.substring(0, 50) + '...'}
           </p>
           <div className="mt-2 flex flex-wrap items-center gap-2">
             <Badge tone="neutral">{formatDuration(part.durationEstimateSec)}</Badge>
-            {part.scriptModifiedByUser && (
-              <StatusChip tone="warning" label="編集済み" />
-            )}
+            {part.scriptModifiedByUser && <StatusChip tone="warning" label="編集済み" />}
           </div>
         </div>
 
@@ -103,15 +104,11 @@ function SortablePartItem({
             e.stopPropagation();
             await onDelete();
           }}
-          className="rounded-[8px] p-1 text-slate-400 opacity-0 transition-all hover:bg-red-50 hover:text-red-600 group-hover:opacity-100"
+          className="rounded-[8px] p-1 text-slate-600 opacity-100 transition-all hover:bg-red-50 hover:text-red-600 group-hover:opacity-100"
           title="削除"
+          aria-label={`${part.title}を削除`}
         >
-          <svg
-            className="w-4 h-4"
-            fill="none"
-            stroke="currentColor"
-            viewBox="0 0 24 24"
-          >
+          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path
               strokeLinecap="round"
               strokeLinejoin="round"
@@ -167,7 +164,7 @@ export function PartList({
         <div className="flex items-center justify-between">
           <div>
             <h3 className="font-semibold text-slate-900">パート一覧</h3>
-            <p className="mt-1 text-xs text-slate-500">
+            <p className="mt-1 text-xs text-slate-600">
               {parts.length} パート / 合計{' '}
               {formatDuration(parts.reduce((sum, p) => sum + p.durationEstimateSec, 0))}
             </p>
@@ -188,7 +185,7 @@ export function PartList({
 
       <div className="nv-scrollbar flex-1 overflow-auto p-3">
         {parts.length === 0 ? (
-          <div className="rounded-[10px] border border-dashed border-[var(--nv-color-border)] p-6 text-center text-sm text-slate-500">
+          <div className="rounded-[10px] border border-dashed border-[var(--nv-color-border)] p-6 text-center text-sm text-slate-600">
             パートがありません
           </div>
         ) : (
@@ -197,10 +194,7 @@ export function PartList({
             collisionDetection={closestCenter}
             onDragEnd={handleDragEnd}
           >
-            <SortableContext
-              items={parts.map((p) => p.id)}
-              strategy={verticalListSortingStrategy}
-            >
+            <SortableContext items={parts.map((p) => p.id)} strategy={verticalListSortingStrategy}>
               <ul className="space-y-2">
                 {parts.map((part, index) => (
                   <SortablePartItem

@@ -30,7 +30,7 @@ export function Toast({
       {onDismiss && (
         <button
           type="button"
-          className="rounded-[8px] px-2 py-1 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600"
+          className="rounded-[8px] px-2 py-1 text-slate-600 transition-colors hover:bg-slate-100 hover:text-slate-600"
           onClick={onDismiss}
           aria-label="閉じる"
         >

@@ -1,4 +1,12 @@
-import { app, ipcMain, safeStorage } from 'electron';
+import { ttsRequestSchema } from '../../shared/project/generationRequests';
+import { generationSettings } from '../utils/generationContext';
+import { invokeOperation } from './operations';
+import { measurePcmWav } from '../../shared/project/audioQuality';
+import { applyReadings } from '../../shared/project/narration';
+import { normalizeSettings } from '../../shared/settings/appSettings';
+import { retryTransient } from '../utils/generationPolicy';
+import { registerOperation } from './operations';
+import { app, safeStorage } from 'electron';
 import { randomUUID } from 'crypto';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
@@ -188,33 +196,10 @@ function escapeSsmlText(text: string): string {
 }
 
 function buildSsmlWithMarks(segments: string[]): string {
-  const body = segments
-    .map((seg, i) => `<mark name="m${i}"/>${escapeSsmlText(seg)}`)
-    .join('');
+  const body = segments.map((seg, i) => `<mark name="m${i}"/>${escapeSsmlText(seg)}`).join('');
   return `<speak>${body}</speak>`;
 }
-
-async function withRetry<T>(
-  fn: () => Promise<T>,
-  maxRetries: number = 3,
-  baseDelay: number = 1000
-): Promise<T> {
-  let lastError: Error | null = null;
-
-  for (let attempt = 0; attempt < maxRetries; attempt++) {
-    try {
-      return await fn();
-    } catch (error) {
-      lastError = error instanceof Error ? error : new Error(String(error));
-      if (attempt < maxRetries - 1) {
-        const delay = baseDelay * Math.pow(2, attempt) + Math.random() * 1000;
-        await new Promise((resolve) => setTimeout(resolve, delay));
-      }
-    }
-  }
-
-  throw lastError;
-}
+const withRetry = retryTransient;
 
 async function synthesizeGoogleTts(
   text: string,
@@ -223,7 +208,9 @@ async function synthesizeGoogleTts(
 ): Promise<AudioAsset> {
   const apiKey = await readApiKey('google_tts');
   if (!apiKey) {
-    throw new Error('Google TTS APIキーが設定されていません。設定画面からAPIキーを入力してください。');
+    throw new Error(
+      'Google TTS APIキーが設定されていません。設定画面からAPIキーを入力してください。'
+    );
   }
 
   const segments = splitScriptIntoSegments(text);
@@ -439,7 +426,7 @@ async function synthesizeMacosTts(
   return {
     id: audioId,
     filePath: wavPath,
-    durationSec: estimateDurationSec(text, options.speakingRate),
+    durationSec: measurePcmWav(await fs.readFile(wavPath)).durationSec,
     ttsEngine: 'macos_tts',
     voiceId: options.voiceName || 'default',
     settings: {
@@ -482,7 +469,10 @@ async function listGoogleVoices(): Promise<VoiceInfo[]> {
 
 async function listMacosVoices(): Promise<VoiceInfo[]> {
   const { stdout } = await execFileAsync('say', ['-v', '?']);
-  const lines = stdout.split('\n').map((l) => l.trim()).filter(Boolean);
+  const lines = stdout
+    .split('\n')
+    .map((l) => l.trim())
+    .filter(Boolean);
 
   const voices: VoiceInfo[] = [];
 
@@ -544,20 +534,17 @@ async function listGeminiVoices(): Promise<VoiceInfo[]> {
   }));
 }
 
-ipcMain.handle(
-  'tts:getVoices',
-  async (_, engine?: TTSEngine): Promise<VoiceInfo[]> => {
-    if (engine === 'macos_tts') return listMacosVoices();
-    if (engine === 'gemini_tts') return listGeminiVoices();
-    if (engine === 'google_tts') return listGoogleVoices();
-    // デフォルトはGoogle（キーが無ければmacOS）
-    const google = await listGoogleVoices();
-    if (google.length > 0) return google;
-    return listMacosVoices();
-  }
-);
+registerOperation('tts:getVoices', async (_, engine?: TTSEngine): Promise<VoiceInfo[]> => {
+  if (engine === 'macos_tts') return listMacosVoices();
+  if (engine === 'gemini_tts') return listGeminiVoices();
+  if (engine === 'google_tts') return listGoogleVoices();
+  // デフォルトはGoogle（キーが無ければmacOS）
+  const google = await listGoogleVoices();
+  if (google.length > 0) return google;
+  return listMacosVoices();
+});
 
-ipcMain.handle(
+registerOperation(
   'tts:generate',
   async (
     _,
@@ -565,8 +552,13 @@ ipcMain.handle(
     options: TTSOptions,
     projectId: string
   ): Promise<{ audio: AudioAsset; usage: TokenUsage | null }> => {
+    ({ text, options } = ttsRequestSchema.parse({ text, options }));
     if (!projectId) throw new Error('projectId が指定されていません');
     const projectPath = await getProjectPath(projectId);
+    const dictionary = normalizeSettings(
+      generationSettings.getStore() ?? (await invokeOperation('settings:get'))
+    ).readingDictionary;
+    text = applyReadings(text, dictionary);
 
     if (options.ttsEngine === 'macos_tts') {
       const audio = await synthesizeMacosTts(text, options, projectPath);
@@ -580,7 +572,7 @@ ipcMain.handle(
   }
 );
 
-ipcMain.handle(
+registerOperation(
   'tts:generateBatch',
   async (
     _,
@@ -589,26 +581,27 @@ ipcMain.handle(
     projectId: string
   ): Promise<Array<{ audio: AudioAsset; usage: TokenUsage | null }>> => {
     if (!projectId) throw new Error('projectId が指定されていません');
-    const projectPath = await getProjectPath(projectId);
+    await getProjectPath(projectId);
 
     const targets = parts
       .map((part) => ({ part, text: part.scriptText || '' }))
       .filter((item) => item.text.trim().length > 0)
       .map((item, index) => ({ ...item, index }));
 
-    const out: Array<{ audio: AudioAsset; usage: TokenUsage | null } | null> =
-      Array(targets.length).fill(null);
+    const out: Array<{ audio: AudioAsset; usage: TokenUsage | null } | null> = Array(
+      targets.length
+    ).fill(null);
     const errors: { index: number; error: string }[] = [];
 
     await Promise.all(
       targets.map(async (item) => {
         try {
-          const result =
-            options.ttsEngine === 'macos_tts'
-              ? { audio: await synthesizeMacosTts(item.text, options, projectPath), usage: null }
-              : options.ttsEngine === 'gemini_tts'
-                ? await synthesizeGeminiTts(item.text, options, projectPath)
-                : { audio: await synthesizeGoogleTts(item.text, options, projectPath), usage: null };
+          const result = await invokeOperation<{ audio: AudioAsset; usage: TokenUsage | null }>(
+            'tts:generate',
+            item.text,
+            options,
+            projectId
+          );
           out[item.index] = result;
         } catch (error) {
           errors.push({

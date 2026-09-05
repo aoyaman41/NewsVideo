@@ -1,3 +1,10 @@
+vi.mock('../utils/fileAccess', () => ({
+  fileAccess: () => ({
+    assert: async (value: string) => value,
+    media: async (value: string) => value,
+    grant: vi.fn(),
+  }),
+}));
 import path from 'node:path';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -19,6 +26,7 @@ const statMock = vi.fn();
 const unlinkMock = vi.fn();
 
 vi.mock('electron', () => ({
+  app: { isPackaged: false, getAppPath: () => '/app' },
   ipcMain: {
     handle: mockHandle,
   },
@@ -70,8 +78,8 @@ describe('file IPC handlers', () => {
   it('registers expected channels', () => {
     expect(handlers.has('file:selectFile')).toBe(true);
     expect(handlers.has('file:selectDirectory')).toBe(true);
-    expect(handlers.has('file:readFile')).toBe(true);
-    expect(handlers.has('file:writeFile')).toBe(true);
+    expect(handlers.has('file:readFile')).toBe(false);
+    expect(handlers.has('file:writeFile')).toBe(false);
     expect(handlers.has('file:exists')).toBe(true);
     expect(handlers.has('file:listFiles')).toBe(true);
     expect(handlers.has('file:revealInFinder')).toBe(true);
@@ -84,7 +92,7 @@ describe('file IPC handlers', () => {
     });
 
     const handler = getHandler('file:selectFile');
-    const result = await handler({});
+    const result = await handler({ senderFrame: { url: 'http://localhost:5173', parent: null } });
 
     expect(showOpenDialogMock).toHaveBeenCalledWith({
       title: undefined,
@@ -94,11 +102,10 @@ describe('file IPC handlers', () => {
     expect(result).toBe('/tmp/example.txt');
   });
 
-  it('rejects invalid content in file:writeFile', async () => {
-    const handler = getHandler('file:writeFile');
-
-    await expect(handler({}, '/tmp/example.txt', 'plain-text')).rejects.toThrow(
-      'Invalid file content'
+  it('rejects calls from an untrusted renderer', () => {
+    const handler = getHandler('file:selectFile');
+    expect(() => handler({ senderFrame: { url: 'https://evil.test', parent: null } })).toThrow(
+      '許可'
     );
     expect(writeFileMock).not.toHaveBeenCalled();
   });
@@ -118,7 +125,10 @@ describe('file IPC handlers', () => {
     statMock.mockRejectedValueOnce(new Error('stat failed'));
 
     const handler = getHandler('file:listFiles');
-    const result = (await handler({}, '/tmp/project')) as Array<{
+    const result = (await handler(
+      { senderFrame: { url: 'http://localhost:5173', parent: null } },
+      '/tmp/project'
+    )) as Array<{
       path: string;
       name: string;
       isFile: boolean;
@@ -148,7 +158,10 @@ describe('file IPC handlers', () => {
     openPathMock.mockResolvedValueOnce('');
 
     const handler = getHandler('file:revealInFinder');
-    const result = await handler({}, '/tmp/project/output/video.mp4');
+    const result = await handler(
+      { senderFrame: { url: 'http://localhost:5173', parent: null } },
+      '/tmp/project/output/video.mp4'
+    );
 
     expect(openPathMock).toHaveBeenCalledWith(path.join('/tmp/project/output'));
     expect(result).toEqual({ success: true });

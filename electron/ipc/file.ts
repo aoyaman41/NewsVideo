@@ -1,4 +1,6 @@
-import { dialog, ipcMain, shell } from 'electron';
+import { fileAccess } from '../utils/fileAccess';
+import { registerOperation } from './operations';
+import { dialog, shell } from 'electron';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import { logger } from '../utils/logger';
@@ -9,16 +11,7 @@ type FileDialogOptions = {
   properties?: Array<'openFile' | 'openDirectory' | 'multiSelections'>;
 };
 
-function toBuffer(content: unknown): Buffer {
-  if (Buffer.isBuffer(content)) return content;
-  if (content instanceof ArrayBuffer) return Buffer.from(content);
-  if (ArrayBuffer.isView(content)) {
-    return Buffer.from(content.buffer, content.byteOffset, content.byteLength);
-  }
-  throw new Error('Invalid file content: expected Buffer/ArrayBuffer/TypedArray');
-}
-
-ipcMain.handle('file:selectFile', async (_, options: FileDialogOptions = {}) => {
+registerOperation('file:selectFile', async (_, options: FileDialogOptions = {}) => {
   const result = await dialog.showOpenDialog({
     title: options.title,
     filters: options.filters,
@@ -26,28 +19,24 @@ ipcMain.handle('file:selectFile', async (_, options: FileDialogOptions = {}) => 
   });
 
   if (result.canceled) return null;
-  return result.filePaths[0] ?? null;
+  const selected = result.filePaths[0];
+  if (selected) await fileAccess().grant(selected, false);
+  return selected ?? null;
 });
 
-ipcMain.handle('file:selectDirectory', async () => {
+registerOperation('file:selectDirectory', async () => {
   const result = await dialog.showOpenDialog({
     properties: ['openDirectory'],
   });
 
   if (result.canceled) return null;
-  return result.filePaths[0] ?? null;
+  const selected = result.filePaths[0];
+  if (selected) await fileAccess().grant(selected, true, true);
+  return selected ?? null;
 });
 
-ipcMain.handle('file:readFile', async (_, filePath: string) => {
-  return fs.readFile(filePath);
-});
-
-ipcMain.handle('file:writeFile', async (_, filePath: string, content: unknown) => {
-  await fs.writeFile(filePath, toBuffer(content));
-  return { success: true };
-});
-
-ipcMain.handle('file:exists', async (_, filePath: string) => {
+registerOperation('file:exists', async (_, filePath: string) => {
+  filePath = await fileAccess().media(filePath);
   try {
     await fs.access(filePath);
     return true;
@@ -56,7 +45,8 @@ ipcMain.handle('file:exists', async (_, filePath: string) => {
   }
 });
 
-ipcMain.handle('file:listFiles', async (_, dirPath: string) => {
+registerOperation('file:listFiles', async (_, dirPath: string) => {
+  dirPath = await fileAccess().assert(dirPath);
   try {
     const entries = await fs.readdir(dirPath, { withFileTypes: true });
     const results = await Promise.all(
@@ -86,7 +76,8 @@ ipcMain.handle('file:listFiles', async (_, dirPath: string) => {
   }
 });
 
-ipcMain.handle('file:revealInFinder', async (_, targetPath: string) => {
+registerOperation('file:revealInFinder', async (_, targetPath: string) => {
+  targetPath = await fileAccess().assert(targetPath);
   try {
     let openPath = targetPath;
     try {

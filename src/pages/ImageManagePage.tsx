@@ -1,3 +1,6 @@
+import { useScrollMemory } from '../hooks/useScrollMemory';
+import { useSceneSelection, rememberedScene } from '../stores/sceneSelection';
+import { projectClient, useProjectState } from '../stores/projectStore';
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { Header, WorkflowNav } from '../components/layout';
@@ -41,8 +44,9 @@ export function ImageManagePage() {
   const { confirm } = useConfirm();
   const toast = useToast();
 
-  const [project, setProject] = useState<Project | null>(null);
-  const [selectedPartId, setSelectedPartId] = useState<string | null>(null);
+  const [project, setProject] = useProjectState(projectId);
+  const [selectedPartId, setSelectedPartId] = useSceneSelection(projectId);
+  const scrollRef = useScrollMemory(`${projectId}:ImageManagePage`);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [isGeneratingPrompts, setIsGeneratingPrompts] = useState(false);
@@ -115,12 +119,12 @@ export function ImageManagePage() {
 
       try {
         setIsLoading(true);
-        const loadedProject = await window.electronAPI.project.load(projectId);
+        const loadedProject = await projectClient.load(projectId);
         setProject(loadedProject);
 
         // 最初のパートを選択
         if (loadedProject.parts.length > 0) {
-          setSelectedPartId(loadedProject.parts[0].id);
+          setSelectedPartId(rememberedScene(projectId, loadedProject.parts));
         }
       } catch (err) {
         console.error('Failed to load project:', err);
@@ -134,7 +138,7 @@ export function ImageManagePage() {
     };
 
     loadProject();
-  }, [projectId, reportError]);
+  }, [projectId, reportError, setProject, setSelectedPartId]);
 
   // 画像プロンプト生成
   const handleGeneratePrompts = useCallback(async () => {
@@ -164,7 +168,7 @@ export function ImageManagePage() {
         updatedAt: new Date().toISOString(),
       };
 
-      await window.electronAPI.project.save(updatedProject);
+      await projectClient.save(updatedProject);
       setProject(updatedProject);
     } catch (err) {
       console.error('Failed to generate prompts:', err);
@@ -172,7 +176,7 @@ export function ImageManagePage() {
     } finally {
       setIsGeneratingPrompts(false);
     }
-  }, [project, reportError]);
+  }, [project, reportError, setProject]);
 
   const handleGeneratePromptForTarget = useCallback(
     async (targetId: string) => {
@@ -202,7 +206,7 @@ export function ImageManagePage() {
           updatedAt: new Date().toISOString(),
         };
 
-        await window.electronAPI.project.save(updatedProject);
+        await projectClient.save(updatedProject);
         setProject(updatedProject);
       } catch (err) {
         console.error('Failed to generate prompt:', err);
@@ -211,7 +215,7 @@ export function ImageManagePage() {
         setIsGeneratingSinglePrompt(false);
       }
     },
-    [project, reportError]
+    [project, reportError, setProject]
   );
 
   // 画像生成
@@ -230,7 +234,7 @@ export function ImageManagePage() {
             : [...project.prompts, prompt],
           updatedAt: new Date().toISOString(),
         };
-        await window.electronAPI.project.save(savedPromptProject);
+        await projectClient.save(savedPromptProject);
         setProject(savedPromptProject);
 
         const promptWithReferences: ImagePrompt = {
@@ -259,7 +263,7 @@ export function ImageManagePage() {
           updatedAt: now,
         };
 
-        await window.electronAPI.project.save(updatedProject);
+        await projectClient.save(updatedProject);
         setProject(updatedProject);
       } catch (err) {
         console.error('Failed to generate image:', err);
@@ -268,7 +272,7 @@ export function ImageManagePage() {
         setIsGeneratingImage(false);
       }
     },
-    [project, projectId, reportError]
+    [project, projectId, reportError, setProject]
   );
 
   // 全パートの画像を一括生成
@@ -333,7 +337,7 @@ export function ImageManagePage() {
         updatedAt: now,
       };
 
-      await window.electronAPI.project.save(updatedProject);
+      await projectClient.save(updatedProject);
       setProject(updatedProject);
       if (batchResult.errors.length > 0) {
         const head = formatImageBatchErrors(batchResult.errors, updatedProject);
@@ -351,7 +355,7 @@ export function ImageManagePage() {
       setIsGeneratingImageBatch(false);
       setIsGeneratingImage(false);
     }
-  }, [project, projectId, activePrompts, promptIdsWithAnyImage, reportError, toast]);
+  }, [project, projectId, activePrompts, promptIdsWithAnyImage, toast, setProject, reportError]);
 
   const handleCancelImageBatch = useCallback(async () => {
     if (!projectId) return;
@@ -414,7 +418,7 @@ export function ImageManagePage() {
           updatedAt: now,
         };
 
-        await window.electronAPI.project.save(updatedProject);
+        await projectClient.save(updatedProject);
         setProject(updatedProject);
         toast.success('画像を削除しました');
       } catch (err) {
@@ -422,7 +426,7 @@ export function ImageManagePage() {
         reportError(err instanceof Error ? err.message : '画像の削除に失敗しました');
       }
     },
-    [confirm, project, reportError, toast]
+    [confirm, project, reportError, setProject, toast]
   );
 
   // プロンプト更新
@@ -436,10 +440,10 @@ export function ImageManagePage() {
         updatedAt: new Date().toISOString(),
       };
 
-      await window.electronAPI.project.save(updatedProject);
+      await projectClient.save(updatedProject);
       setProject(updatedProject);
     },
-    [project]
+    [project, setProject]
   );
 
   const handleToggleStyleReference = useCallback(
@@ -460,10 +464,10 @@ export function ImageManagePage() {
         updatedAt: new Date().toISOString(),
       };
 
-      await window.electronAPI.project.save(updatedProject);
+      await projectClient.save(updatedProject);
       setProject(updatedProject);
     },
-    [project]
+    [project, setProject]
   );
 
   const handleUpdateStyleReferenceNote = useCallback(
@@ -479,10 +483,10 @@ export function ImageManagePage() {
         updatedAt: new Date().toISOString(),
       };
 
-      await window.electronAPI.project.save(updatedProject);
+      await projectClient.save(updatedProject);
       setProject(updatedProject);
     },
-    [project]
+    [project, setProject]
   );
 
   const handleImportStyleReference = useCallback(async () => {
@@ -513,14 +517,14 @@ export function ImageManagePage() {
         updatedAt: new Date().toISOString(),
       };
 
-      await window.electronAPI.project.save(updatedProject);
+      await projectClient.save(updatedProject);
       setProject(updatedProject);
       toast.success('スタイル参照画像を追加しました');
     } catch (err) {
       console.error('Failed to import style reference:', err);
       reportError(err instanceof Error ? err.message : 'スタイル参照画像の追加に失敗しました');
     }
-  }, [project, projectId, reportError, toast]);
+  }, [project, projectId, reportError, setProject, toast]);
 
   // 選択中のパート
   const selectedPart = project?.parts.find((p) => p.id === selectedPartId);
@@ -564,20 +568,20 @@ export function ImageManagePage() {
           updatedAt: now,
         };
 
-        await window.electronAPI.project.save(updatedProject);
+        await projectClient.save(updatedProject);
         setProject(updatedProject);
       } catch (err) {
         console.error('Failed to update panel images:', err);
         reportError(err instanceof Error ? err.message : '画像の割り当て更新に失敗しました');
       }
     },
-    [project, reportError]
+    [project, reportError, setProject]
   );
 
   if (isLoading) {
     return (
       <div className="flex flex-1 items-center justify-center">
-        <p className="text-slate-500">読み込み中...</p>
+        <p className="text-slate-600">読み込み中...</p>
       </div>
     );
   }
@@ -648,15 +652,12 @@ export function ImageManagePage() {
               {IMAGE_ASPECT_RATIO_LABELS[project.presentationProfile.aspectRatio]}
             </Badge>
           </div>
-          <p className="text-xs text-slate-500">
-            この画面ではプロンプト作成と画像割り当てだけを扱います。全体進捗は上部の Workflow
-            で確認できます。
-          </p>
-          <div className="mt-4 border-t border-[var(--nv-color-border)] pt-4">
+          <details className="text-sm">
+            <summary className="cursor-pointer">スタイル参照（色・余白・見出しを揃える）</summary>
             <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
               <div>
                 <h3 className="text-sm font-semibold text-slate-900">スタイル参照</h3>
-                <p className="text-xs text-slate-500">
+                <p className="text-xs text-slate-600">
                   最大3枚のスライドサンプルを画像生成時に渡し、色・余白・文字階層を揃えます。
                 </p>
               </div>
@@ -665,6 +666,7 @@ export function ImageManagePage() {
               </Button>
             </div>
             <textarea
+              aria-label="スタイル参照に合わせたい点"
               key={project.presentationProfile.styleReferenceNote}
               defaultValue={project.presentationProfile.styleReferenceNote}
               onBlur={(e) => handleUpdateStyleReferenceNote(e.target.value)}
@@ -680,15 +682,18 @@ export function ImageManagePage() {
                 emptyMessage="参照に使える画像がありません"
               />
             ) : (
-              <div className="rounded-[8px] border border-dashed border-slate-300 bg-slate-50 px-3 py-6 text-center text-xs text-slate-500">
+              <div className="rounded-[8px] border border-dashed border-slate-300 bg-slate-50 px-3 py-6 text-center text-xs text-slate-600">
                 参照に使える画像がありません。スライドサンプルを追加してください。
               </div>
             )}
-          </div>
+          </details>
         </Card>
       </div>
 
-      <div className="grid min-h-0 flex-1 grid-cols-[260px_minmax(0,1.15fr)_minmax(0,1.15fr)] gap-4 overflow-hidden p-4">
+      <div
+        ref={scrollRef}
+        className="grid min-h-0 flex-1 grid-cols-1 xl:grid-cols-[220px_minmax(0,1fr)_minmax(0,1fr)] auto-rows-max xl:auto-rows-auto gap-4 overflow-auto p-4"
+      >
         <Card
           title="パート一覧"
           subtitle={`${project.parts.length}パート`}
@@ -709,12 +714,12 @@ export function ImageManagePage() {
                     }`}
                   >
                     <div className="flex items-center gap-2">
-                      <span className="text-xs text-slate-400">{index + 1}</span>
+                      <span className="text-xs text-slate-600">{index + 1}</span>
                       <span className="truncate text-sm font-semibold text-slate-900">
                         {part.title}
                       </span>
                     </div>
-                    <div className="mt-1 flex items-center gap-1 text-[11px]">
+                    <div className="mt-1 flex items-center gap-1 text-xs">
                       <Badge tone={partPrompt ? 'success' : 'warning'}>
                         {partPrompt ? 'プロンプト済み' : '未プロンプト'}
                       </Badge>
@@ -731,7 +736,11 @@ export function ImageManagePage() {
 
         <Card
           title={selectedPart ? selectedPart.title : 'プロンプト'}
-          subtitle={selectedPart?.summary || 'パートを選択してください'}
+          subtitle={
+            selectedPart
+              ? selectedPart.summary || '選択シーンの画像プロンプト'
+              : 'シーンを選択してください'
+          }
           className="min-h-0 overflow-auto"
         >
           {selectedPart ? (

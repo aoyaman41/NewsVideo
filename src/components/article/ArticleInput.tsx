@@ -6,6 +6,8 @@ import { Button } from '../ui';
 
 interface ArticleInputProps {
   defaultValues?: Partial<ArticleInputType>;
+  onChange?: (data: ArticleInputType) => void;
+  onSaveDraft?: () => void;
   onSubmit: (data: ArticleInputType) => void;
   onAutoSubmit?: (data: ArticleInputType) => void;
   onAutoRestart?: (data: ArticleInputType) => void;
@@ -17,6 +19,8 @@ interface ArticleInputProps {
 export function ArticleInput({
   defaultValues,
   onSubmit,
+  onChange,
+  onSaveDraft,
   onAutoSubmit,
   onAutoRestart,
   onAutoCancel,
@@ -25,6 +29,7 @@ export function ArticleInput({
 }: ArticleInputProps) {
   const {
     register,
+    getValues,
     handleSubmit,
     reset,
     formState: { errors },
@@ -46,7 +51,11 @@ export function ArticleInput({
   }, [defaultValues?.bodyText, defaultValues?.source, defaultValues?.title, reset]);
 
   return (
-    <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
+    <form
+      onChange={() => onChange?.(getValues())}
+      onSubmit={handleSubmit(onSubmit)}
+      className="space-y-4"
+    >
       <div>
         <label htmlFor="title" className="mb-1 block text-sm font-medium text-slate-700">
           記事タイトル <span className="text-red-500">*</span>
@@ -90,6 +99,11 @@ export function ArticleInput({
       </div>
 
       <div className="flex flex-wrap justify-end gap-2">
+        {onSaveDraft && (
+          <Button type="button" variant="secondary" onClick={onSaveDraft}>
+            下書きを保存
+          </Button>
+        )}
         {onAutoSubmit && (
           <Button
             type="button"

@@ -1,3 +1,13 @@
+import type { RenderOptions } from '../../shared/project/videoFormat';
+import type {
+  Project,
+  ProjectMeta,
+  Article,
+  Part,
+  ImageAsset,
+  ImagePrompt,
+  AudioAsset,
+} from '../../shared/project/schema';
 import type {
   type GeminiThinkingLevel,
   type GeminiTtsModel,
@@ -8,12 +18,7 @@ import type {
   type TextCompletionModel,
 } from '../../shared/constants/models';
 import type { type TTSEngine } from '../../shared/settings/appSettings';
-import type {
-  type ClosingLineMode,
-  type PresentationProfilePreset,
-  type ScriptTone,
-  type SourceDisplayMode,
-} from '../../shared/project/presentationProfile';
+
 import type {
   type ImageAspectRatio,
   type ImageStylePreset,
@@ -35,24 +40,61 @@ type TokenUsage = {
   inputTokens?: number;
   outputTokens?: number;
   cachedInputTokens?: number;
+  cacheWriteTokens?: number;
+  reasoningTokens?: number;
   totalTokens?: number;
+  requestCount?: number;
   model?: string;
   provider?: 'openai' | 'gemini';
 };
 
 interface ElectronAPI {
+  diagnostics: { export: () => Promise<string | null> };
   project: {
+    captions: (request: { id: string; format: 'srt' | 'vtt' }) => Promise<string>;
+    manage: (request: {
+      action: 'clone' | 'archive' | 'export' | 'import' | 'trash' | 'restore';
+      id?: string;
+      template?: boolean;
+      archived?: boolean;
+      key?: string;
+    }) => Promise<unknown>;
+    onFlushRequested: (callback: () => void) => () => void;
+    finishFlush: (success: boolean) => void;
+    onChanged: (callback: (event: { id: string; revision?: number }) => void) => () => void;
     list: () => Promise<ProjectListItem[]>;
     load: (projectId: string) => Promise<Project>;
-    save: (project: Project) => Promise<{ success: boolean; savedAt: string }>;
+    save: (
+      project: Project
+    ) => Promise<{ success: boolean; savedAt: string; revision: number; project: Project }>;
     delete: (projectId: string) => Promise<{ success: boolean }>;
-    create: (name: string) => Promise<ProjectMeta>;
+    create: (
+      name: string | { name: string; purpose?: 'short' | 'explain' | 'news'; sample?: boolean }
+    ) => Promise<ProjectMeta>;
   };
 
+  jobs: {
+    recoverAsset: (request: {
+      projectId: string;
+      index: number;
+      jobId?: string;
+      partId: string;
+    }) => Promise<{ success: boolean }>;
+    start: (
+      id: string,
+      options: {
+        mode: 'automatic' | 'review';
+        targetPartCount: number;
+        budgetUsd?: number;
+        restart?: boolean;
+      }
+    ) => Promise<import('../../shared/project/jobs').GenerationJob>;
+    cancel: (id: string) => Promise<{ success: boolean }>;
+  };
   settings: {
     get: () => Promise<Settings>;
     set: (settings: Partial<Settings>) => Promise<{ success: boolean }>;
-    getApiKey: (service: ApiKeyService) => Promise<string | null>;
+    hasApiKey: (service: ApiKeyService) => Promise<boolean>;
     setApiKey: (service: ApiKeyService, apiKey: string) => Promise<{ success: boolean }>;
     testConnection: (
       service: ApiKeyService,
@@ -83,6 +125,7 @@ interface ElectronAPI {
   };
 
   image: {
+    importData: (bytes: ArrayBuffer, projectId: string) => Promise<ImageAsset>;
     generate: (prompt: ImagePrompt, projectId: string) => Promise<ImageAsset>;
     generateBatch: (
       prompts: ImagePrompt[],
@@ -94,6 +137,19 @@ interface ElectronAPI {
   };
 
   tts: {
+    insertPause: (request: {
+      projectId: string;
+      partId: string;
+      at: number;
+      seconds: number;
+    }) => Promise<Project>;
+    replaceSegment: (request: {
+      projectId: string;
+      partId: string;
+      start: number;
+      end: number;
+      text: string;
+    }) => Promise<Project>;
     generate: (
       text: string,
       options: TTSOptions,
@@ -120,8 +176,6 @@ interface ElectronAPI {
   file: {
     selectFile: (options: FileDialogOptions) => Promise<string | null>;
     selectDirectory: () => Promise<string | null>;
-    readFile: (filePath: string) => Promise<Buffer>;
-    writeFile: (filePath: string, content: Buffer) => Promise<{ success: boolean }>;
     exists: (filePath: string) => Promise<boolean>;
     listFiles: (dirPath: string) => Promise<FileEntry[]>;
     revealInFinder: (targetPath: string) => Promise<{ success: boolean }>;
@@ -130,15 +184,6 @@ interface ElectronAPI {
   events: {
     subscribe: (channel: AllowedEventChannel, callback: (...args: unknown[]) => void) => () => void;
   };
-}
-
-// プロジェクト関連の型
-interface ProjectMeta {
-  id: string;
-  name: string;
-  createdAt: string;
-  updatedAt: string;
-  path: string;
 }
 
 type WorkflowStage = 'article' | 'script' | 'image' | 'audio' | 'video';
@@ -160,128 +205,6 @@ interface ProjectListItem extends ProjectMeta {
   summary?: ProjectProgressSummary;
 }
 
-interface Project extends ProjectMeta {
-  schemaVersion: string;
-  article: Article;
-  parts: Part[];
-  images: ImageAsset[];
-  prompts: ImagePrompt[];
-  audio: AudioAsset[];
-  usage: UsageRecord[];
-  presentationProfile: PresentationProfile;
-  thumbnail?: ImageAssetRef;
-  autoGenerationStatus?: AutoGenerationStatus;
-}
-
-interface PresentationProfile {
-  preset: PresentationProfilePreset;
-  tone: ScriptTone;
-  closingLineMode: ClosingLineMode;
-  closingLineText: string;
-  targetDurationPerPartSec: number;
-  imageStylePreset: ImageStylePreset;
-  aspectRatio: ImageAspectRatio;
-  styleReferenceImageIds: string[];
-  styleReferenceNote: string;
-  ttsNarrationStylePreset: TtsNarrationStylePreset;
-  ttsNarrationStyleNote: string;
-  closingCardEnabled: boolean;
-  closingCardHeadline: string;
-  closingCardCtaText: string;
-  sourceDisplayMode: SourceDisplayMode;
-  sourceDisplayText: string;
-}
-
-interface Article {
-  title: string;
-  source?: string;
-  bodyText: string;
-  importedImages: ImageAsset[];
-}
-
-interface Part {
-  id: string;
-  index: number;
-  title: string;
-  summary: string;
-  scriptText: string;
-  durationEstimateSec: number;
-  panelImages: ImageAssetRef[];
-  comments: Comment[];
-  audio?: AudioAsset;
-  createdAt: string;
-  updatedAt: string;
-  scriptGeneratedAt: string;
-  scriptModifiedByUser: boolean;
-}
-
-interface ImageAsset {
-  id: string;
-  filePath: string;
-  sourceType: 'generated' | 'imported';
-  metadata: {
-    width: number;
-    height: number;
-    mimeType: string;
-    fileSize: number;
-    createdAt: string;
-    promptId?: string;
-    tags: string[];
-    generation?: {
-      model: string;
-      resolution: ImageResolution;
-      imageSizeTier: ImageSizeTier;
-      aspectRatio: '16:9' | '1:1' | '9:16';
-      inputTokens?: number;
-      textInputTokens?: number;
-      imageInputTokens?: number;
-      outputTokens?: number;
-      totalTokens?: number;
-    };
-  };
-}
-
-interface UsageRecord {
-  id: string;
-  provider: 'openai' | 'gemini';
-  category: 'text' | 'image' | 'tts';
-  model: string;
-  operation: string;
-  inputTokens?: number;
-  textInputTokens?: number;
-  imageInputTokens?: number;
-  outputTokens?: number;
-  cachedInputTokens?: number;
-  imageCount?: number;
-  imageResolution?: ImageResolution;
-  imageSizeTier?: ImageSizeTier;
-  imageAspectRatio?: '16:9' | '1:1' | '9:16';
-  createdAt: string;
-}
-
-interface AutoGenerationStatus {
-  running: boolean;
-  step?: string;
-  startedAt?: string;
-  updatedAt?: string;
-  finishedAt?: string;
-  cancelRequested?: boolean;
-  error?: string;
-  steps?: {
-    script?: boolean;
-    prompts?: boolean;
-    images?: boolean;
-    audio?: boolean;
-    video?: boolean;
-  };
-  lastVideoPath?: string;
-}
-
-interface ImageAssetRef {
-  imageId: string;
-  displayDurationSec?: number;
-}
-
 interface ImageBatchGenerationError {
   index: number;
   promptId: string;
@@ -295,63 +218,10 @@ interface ImageBatchGenerationResult {
   requestedCount: number;
 }
 
-interface ImagePrompt {
-  id: string;
-  partId: string;
-  stylePreset: ImageStylePreset;
-  prompt: string;
-  negativePrompt?: string;
-  aspectRatio: ImageAspectRatio;
-  visualCopy?: {
-    headline: string;
-    subhead?: string;
-    keyNumber?: string;
-    bullets: string[];
-  };
-  layoutPlan?: {
-    intent: string;
-    composition: string;
-    objects: Array<{
-      type: string;
-      role: string;
-      position: string;
-      content: string;
-      emphasis: string;
-    }>;
-  };
-  styleReferenceImageIds?: string[];
-  version: number;
-  createdAt: string;
-}
-
-interface AudioAsset {
-  id: string;
-  filePath: string;
-  durationSec: number;
-  ttsEngine: TTSEngine;
-  voiceId: string;
-  segments?: string[];
-  timepoints?: Array<{
-    markName: string;
-    timeSeconds: number;
-  }>;
-  settings: {
-    speakingRate: number;
-    pitch: number;
-    languageCode: string;
-  };
-  generatedAt: string;
-}
-
-interface Comment {
-  id: string;
-  text: string;
-  createdAt: string;
-  appliedAt?: string;
-}
-
 // 設定関連の型
 interface Settings {
+  readingDictionary?: Array<{ word: string; reading: string }>;
+  generationConcurrency: number;
   ttsEngine: TTSEngine;
   ttsModel: GeminiTtsModel;
   ttsVoice: string;
@@ -427,6 +297,10 @@ interface CostRates {
         inputPer1MTokensUsd: number;
         outputPer1MTokensUsd: number;
         cachedInputPer1MTokensUsd?: number;
+        cacheWritePer1MTokensUsd?: number;
+        longContextThresholdTokens?: number;
+        longContextInputMultiplier?: number;
+        longContextOutputMultiplier?: number;
       }
     >;
     imageModel: string;
@@ -480,15 +354,6 @@ interface CostRates {
     imageInputPerImageUsd?: number;
     imageOutputPerImageUsd?: number;
   };
-}
-
-interface RenderOptions {
-  resolution: '1920x1080' | '1280x720' | '3840x2160';
-  fps: number;
-  videoBitrate: string;
-  audioBitrate: string;
-  includeOpening: boolean;
-  includeEnding: boolean;
 }
 
 interface FileDialogOptions {

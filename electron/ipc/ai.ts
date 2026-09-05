@@ -1,7 +1,13 @@
-import { ipcMain, app, safeStorage } from 'electron';
+import { scriptRequestSchema } from '../../shared/project/generationRequests';
+import { retryTransient, limitedOpenAIFetch } from '../utils/generationPolicy';
+import { generationSettings } from '../utils/generationContext';
+import { registerOperation } from './operations';
+import { app, safeStorage } from 'electron';
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import OpenAI from 'openai';
+import { ContentFilterFinishReasonError, LengthFinishReasonError } from 'openai/core/error';
+import { zodResponseFormat } from 'openai/helpers/zod';
 import { GoogleGenAI, ThinkingLevel } from '@google/genai';
 import { z } from 'zod/v3';
 import {
@@ -64,39 +70,17 @@ async function readApiKey(service: string): Promise<string | null> {
     return null;
   }
 }
-
-// 指数バックオフ + ジッター付きリトライ
-async function withRetry<T>(
-  fn: () => Promise<T>,
-  maxRetries: number = 3,
-  baseDelay: number = 1000
-): Promise<T> {
-  let lastError: Error | null = null;
-
-  for (let attempt = 0; attempt < maxRetries; attempt++) {
-    try {
-      return await fn();
-    } catch (error) {
-      lastError = error instanceof Error ? error : new Error(String(error));
-
-      // 最後の試行では待機しない
-      if (attempt < maxRetries - 1) {
-        // 指数バックオフ + ジッター
-        const delay = baseDelay * Math.pow(2, attempt) + Math.random() * 1000;
-        await new Promise((resolve) => setTimeout(resolve, delay));
-      }
-    }
-  }
-
-  throw lastError;
-}
+const withRetry = retryTransient;
 
 type OpenAIUsageSummary = {
   provider?: 'openai' | 'gemini';
   inputTokens?: number;
   outputTokens?: number;
   cachedInputTokens?: number;
+  cacheWriteTokens?: number;
+  reasoningTokens?: number;
   totalTokens?: number;
+  requestCount?: number;
   model?: string;
 };
 
@@ -106,7 +90,11 @@ function mapOpenAIUsage(
         prompt_tokens?: number;
         completion_tokens?: number;
         total_tokens?: number;
-        prompt_tokens_details?: { cached_tokens?: number };
+        prompt_tokens_details?: {
+          cached_tokens?: number;
+          cache_write_tokens?: number;
+        };
+        completion_tokens_details?: { reasoning_tokens?: number };
       }
     | undefined,
   model?: string
@@ -117,7 +105,10 @@ function mapOpenAIUsage(
     inputTokens: usage?.prompt_tokens,
     outputTokens: usage?.completion_tokens,
     cachedInputTokens: usage?.prompt_tokens_details?.cached_tokens,
+    cacheWriteTokens: usage?.prompt_tokens_details?.cache_write_tokens,
+    reasoningTokens: usage?.completion_tokens_details?.reasoning_tokens,
     totalTokens: usage?.total_tokens,
+    requestCount: 1,
     model,
   };
 }
@@ -149,6 +140,7 @@ function mapGeminiUsage(
       usage?.completionTokens ??
       usage?.candidates_token_count,
     totalTokens: usage?.totalTokenCount ?? usage?.totalTokens ?? usage?.total_token_count,
+    requestCount: 1,
     model,
   };
 }
@@ -174,7 +166,10 @@ function aggregateUsageSummaries(
     inputTokens: sum((usage) => usage.inputTokens),
     outputTokens: sum((usage) => usage.outputTokens),
     cachedInputTokens: sum((usage) => usage.cachedInputTokens),
+    cacheWriteTokens: sum((usage) => usage.cacheWriteTokens),
+    reasoningTokens: sum((usage) => usage.reasoningTokens),
     totalTokens: sum((usage) => usage.totalTokens),
+    requestCount: sum((usage) => usage.requestCount),
   };
 }
 
@@ -266,6 +261,27 @@ function resolveOpenAIReasoningEffort(
   return value === 'default' ? null : value;
 }
 
+async function withLocalizedStructuredOutputErrors<T>(fn: () => Promise<T>): Promise<T> {
+  try {
+    return await fn();
+  } catch (error) {
+    if (error instanceof LengthFinishReasonError) {
+      throw new Error('AIの応答が長さ上限で途中終了しました。入力を短くして再試行してください。', {
+        cause: error,
+      });
+    }
+    if (error instanceof ContentFilterFinishReasonError) {
+      throw new Error(
+        'AIの安全フィルターにより応答を完了できませんでした。入力内容を確認してください。',
+        {
+          cause: error,
+        }
+      );
+    }
+    throw error;
+  }
+}
+
 function buildOpenAITextGenerationOptions(
   model: OpenAITextCompletionModel,
   reasoningEffort: Exclude<OpenAIReasoningEffort, 'default'> | null,
@@ -290,7 +306,9 @@ async function readTextGenerationConfig(scope: TextGenerationScope): Promise<Tex
   };
   try {
     const settingsPath = getSettingsPath();
-    const content = await fs.readFile(settingsPath, 'utf-8');
+    const content = generationSettings.getStore()
+      ? JSON.stringify(generationSettings.getStore())
+      : await fs.readFile(settingsPath, 'utf-8');
     const settings = normalizeSettings(JSON.parse(content));
     const selectedModel =
       scope === 'script' ? settings.scriptTextModel : settings.imagePromptTextModel;
@@ -402,6 +420,25 @@ interface GeneratedPart {
   scriptModifiedByUser: boolean;
 }
 
+const ScriptGenerationPayloadSchema = z.object({
+  parts: z
+    .array(
+      z.object({
+        title: z.string().min(1),
+        summary: z.string(),
+        scriptText: z.string().min(1),
+        durationEstimateSec: z.number().positive(),
+      })
+    )
+    .min(1),
+});
+
+type ScriptGenerationPayload = z.infer<typeof ScriptGenerationPayloadSchema>;
+
+const ImagePromptCommentPayloadSchema = z.object({
+  prompt: z.string().min(1),
+});
+
 // スクリプト生成プロンプト
 function createScriptGenerationPrompt(article: Article, options: ScriptOptions): string {
   const toneDescription = {
@@ -489,27 +526,21 @@ function normalizeClosingLine(scriptText: string, closingLine: string | null): s
 }
 
 // スクリプト生成ハンドラ
-ipcMain.handle(
+registerOperation(
   'ai:generateScript',
   async (
     _,
     article: Article,
     options: ScriptOptions = {}
   ): Promise<{ parts: GeneratedPart[]; usage: OpenAIUsageSummary | null }> => {
+    ({ article, options } = scriptRequestSchema.parse({ article, options }));
     const generationConfig = await readTextGenerationConfig('script');
     const selectedModel = generationConfig.model;
     const scriptSystemPrompt =
       'あなたは情報動画のスクリプトライターです。与えられた記事を読みやすいナレーションスクリプトに変換します。';
     const scriptUserPrompt = createScriptGenerationPrompt(article, options);
 
-    let parsed: {
-      parts: Array<{
-        title: string;
-        summary: string;
-        scriptText: string;
-        durationEstimateSec: number;
-      }>;
-    };
+    let parsed: ScriptGenerationPayload;
     let usage: OpenAIUsageSummary | null = null;
 
     if (isOpenAITextCompletionModel(selectedModel)) {
@@ -520,26 +551,32 @@ ipcMain.handle(
         );
       }
 
-      const openai = new OpenAI({ apiKey });
+      const openai = new OpenAI({ apiKey, fetch: limitedOpenAIFetch });
       const reasoningEffort = resolveOpenAIReasoningEffort(generationConfig.openaiReasoningEffort);
-      const response = await withRetry(async () => {
-        return openai.chat.completions.parse({
+      const response = await withLocalizedStructuredOutputErrors(() =>
+        openai.chat.completions.parse({
           model: selectedModel,
           messages: [
             { role: 'system', content: scriptSystemPrompt },
             { role: 'user', content: scriptUserPrompt },
           ],
-          response_format: { type: 'json_object' },
+          response_format: zodResponseFormat(
+            ScriptGenerationPayloadSchema,
+            'script_generation_payload'
+          ),
           ...buildOpenAITextGenerationOptions(selectedModel, reasoningEffort, 0.7),
-        });
-      });
+        })
+      );
 
-      const content = response.choices[0]?.message?.content;
-      if (!content) {
-        throw new Error('AIからの応答が空でした');
+      const choice = response.choices[0];
+      if (choice?.message.refusal) {
+        throw new Error(`AIが拒否しました: ${choice.message.refusal}`);
+      }
+      if (!choice?.message.parsed) {
+        throw new Error('AIから構造化された応答を取得できませんでした');
       }
 
-      parsed = parseJsonResponse(content);
+      parsed = choice.message.parsed;
       usage = mapOpenAIUsage(response.usage, response.model);
     } else {
       const apiModel = resolveGeminiApiModel(selectedModel);
@@ -1310,10 +1347,9 @@ function buildRichSlidePrompt(params: {
 
   const drawableObjects =
     layoutPlan?.objects.filter((object) => object.type.trim().toLowerCase() !== 'source') ?? [];
-  const objectLines =
-    drawableObjects.map((object, index) => {
-      return `- ${index + 1}: ${object.type} / ${object.position} / ${object.emphasis} / ${object.role} / ${object.content}`;
-    });
+  const objectLines = drawableObjects.map((object, index) => {
+    return `- ${index + 1}: ${object.type} / ${object.position} / ${object.emphasis} / ${object.role} / ${object.content}`;
+  });
 
   const referenceLines =
     context.styleReferenceImageIds.length > 0
@@ -1599,23 +1635,29 @@ async function extractSinglePartPromptCandidate(params: {
       );
     }
 
-    const openai = new OpenAI({ apiKey });
+    const openai = new OpenAI({ apiKey, fetch: limitedOpenAIFetch });
     const reasoningEffort = resolveOpenAIReasoningEffort(
       params.generationConfig.openaiReasoningEffort
     );
-    const response = await withRetry(async () => {
-      return openai.chat.completions.create({
-        model: selectedModel,
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: userPrompt },
-        ],
-        response_format: { type: 'json_object' },
-        ...buildOpenAITextGenerationOptions(selectedModel, reasoningEffort, 0.3),
-      });
+    const response = await openai.chat.completions.create({
+      model: selectedModel,
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userPrompt },
+      ],
+      ...buildOpenAITextGenerationOptions(selectedModel, reasoningEffort, 0.3),
     });
 
-    const message = response.choices[0]?.message;
+    const choice = response.choices[0];
+    if (choice?.finish_reason === 'length') {
+      throw new Error('AIの応答が長さ上限で途中終了しました。入力を短くして再試行してください。');
+    }
+    if (choice?.finish_reason === 'content_filter') {
+      throw new Error(
+        'AIの安全フィルターにより応答を完了できませんでした。入力内容を確認してください。'
+      );
+    }
+    const message = choice?.message;
     if (!message) {
       throw new Error('AIからの応答が空でした');
     }
@@ -1689,7 +1731,7 @@ async function extractSinglePartPromptCandidate(params: {
 }
 
 // 画像プロンプト生成ハンドラ
-ipcMain.handle(
+registerOperation(
   'ai:generateImagePrompts',
   async (
     _,
@@ -1783,7 +1825,13 @@ ipcMain.handle(
         createdAt: now,
       };
     });
-    const usage = aggregateUsageSummaries(extractionResults.map((result) => result.usage));
+    const aggregatedUsage = aggregateUsageSummaries(
+      extractionResults.map((result) => result.usage)
+    );
+    const usage =
+      aggregatedUsage && isOpenAITextCompletionModel(generationConfig.model)
+        ? { ...aggregatedUsage, model: generationConfig.model }
+        : aggregatedUsage;
 
     return {
       prompts,
@@ -1793,7 +1841,7 @@ ipcMain.handle(
 );
 
 // 単一ターゲットの画像プロンプト生成ハンドラ
-ipcMain.handle(
+registerOperation(
   'ai:generateImagePromptForTarget',
   async (
     _,
@@ -1872,7 +1920,7 @@ ipcMain.handle(
 );
 
 // コメント反映ハンドラ
-ipcMain.handle(
+registerOperation(
   'ai:applyComment',
   async (
     _,
@@ -1932,10 +1980,10 @@ JSONのみを出力してください。`;
         );
       }
 
-      const openai = new OpenAI({ apiKey });
+      const openai = new OpenAI({ apiKey, fetch: limitedOpenAIFetch });
       const reasoningEffort = resolveOpenAIReasoningEffort(generationConfig.openaiReasoningEffort);
-      const response = await withRetry(async () => {
-        return openai.chat.completions.create({
+      if (isScriptTarget) {
+        const response = await openai.chat.completions.create({
           model: selectedModel,
           messages: [
             { role: 'system', content: systemPrompt },
@@ -1943,9 +1991,47 @@ JSONのみを出力してください。`;
           ],
           ...buildOpenAITextGenerationOptions(selectedModel, reasoningEffort, 0.7),
         });
-      });
-      text = response.choices[0]?.message?.content || '';
-      usage = mapOpenAIUsage(response.usage, response.model);
+        const choice = response.choices[0];
+        if (choice?.finish_reason === 'length') {
+          throw new Error(
+            'AIの応答が長さ上限で途中終了しました。入力を短くして再試行してください。'
+          );
+        }
+        if (choice?.finish_reason === 'content_filter') {
+          throw new Error(
+            'AIの安全フィルターにより応答を完了できませんでした。入力内容を確認してください。'
+          );
+        }
+        if (choice?.message.refusal) {
+          throw new Error(`AIが拒否しました: ${choice.message.refusal}`);
+        }
+        text = choice?.message.content || '';
+        usage = mapOpenAIUsage(response.usage, response.model);
+      } else {
+        const response = await withLocalizedStructuredOutputErrors(() =>
+          openai.chat.completions.parse({
+            model: selectedModel,
+            messages: [
+              { role: 'system', content: systemPrompt },
+              { role: 'user', content: userPrompt },
+            ],
+            response_format: zodResponseFormat(
+              ImagePromptCommentPayloadSchema,
+              'image_prompt_comment_payload'
+            ),
+            ...buildOpenAITextGenerationOptions(selectedModel, reasoningEffort, 0.7),
+          })
+        );
+        const choice = response.choices[0];
+        if (choice?.message.refusal) {
+          throw new Error(`AIが拒否しました: ${choice.message.refusal}`);
+        }
+        if (!choice?.message.parsed) {
+          throw new Error('AIから構造化された応答を取得できませんでした');
+        }
+        text = JSON.stringify(choice.message.parsed);
+        usage = mapOpenAIUsage(response.usage, response.model);
+      }
     } else {
       const apiModel = resolveGeminiApiModel(selectedModel);
       const geminiResult = await generateGeminiTextContent({

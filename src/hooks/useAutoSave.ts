@@ -21,7 +21,6 @@ export function useAutoSave<T>({
   enabled = true,
 }: UseAutoSaveOptions<T>): UseAutoSaveReturn {
   const lastSavedDataRef = useRef<string | null>(null);
-  const lastSavedAtRef = useRef<Date | null>(null);
   const timeoutRef = useRef<NodeJS.Timeout | null>(null);
   const isSavingRef = useRef(false);
   const isMountedRef = useRef(true);
@@ -36,6 +35,7 @@ export function useAutoSave<T>({
   const isDirty = lastSavedDataRef.current !== serialize(data);
 
   useEffect(() => {
+    isMountedRef.current = true;
     return () => {
       isMountedRef.current = false;
     };
@@ -46,9 +46,6 @@ export function useAutoSave<T>({
     if (lastSavedDataRef.current !== null) return;
     const snapshot = serialize(data);
     lastSavedDataRef.current = snapshot;
-    const now = new Date();
-    lastSavedAtRef.current = now;
-    setLastSavedAt(now);
   }, [data, enabled, serialize]);
 
   const save = useCallback(async () => {
@@ -63,7 +60,6 @@ export function useAutoSave<T>({
       await onSave(data);
       lastSavedDataRef.current = currentData;
       const now = new Date();
-      lastSavedAtRef.current = now;
       if (isMountedRef.current) setLastSavedAt(now);
     } catch (error) {
       console.error('Auto-save failed:', error);

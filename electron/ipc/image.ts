@@ -1,4 +1,9 @@
-import { ipcMain, app, safeStorage } from 'electron';
+import { imageRequestSchema } from '../../shared/project/generationRequests';
+import { fileAccess } from '../utils/fileAccess';
+import { retryTransient, limitedOpenAIFetch } from '../utils/generationPolicy';
+import { generationSettings } from '../utils/generationContext';
+import { registerOperation } from './operations';
+import { app, safeStorage, nativeImage } from 'electron';
 import { createReadStream } from 'node:fs';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
@@ -21,6 +26,8 @@ import {
   type ImageStylePreset,
 } from '../../shared/project/imageStylePresets';
 import { sanitizeImagePromptForRendering } from '../../shared/utils/imagePromptSanitizer';
+import { getOpenAIImageDimensions } from '../utils/openaiImage';
+import { ProjectRepository } from '../project/repository';
 import { logger } from '../utils/logger';
 
 // シークレットファイルのパス
@@ -58,7 +65,9 @@ async function readImageGenerationSettings(): Promise<{
 
   try {
     const settingsPath = getSettingsPath();
-    const content = await fs.readFile(settingsPath, 'utf-8');
+    const content = generationSettings.getStore()
+      ? JSON.stringify(generationSettings.getStore())
+      : await fs.readFile(settingsPath, 'utf-8');
     const parsed = JSON.parse(content) as { imageModel?: string; imageResolution?: string };
     if (isImageModel(parsed.imageModel)) {
       imageModel = parsed.imageModel;
@@ -75,32 +84,7 @@ async function readImageGenerationSettings(): Promise<{
     imageResolution,
   };
 }
-
-// 指数バックオフ + ジッター付きリトライ
-async function withRetry<T>(
-  fn: () => Promise<T>,
-  maxRetries: number = 3,
-  baseDelay: number = 1000
-): Promise<T> {
-  let lastError: Error | null = null;
-
-  for (let attempt = 0; attempt < maxRetries; attempt++) {
-    try {
-      return await fn();
-    } catch (error) {
-      lastError = error instanceof Error ? error : new Error(String(error));
-
-      // 最後の試行では待機しない
-      if (attempt < maxRetries - 1) {
-        // 指数バックオフ + ジッター
-        const delay = baseDelay * Math.pow(2, attempt) + Math.random() * 1000;
-        await new Promise((resolve) => setTimeout(resolve, delay));
-      }
-    }
-  }
-
-  throw lastError;
-}
+const withRetry = retryTransient;
 
 // 画像プロンプトの型
 interface ImagePrompt {
@@ -392,16 +376,9 @@ async function resolveStyleReferenceImages(
     : [];
   if (ids.length === 0) return [];
 
-  const [generatedImages, article] = await Promise.all([
-    fs
-      .readFile(path.join(projectPath, 'images.json'), 'utf-8')
-      .then((content) => JSON.parse(content) as ImageAsset[])
-      .catch(() => []),
-    fs
-      .readFile(path.join(projectPath, 'article.json'), 'utf-8')
-      .then((content) => JSON.parse(content) as { importedImages?: ImageAsset[] })
-      .catch(() => ({ importedImages: [] })),
-  ]);
+  const { images: generatedImages, article } = await new ProjectRepository(
+    getProjectsPath()
+  ).readDirectory(projectPath);
 
   const byId = new Map<string, ImageAsset>();
   for (const image of generatedImages) byId.set(image.id, image);
@@ -410,7 +387,9 @@ async function resolveStyleReferenceImages(
   const references: StyleReferenceImage[] = [];
   for (const id of ids) {
     const image = byId.get(id);
-    if (!image || !(await fileExists(image.filePath))) continue;
+    if (!image) continue;
+    await fileAccess().media(image.filePath);
+    if (!(await fileExists(image.filePath))) continue;
     references.push({
       id,
       filePath: image.filePath,
@@ -472,21 +451,8 @@ function getOpenAiRequestedSize(
   aspectRatio: ImageAspectRatio,
   imageResolution: ImageResolution
 ): string {
-  const { width, height } = getDimensions(aspectRatio, imageResolution);
+  const { width, height } = getOpenAIImageDimensions(aspectRatio, imageResolution);
   return `${width}x${height}`;
-}
-
-function getOpenAiFallbackSize(
-  aspectRatio: ImageAspectRatio
-): '1536x1024' | '1024x1024' | '1024x1536' {
-  switch (aspectRatio) {
-    case '1:1':
-      return '1024x1024';
-    case '9:16':
-      return '1024x1536';
-    default:
-      return '1536x1024';
-  }
 }
 
 function parseDimensionsFromSize(
@@ -500,10 +466,6 @@ function parseDimensionsFromSize(
     width: Number(match[1]),
     height: Number(match[2]),
   };
-}
-
-function shouldRetryOpenAiWithFallback(error: unknown): boolean {
-  return error instanceof Error && /size/i.test(error.message);
 }
 
 function extractOpenAiImageUsage(
@@ -665,7 +627,6 @@ async function generateOpenAiImageAsset(params: {
   } = params;
   const imageSizeTier = getImageSize(imageResolution);
   const requestedSize = getOpenAiRequestedSize(prompt.aspectRatio, imageResolution);
-  const fallbackSize = getOpenAiFallbackSize(prompt.aspectRatio);
   const quality = getOpenAiImageQuality(imageResolution);
   const promptText = buildOpenAiImagePrompt(prompt);
   const openAiReferenceFiles =
@@ -699,27 +660,8 @@ async function generateOpenAiImageAsset(params: {
     });
   };
 
-  let finalSize = requestedSize;
-  let response;
-  try {
-    response = await withRetry(async () => {
-      return requestImage(requestedSize);
-    });
-  } catch (error) {
-    if (requestedSize === fallbackSize || !shouldRetryOpenAiWithFallback(error)) {
-      throw error;
-    }
-
-    logger.warn('[image:generate] OpenAI size fallback', {
-      requestedSize,
-      fallbackSize,
-      error: error instanceof Error ? error.message : String(error),
-    });
-    finalSize = fallbackSize;
-    response = await withRetry(async () => {
-      return requestImage(fallbackSize);
-    });
-  }
+  const finalSize = requestedSize;
+  const response = await requestImage(requestedSize);
 
   const base64Data = response.data?.[0]?.b64_json;
   if (!base64Data) {
@@ -809,9 +751,10 @@ async function generateImageAsset(params: {
 }
 
 // 単一画像生成ハンドラ
-ipcMain.handle(
+registerOperation(
   'image:generate',
   async (_, prompt: ImagePrompt, projectId: string): Promise<ImageAsset> => {
+    prompt = imageRequestSchema.parse(prompt);
     const { imageModel, imageResolution } = await readImageGenerationSettings();
     const provider = getImageModelProvider(imageModel);
     const openaiApiKey = provider === 'openai' ? await readApiKey('openai') : null;
@@ -845,16 +788,19 @@ ipcMain.handle(
       imageModel,
       imageResolution,
       googleGenAI: googleApiKey ? new GoogleGenAI({ apiKey: googleApiKey }) : undefined,
-      openai: openaiApiKey ? new OpenAI({ apiKey: openaiApiKey }) : undefined,
+      openai: openaiApiKey
+        ? new OpenAI({ apiKey: openaiApiKey, fetch: limitedOpenAIFetch })
+        : undefined,
       styleReferenceImages,
     });
   }
 );
 
 // バッチ画像生成ハンドラ
-ipcMain.handle(
+registerOperation(
   'image:generateBatch',
   async (_, prompts: ImagePrompt[], projectId: string): Promise<ImageBatchGenerationResult> => {
+    prompts = imageRequestSchema.array().max(100).parse(prompts);
     if (runningImageBatchProjects.has(projectId)) {
       throw new Error('このプロジェクトの画像一括生成は既に実行中です。完了を待ってください。');
     }
@@ -883,7 +829,9 @@ ipcMain.handle(
     }
 
     const projectPath = await getProjectPath(projectId);
-    const openai = openaiApiKey ? new OpenAI({ apiKey: openaiApiKey }) : undefined;
+    const openai = openaiApiKey
+      ? new OpenAI({ apiKey: openaiApiKey, fetch: limitedOpenAIFetch })
+      : undefined;
     const genAI = googleApiKey ? new GoogleGenAI({ apiKey: googleApiKey }) : undefined;
     const runState: ImageBatchRunState = { cancelRequested: false };
 
@@ -1020,7 +968,7 @@ ipcMain.handle(
   }
 );
 
-ipcMain.handle(
+registerOperation(
   'image:cancelBatch',
   async (_, projectId?: string): Promise<{ success: boolean }> => {
     if (typeof projectId === 'string' && projectId.trim().length > 0) {
@@ -1037,7 +985,10 @@ ipcMain.handle(
 );
 
 // 画像削除ハンドラ
-ipcMain.handle('image:delete', async (_, filePath: string): Promise<{ success: boolean }> => {
+registerOperation('image:delete', async (_, filePath: string): Promise<{ success: boolean }> => {
+  filePath = await fileAccess().media(filePath, true);
+  if (!/\.(png|jpe?g|gif|webp|avif)$/i.test(filePath))
+    throw new Error('画像ファイルを指定してください。');
   try {
     await fs.unlink(filePath);
     return { success: true };
@@ -1048,9 +999,10 @@ ipcMain.handle('image:delete', async (_, filePath: string): Promise<{ success: b
 });
 
 // 画像コピーハンドラ（インポート用）
-ipcMain.handle(
+registerOperation(
   'image:import',
   async (_, sourcePath: string, projectId: string): Promise<ImageAsset> => {
+    sourcePath = await fileAccess().media(sourcePath);
     // プロジェクトパスを取得
     const projectPath = await getProjectPath(projectId);
 
@@ -1095,5 +1047,42 @@ ipcMain.handle(
     };
 
     return imageAsset;
+  }
+);
+
+// Browser File objects no longer expose an absolute path in current Electron.
+registerOperation(
+  'image:importData',
+  async (_, bytes: ArrayBuffer, projectId: string): Promise<ImageAsset> => {
+    if (
+      !(bytes instanceof ArrayBuffer) ||
+      bytes.byteLength === 0 ||
+      bytes.byteLength > 50 * 1024 * 1024
+    )
+      throw new Error('画像は50MB以内で指定してください。');
+    const projectPath = await getProjectPath(projectId);
+    const decoded = nativeImage.createFromBuffer(Buffer.from(bytes));
+    if (decoded.isEmpty())
+      throw new Error('対応していない画像形式です。PNGまたはJPEG画像を選択してください。');
+    const dimensions = decoded.getSize();
+    if (dimensions.width * dimensions.height > 40_000_000)
+      throw new Error('画像の画素数が大きすぎます。');
+    const id = randomUUID();
+    const data = decoded.toPNG();
+    const filePath = path.join(projectPath, 'images', 'imported', `${id}.png`);
+    await fs.mkdir(path.dirname(filePath), { recursive: true });
+    await fs.writeFile(filePath, data);
+    return {
+      id,
+      filePath,
+      sourceType: 'imported',
+      metadata: {
+        ...dimensions,
+        mimeType: 'image/png',
+        fileSize: data.byteLength,
+        createdAt: new Date().toISOString(),
+        tags: [],
+      },
+    };
   }
 );

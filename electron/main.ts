@@ -1,4 +1,7 @@
-import { app, BrowserWindow, protocol } from 'electron';
+import { fileAccess } from './utils/fileAccess';
+import { isTrustedRenderer } from './utils/ipcOrigin';
+import { contentSecurityPolicy } from '../shared/project/contentSecurityPolicy';
+import { app, BrowserWindow, protocol, ipcMain, shell } from 'electron';
 import * as fs from 'node:fs';
 import * as fsPromises from 'node:fs/promises';
 import { Readable } from 'node:stream';
@@ -30,7 +33,7 @@ protocol.registerSchemesAsPrivileged([
       standard: true,
       corsEnabled: true,
       supportFetchAPI: true,
-      bypassCSP: true,
+      bypassCSP: false,
       stream: true,
     },
   },
@@ -116,10 +119,58 @@ function createWindow(): void {
       preload: path.join(__dirname, 'preload.cjs'),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: false,
+      sandbox: true,
     },
     titleBarStyle: 'hiddenInset',
     show: false,
+  });
+
+  if (isDev)
+    mainWindow.webContents.on('console-message', (details) => {
+      if (details.level === 'error') console.error('[renderer]', details.message);
+    });
+  mainWindow.webContents.on('render-process-gone', (_event, details) =>
+    console.error('[renderer-exit]', details.reason)
+  );
+  mainWindow.webContents.on('did-fail-load', (_event, code, description) =>
+    console.error('[renderer-load]', code, description)
+  );
+  const rendererOrigin =
+    rendererUrlOverride || process.env.VITE_DEV_SERVER_URL || 'http://localhost:5173';
+  if (isDev)
+    mainWindow.webContents.on('preload-error', (_event, _path, error) =>
+      console.error('[preload]', error.message)
+    );
+  mainWindow.webContents.session.setPermissionRequestHandler((_contents, _permission, callback) =>
+    callback(false)
+  );
+  mainWindow.webContents.session.setPermissionCheckHandler(() => false);
+  mainWindow.webContents.session.webRequest.onHeadersReceived((details, callback) =>
+    callback({
+      responseHeaders: {
+        ...details.responseHeaders,
+        'Content-Security-Policy': [
+          contentSecurityPolicy(isDev ? rendererOrigin : undefined) + "; frame-ancestors 'none'",
+        ],
+      },
+    })
+  );
+  const openExternal = (url: string) => {
+    try {
+      if (['https:', 'http:'].includes(new URL(url).protocol)) void shell.openExternal(url);
+    } catch {
+      /* Ignore malformed external links. */
+    }
+  };
+  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    openExternal(url);
+    return { action: 'deny' };
+  });
+  mainWindow.webContents.on('will-navigate', (event, url) => {
+    if (!isTrustedRenderer(url, app.isPackaged, app.getAppPath(), rendererOrigin)) {
+      event.preventDefault();
+      openExternal(url);
+    }
   });
 
   const revealWindow = () => {
@@ -148,7 +199,27 @@ function createWindow(): void {
   mainWindow.once('ready-to-show', revealWindow);
   mainWindow.webContents.once('did-finish-load', revealWindow);
 
+  let closeReady = false;
+  let flushPending = false;
+  const flushed = (event: Electron.IpcMainEvent, success: boolean) => {
+    if (event.sender !== mainWindow?.webContents || !flushPending) return;
+    flushPending = false;
+    if (success) {
+      closeReady = true;
+      mainWindow?.close();
+    }
+  };
+  ipcMain.on('project:flushed', flushed);
+  mainWindow.on('close', (event) => {
+    if (closeReady || mainWindow?.webContents.isDestroyed()) return;
+    event.preventDefault();
+    if (!flushPending) {
+      flushPending = true;
+      mainWindow?.webContents.send('project:flush');
+    }
+  });
   mainWindow.on('closed', () => {
+    ipcMain.removeListener('project:flushed', flushed);
     mainWindow = null;
   });
 }
@@ -157,9 +228,16 @@ function createWindow(): void {
 app.whenReady().then(() => {
   // カスタムプロトコルハンドラを登録
   protocol.handle('local-file', async (request) => {
-    const filePath = parseLocalFileRequestUrl(request.url);
-
     try {
+      if (!['GET', 'HEAD', 'OPTIONS'].includes(request.method))
+        return new Response('Method not allowed', { status: 405 });
+      const origin = request.headers.get('origin');
+      const devOrigin = new URL(
+        rendererUrlOverride || process.env.VITE_DEV_SERVER_URL || 'http://localhost:5173'
+      ).origin;
+      if (origin && origin !== 'null' && (!isDev || origin !== devOrigin))
+        return new Response('Forbidden', { status: 403 });
+      const filePath = await fileAccess().media(parseLocalFileRequestUrl(request.url));
       const stat = await fsPromises.stat(filePath);
       if (!stat.isFile()) {
         return new Response('Not found', { status: 404 });
@@ -176,7 +254,8 @@ app.whenReady().then(() => {
       baseHeaders.set('Pragma', 'no-cache');
       baseHeaders.set('Expires', '0');
       // fetch()/Range を使う場合に備えて CORS を緩める（アプリ内のローカル用途）
-      baseHeaders.set('Access-Control-Allow-Origin', '*');
+      baseHeaders.set('Access-Control-Allow-Origin', origin || 'null');
+      baseHeaders.set('Vary', 'Origin');
       baseHeaders.set('Access-Control-Allow-Headers', 'Range, Content-Type, Origin, Accept');
       baseHeaders.set('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS');
 
@@ -266,6 +345,8 @@ app.on('window-all-closed', () => {
 });
 
 // IPC ハンドラーの登録
+import './project/finishing';
+import './ipc/diagnostics';
 import './ipc/project.js';
 import './ipc/settings.js';
 import './ipc/ai.js';
@@ -273,3 +354,4 @@ import './ipc/image.js';
 import './ipc/tts.js';
 import './ipc/file.js';
 import './ipc/video.js';
+import './ipc/jobs.js';

@@ -1,4 +1,17 @@
-import { BrowserWindow, app, dialog, ipcMain } from 'electron';
+import { metricsSchema } from '../../shared/project/metrics';
+import { getProjectRepository } from './project';
+import { fileAccess } from '../utils/fileAccess';
+import {
+  resolutionForAspect,
+  type RenderOptions,
+  renderOptionsSchema,
+} from '../../shared/project/videoFormat';
+import { generationSettings } from '../utils/generationContext';
+import { registerOperation } from './operations';
+import { projectSchema } from '../../shared/project/schema';
+import { partFreshness, videoInput } from '../../shared/project/integrity';
+import { ProjectRepository } from '../project/repository';
+import { BrowserWindow, app, dialog } from 'electron';
 import * as fs from 'fs/promises';
 import * as os from 'os';
 import * as path from 'path';
@@ -6,12 +19,10 @@ import {
   normalizePresentationProfile,
   resolvePresentationSourceLine,
 } from '../../shared/project/presentationProfile';
-import {
-  resolveVideoBackend,
-  type ResolvedVideoBackend,
-} from '../video/backend';
+import { resolveVideoBackend, type ResolvedVideoBackend } from '../video/backend';
 import { probeHasAudio, runFfmpeg, type VideoJob } from '../video/ffmpeg';
 import {
+  probeDurationNative,
   concatSegmentsNative,
   normalizeVideoClipNative,
   renderClosingCardVideoNative,
@@ -31,15 +42,6 @@ interface ProgressUpdatePayload {
   meta?: Record<string, unknown>;
 }
 
-type RenderOptions = {
-  resolution: '1920x1080' | '1280x720' | '3840x2160';
-  fps: number;
-  videoBitrate: string;
-  audioBitrate: string;
-  includeOpening: boolean;
-  includeEnding: boolean;
-};
-
 type Settings = {
   openingVideoPath?: string;
   endingVideoPath?: string;
@@ -50,6 +52,7 @@ type ImageAssetLike = { id: string; filePath: string };
 type AudioAssetLike = { id: string; filePath: string; durationSec: number };
 type ImageAssetRefLike = { imageId: string; displayDurationSec?: number };
 type PresentationProfileLike = {
+  aspectRatio?: '16:9' | '1:1' | '9:16';
   closingCardEnabled?: boolean;
   closingCardHeadline?: string;
   closingCardCtaText?: string;
@@ -61,6 +64,9 @@ type PartLike = {
   index: number;
   title: string;
   panelImages: ImageAssetRefLike[];
+  captions?: import('../../shared/project/schema').Part['captions'];
+  captionsEnabled?: boolean;
+  graphic?: import('../../shared/project/schema').Part['graphic'];
   audio?: AudioAssetLike;
 };
 type ProjectLike = {
@@ -72,6 +78,7 @@ type ProjectLike = {
   audio: AudioAssetLike[];
   article: { title?: string; source?: string; importedImages: ImageAssetLike[] };
   presentationProfile?: PresentationProfileLike;
+  outputSettings?: import('../../shared/project/schema').Project['outputSettings'];
 };
 
 let currentJob: VideoJob | null = null;
@@ -83,7 +90,10 @@ function sendProgress(payload: Omit<ProgressUpdatePayload, 'source'>) {
   }
 }
 
-function parseResolution(resolution: RenderOptions['resolution']): { width: number; height: number } {
+function parseResolution(resolution: RenderOptions['resolution']): {
+  width: number;
+  height: number;
+} {
   const [w, h] = resolution.split('x').map((v) => Number(v));
   if (!Number.isFinite(w) || !Number.isFinite(h) || w <= 0 || h <= 0) {
     throw new Error(`Invalid resolution: ${resolution}`);
@@ -186,11 +196,15 @@ function assertNotCanceled(job: VideoJob) {
 async function readSettings(): Promise<Settings> {
   try {
     const settingsPath = path.join(app.getPath('userData'), 'settings.json');
-    const content = await fs.readFile(settingsPath, 'utf-8');
+    const content = generationSettings.getStore()
+      ? JSON.stringify(generationSettings.getStore())
+      : await fs.readFile(settingsPath, 'utf-8');
     const parsed = JSON.parse(content) as Settings;
     return {
-      openingVideoPath: typeof parsed.openingVideoPath === 'string' ? parsed.openingVideoPath : undefined,
-      endingVideoPath: typeof parsed.endingVideoPath === 'string' ? parsed.endingVideoPath : undefined,
+      openingVideoPath:
+        typeof parsed.openingVideoPath === 'string' ? parsed.openingVideoPath : undefined,
+      endingVideoPath:
+        typeof parsed.endingVideoPath === 'string' ? parsed.endingVideoPath : undefined,
       videoPartLeadInSec:
         typeof parsed.videoPartLeadInSec === 'number' && Number.isFinite(parsed.videoPartLeadInSec)
           ? parsed.videoPartLeadInSec
@@ -226,10 +240,7 @@ function buildImageMap(project: ProjectLike): Map<string, string> {
   return map;
 }
 
-function computeImageDurations(
-  refs: ImageAssetRefLike[],
-  totalDurationSec: number
-): number[] {
+function computeImageDurations(refs: ImageAssetRefLike[], totalDurationSec: number): number[] {
   const n = refs.length;
   if (n === 0) return [];
 
@@ -304,6 +315,7 @@ async function normalizeVideoToSpec(
   options: RenderOptions,
   job: VideoJob
 ): Promise<void> {
+  inputPath = await fileAccess().media(inputPath);
   const { width, height } = parseResolution(options.resolution);
 
   if (backend.id === 'native') {
@@ -327,14 +339,7 @@ async function normalizeVideoToSpec(
   const vf = buildScalePadFilter(width, height);
   const hasAudio = await probeHasAudio(ffmpegPath, inputPath);
 
-  const args: string[] = [
-    '-y',
-    '-hide_banner',
-    '-loglevel',
-    'error',
-    '-i',
-    inputPath,
-  ];
+  const args: string[] = ['-y', '-hide_banner', '-loglevel', 'error', '-i', inputPath];
 
   if (!hasAudio) {
     // 音声トラックが無い動画は無音を追加して規格統一
@@ -396,7 +401,9 @@ async function renderPartVideo(
     throw new Error(`画像未割り当てのパートがあります: ${part.index + 1} ${part.title}`);
   }
 
-  const audioPath = part.audio.filePath;
+  if (backend.id !== 'native' && (part.captionsEnabled || part.graphic?.enabled))
+    throw new Error('字幕と編集可能グラフィックの出力にはmacOSネイティブレンダラーが必要です。');
+  const audioPath = await fileAccess().media(part.audio.filePath);
   if (!(await fileExists(audioPath))) {
     throw new Error(`音声ファイルが見つかりません: ${audioPath}`);
   }
@@ -407,6 +414,8 @@ async function renderPartVideo(
     if (!p) throw new Error(`画像が見つかりません (imageId=${ref.imageId})`);
     return p;
   });
+
+  await Promise.all(imagePaths.map((file) => fileAccess().media(file)));
 
   const clampedLeadInSec =
     Number.isFinite(leadInSec) && leadInSec > 0 ? Math.min(2, Math.max(0, leadInSec)) : 0;
@@ -435,6 +444,14 @@ async function renderPartVideo(
         audioPath,
         audioDelayMs: leadInMs,
         imageEntries: entries,
+        captions: part.captionsEnabled
+          ? part.captions?.map((cue) => ({
+              ...cue,
+              start: cue.start + clampedLeadInSec,
+              end: cue.end + clampedLeadInSec,
+            }))
+          : undefined,
+        graphic: part.graphic,
       },
       job,
       (kv) => {
@@ -636,12 +653,11 @@ async function renderClosingCardVideo(
     compactWhitespace(presentationProfile.closingCardHeadline),
     48
   );
-  const cta = truncateForClosingCard(
-    compactWhitespace(presentationProfile.closingCardCtaText),
-    76
-  );
+  const cta = truncateForClosingCard(compactWhitespace(presentationProfile.closingCardCtaText), 76);
   const source = truncateForClosingCard(
-    compactWhitespace(resolvePresentationSourceLine(presentationProfile, project.article.source) ?? ''),
+    compactWhitespace(
+      resolvePresentationSourceLine(presentationProfile, project.article.source) ?? ''
+    ),
     88
   );
   const lines = [headline || '', cta || '', source || ''].filter(Boolean);
@@ -796,6 +812,7 @@ async function requestVideoPathReauthorization(
     filters: [{ name: 'Video', extensions: ['mp4', 'mov', 'm4v', 'webm'] }],
   });
   if (result.canceled) return null;
+  if (result.filePaths[0]) await fileAccess().grant(result.filePaths[0], false);
   return result.filePaths[0] ?? null;
 }
 
@@ -804,6 +821,7 @@ async function stageVideoInputForFfmpeg(
   tempDir: string,
   baseName: 'opening' | 'ending'
 ): Promise<string> {
+  sourcePath = await fileAccess().media(sourcePath);
   const ext = path.extname(sourcePath) || '.mp4';
   const stagedPath = path.join(tempDir, `${baseName}.source${ext}`);
   try {
@@ -853,20 +871,17 @@ async function copyRenderedOutput(stagedOutputPath: string, outputPath: string):
   }
 }
 
-async function findProjectByPartId(partId: string): Promise<{ projectPath: string; project: ProjectLike; part: PartLike }> {
+async function findProjectByPartId(
+  partId: string
+): Promise<{ projectPath: string; project: ProjectLike; part: PartLike }> {
   const projectsDir = path.join(app.getPath('userData'), 'projects');
   const entries = await fs.readdir(projectsDir, { withFileTypes: true });
   for (const entry of entries) {
     if (!entry.isDirectory() || !entry.name.endsWith('.newsproj')) continue;
     const projectPath = path.join(projectsDir, entry.name);
     try {
-      const [meta, article, parts, images, audio] = await Promise.all([
-        fs.readFile(path.join(projectPath, 'project.json'), 'utf-8').then(JSON.parse),
-        fs.readFile(path.join(projectPath, 'article.json'), 'utf-8').then(JSON.parse),
-        fs.readFile(path.join(projectPath, 'parts.json'), 'utf-8').then(JSON.parse),
-        fs.readFile(path.join(projectPath, 'images.json'), 'utf-8').then(JSON.parse),
-        fs.readFile(path.join(projectPath, 'audio.json'), 'utf-8').then(JSON.parse),
-      ]);
+      const meta = await new ProjectRepository(projectsDir).readDirectory(projectPath);
+      const { article, parts, images, audio } = meta;
 
       const hit = (parts as PartLike[]).find((p) => p.id === partId);
       if (!hit) continue;
@@ -879,6 +894,8 @@ async function findProjectByPartId(partId: string): Promise<{ projectPath: strin
         images,
         audio,
         article,
+        presentationProfile: meta.presentationProfile,
+        outputSettings: meta.outputSettings,
       };
       return { projectPath, project, part: hit };
     } catch {
@@ -888,93 +905,140 @@ async function findProjectByPartId(partId: string): Promise<{ projectPath: strin
   throw new Error(`Part not found: ${partId}`);
 }
 
-ipcMain.handle(
-  'video:cancelRender',
-  async (): Promise<{ success: boolean }> => {
-    if (!currentJob) return { success: true };
-    currentJob.canceled = true;
-    for (const proc of currentJob.processes) {
-      try {
-        proc.kill('SIGTERM');
-      } catch {
-        // ignore
+registerOperation('video:cancelRender', async (): Promise<{ success: boolean }> => {
+  if (!currentJob) return { success: true };
+  currentJob.canceled = true;
+  for (const proc of currentJob.processes) {
+    try {
+      proc.kill('SIGTERM');
+    } catch {
+      // ignore
+    }
+  }
+  return { success: true };
+});
+
+registerOperation('video:preview', async (_, partId: string): Promise<{ previewPath: string }> => {
+  if (currentJob) throw new Error('別の動画処理が実行中です');
+  const job: VideoJob = { canceled: false, processes: new Set() };
+  currentJob = job;
+  try {
+    sendProgress({ stage: 'preparing', percent: 0, message: 'プレビュー準備中...' });
+
+    const { project, part } = await findProjectByPartId(partId);
+    const backend = await resolveVideoExecutionBackend();
+
+    const settings = await readSettings();
+    const leadInSec =
+      project.outputSettings?.videoPartLeadInSec ?? settings.videoPartLeadInSec ?? 0.3;
+
+    const previewDir = path.join(project.path, 'output', 'previews');
+    await fs.mkdir(previewDir, { recursive: true });
+    const previewPath = path.join(
+      previewDir,
+      `preview-part-${part.index + 1}-${part.id.slice(0, 8)}.mp4`
+    );
+
+    const previewOptions: RenderOptions = {
+      resolution: resolutionForAspect(
+        project.outputSettings?.resolution ?? '1280x720',
+        project.presentationProfile?.aspectRatio ?? '16:9'
+      ),
+      fps: project.outputSettings?.fps ?? 30,
+      videoBitrate: '2M',
+      audioBitrate: '128k',
+      includeOpening: false,
+      includeEnding: false,
+    };
+
+    sendProgress({
+      stage: 'rendering_parts',
+      percent: 10,
+      current: 1,
+      total: 1,
+      message: `プレビュー生成中: ${part.index + 1}/${project.parts.length}`,
+    });
+
+    await renderPartVideo(
+      backend,
+      project,
+      part,
+      previewOptions,
+      previewPath,
+      job,
+      leadInSec,
+      (within) => {
+        sendProgress({
+          stage: 'rendering_parts',
+          percent: Math.round(10 + within * 80),
+          current: 1,
+          total: 1,
+          message: `プレビュー生成中...`,
+        });
+      }
+    );
+
+    sendProgress({ stage: 'finalizing', percent: 100, message: '完了' });
+    await getProjectRepository()
+      .update(project.id, (data) => {
+        data.metrics = metricsSchema.parse(data.metrics ?? {});
+        data.metrics.firstPreviewAt ??= new Date().toISOString();
+      })
+      .catch(() => {});
+    return { previewPath };
+  } finally {
+    currentJob = null;
+  }
+});
+
+registerOperation(
+  'video:render',
+  async (
+    _,
+    project: ProjectLike,
+    options: RenderOptions,
+    outputPath: string
+  ): Promise<{ outputPath: string }> => {
+    if (currentJob) throw new Error('別の動画処理が実行中です');
+    options = renderOptionsSchema.parse(options);
+    const validated = projectSchema.parse(project);
+    const persisted = await new ProjectRepository(
+      path.join(app.getPath('userData'), 'projects')
+    ).load(validated.id);
+    validated.path = persisted.path;
+    project = validated;
+    outputPath = await fileAccess().media(outputPath, true);
+    for (const part of validated.parts) {
+      if (part.audio) await fileAccess().media(part.audio.filePath);
+      for (const ref of part.panelImages) {
+        const image = [...validated.images, ...validated.article.importedImages].find(
+          (asset) => asset.id === ref.imageId
+        );
+        if (image) await fileAccess().media(image.filePath);
       }
     }
-    return { success: true };
-  }
-);
-
-ipcMain.handle(
-  'video:preview',
-  async (_, partId: string): Promise<{ previewPath: string }> => {
-    if (currentJob) throw new Error('別の動画処理が実行中です');
-    const job: VideoJob = { canceled: false, processes: new Set() };
-    currentJob = job;
-    try {
-      sendProgress({ stage: 'preparing', percent: 0, message: 'プレビュー準備中...' });
-
-      const { project, part } = await findProjectByPartId(partId);
-      const backend = await resolveVideoExecutionBackend();
-
-      const settings = await readSettings();
-      const leadInSec = settings.videoPartLeadInSec ?? 0.3;
-
-      const previewDir = path.join(project.path, 'output', 'previews');
-      await fs.mkdir(previewDir, { recursive: true });
-      const previewPath = path.join(previewDir, `preview-part-${part.index + 1}-${part.id.slice(0, 8)}.mp4`);
-
-      const previewOptions: RenderOptions = {
-        resolution: '1280x720',
-        fps: 30,
-        videoBitrate: '2M',
-        audioBitrate: '128k',
-        includeOpening: false,
-        includeEnding: false,
-      };
-
-      sendProgress({
-        stage: 'rendering_parts',
-        percent: 10,
-        current: 1,
-        total: 1,
-        message: `プレビュー生成中: ${part.index + 1}/${project.parts.length}`,
-      });
-
-      await renderPartVideo(
-        backend,
-        project,
-        part,
-        previewOptions,
-        previewPath,
-        job,
-        leadInSec,
-        (within) => {
-          sendProgress({
-            stage: 'rendering_parts',
-            percent: Math.round(10 + within * 80),
-            current: 1,
-            total: 1,
-            message: `プレビュー生成中...`,
-          });
-        }
+    if (persisted.revision !== validated.revision)
+      throw new Error('保存後にプロジェクトが変更されました。再度書き出してください。');
+    validated.integrity = {
+      ...validated.integrity!,
+      missingFiles: persisted.integrity?.missingFiles ?? [],
+    };
+    if (
+      validated.parts.some((part) => {
+        const state = partFreshness(validated, part);
+        return state.script !== 'current' || state.image !== 'current' || state.audio !== 'current';
+      })
+    )
+      throw new Error(
+        '更新が必要な台本・画像・音声があります。再生成または内容を確認して維持してから書き出してください。'
       );
-
-      sendProgress({ stage: 'finalizing', percent: 100, message: '完了' });
-      return { previewPath };
-    } finally {
-      currentJob = null;
-    }
-  }
-);
-
-ipcMain.handle(
-  'video:render',
-  async (_, project: ProjectLike, options: RenderOptions, outputPath: string): Promise<{ outputPath: string }> => {
     if (currentJob) throw new Error('別の動画処理が実行中です');
     const job: VideoJob = { canceled: false, processes: new Set() };
     currentJob = job;
 
     let renderTmpDir: string | null = null;
+    let renderSucceeded = false;
+    let measuredDuration: number | undefined;
     try {
       if (!outputPath) throw new Error('出力先が未指定です');
 
@@ -989,7 +1053,17 @@ ipcMain.handle(
       renderTmpDir = await fs.mkdtemp(path.join(project.path, 'output', 'render-tmp-'));
 
       const settings = await readSettings();
-      const leadInSec = settings.videoPartLeadInSec ?? 0.3;
+      validated.outputSettings = {
+        ...options,
+        videoPartLeadInSec: options.videoPartLeadInSec ?? settings.videoPartLeadInSec ?? 0.3,
+        openingVideoPath: options.openingVideoPath ?? settings.openingVideoPath,
+        endingVideoPath: options.endingVideoPath ?? settings.endingVideoPath,
+      };
+      project = validated;
+      await getProjectRepository().update(project.id, (data) => {
+        data.outputSettings = validated.outputSettings;
+      });
+      const leadInSec = validated.outputSettings.videoPartLeadInSec ?? 0.3;
       const presentationProfile = normalizePresentationProfile(project.presentationProfile);
 
       // パート動画を生成
@@ -1007,7 +1081,10 @@ ipcMain.handle(
         assertNotCanceled(job);
 
         const part = parts[i];
-        const partOut = path.join(partsDir, `part-${String(part.index + 1).padStart(2, '0')}-${part.id.slice(0, 8)}.mp4`);
+        const partOut = path.join(
+          partsDir,
+          `part-${String(part.index + 1).padStart(2, '0')}-${part.id.slice(0, 8)}.mp4`
+        );
 
         sendProgress({
           stage: 'rendering_parts',
@@ -1046,10 +1123,15 @@ ipcMain.handle(
       const segments: string[] = [];
 
       if (options.includeOpening) {
-        const opening = settings.openingVideoPath;
+        const opening = project.outputSettings?.openingVideoPath ?? settings.openingVideoPath;
         if (!opening) throw new Error('オープニング動画が未設定です（設定画面で指定してください）');
-        if (!(await fileExists(opening))) throw new Error(`オープニング動画が見つかりません: ${opening}`);
-        const openingInputForFfmpeg = await stageVideoInputForFfmpeg(opening, renderTmpDir, 'opening');
+        if (!(await fileExists(opening)))
+          throw new Error(`オープニング動画が見つかりません: ${opening}`);
+        const openingInputForFfmpeg = await stageVideoInputForFfmpeg(
+          opening,
+          renderTmpDir,
+          'opening'
+        );
         const normalized = path.join(renderTmpDir, 'opening.normalized.mp4');
         sendProgress({ stage: 'preparing', percent: 82, message: 'オープニング動画を調整中...' });
         await normalizeVideoToSpec(backend, openingInputForFfmpeg, normalized, options, job);
@@ -1078,9 +1160,10 @@ ipcMain.handle(
       }
 
       if (options.includeEnding) {
-        const ending = settings.endingVideoPath;
+        const ending = project.outputSettings?.endingVideoPath ?? settings.endingVideoPath;
         if (!ending) throw new Error('エンディング動画が未設定です（設定画面で指定してください）');
-        if (!(await fileExists(ending))) throw new Error(`エンディング動画が見つかりません: ${ending}`);
+        if (!(await fileExists(ending)))
+          throw new Error(`エンディング動画が見つかりません: ${ending}`);
         const endingInputForFfmpeg = await stageVideoInputForFfmpeg(ending, renderTmpDir, 'ending');
         const normalized = path.join(renderTmpDir, 'ending.normalized.mp4');
         sendProgress({ stage: 'preparing', percent: 86, message: 'エンディング動画を調整中...' });
@@ -1098,8 +1181,39 @@ ipcMain.handle(
       await copyRenderedOutput(stagedOutputPath, outputPath);
 
       sendProgress({ stage: 'finalizing', percent: 100, message: 'レンダリング完了' });
+      if (backend.id === 'native')
+        measuredDuration = await probeDurationNative(backend.rendererPath, outputPath);
+      const saved = await getProjectRepository().update(project.id, (data) => {
+        data.integrity = { ...data.integrity!, video: videoInput(validated) };
+        data.autoGenerationStatus = {
+          ...data.autoGenerationStatus,
+          running: data.autoGenerationStatus?.running ?? false,
+          lastVideoPath: outputPath,
+          finishedAt: new Date().toISOString(),
+        };
+        data.metrics = metricsSchema.parse(data.metrics ?? {});
+        data.metrics.outputDurationSec = measuredDuration;
+      });
+      for (const window of BrowserWindow.getAllWindows())
+        window.webContents.send('project:changed', { id: saved.id, revision: saved.revision });
+      renderSucceeded = true;
       return { outputPath };
     } finally {
+      await getProjectRepository()
+        .update(project.id, (data) => {
+          data.metrics = metricsSchema.parse(data.metrics ?? {});
+          data.metrics.renderAttempts++;
+          if (!renderSucceeded) data.metrics.renderFailures++;
+          else {
+            data.metrics.firstPreviewAt ??= new Date().toISOString();
+            data.metrics.firstOutputAt ??= new Date().toISOString();
+          }
+        })
+        .then((saved) => {
+          for (const window of BrowserWindow.getAllWindows())
+            window.webContents.send('project:changed', { id: saved.id, revision: saved.revision });
+        })
+        .catch(() => {});
       if (renderTmpDir) {
         try {
           await fs.rm(renderTmpDir, { recursive: true, force: true });

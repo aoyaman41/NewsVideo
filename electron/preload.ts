@@ -12,8 +12,24 @@ type AllowedEventChannel =
 
 // Renderer プロセスに公開するAPI
 contextBridge.exposeInMainWorld('electronAPI', {
+  diagnostics: { export: () => ipcRenderer.invoke('diagnostics:export') },
   // プロジェクト操作
   project: {
+    captions: (request: unknown) => ipcRenderer.invoke('project:captions', request),
+    manage: (request: unknown) => ipcRenderer.invoke('project:manage', request),
+    onFlushRequested: (callback: () => void) => {
+      ipcRenderer.on('project:flush', callback);
+      return () => ipcRenderer.removeListener('project:flush', callback);
+    },
+    finishFlush: (success: boolean) => ipcRenderer.send('project:flushed', success),
+    onChanged: (callback: (event: { id: string; revision?: number }) => void) => {
+      const listener = (
+        _event: Electron.IpcRendererEvent,
+        data: { id: string; revision?: number }
+      ) => callback(data);
+      ipcRenderer.on('project:changed', listener);
+      return () => ipcRenderer.removeListener('project:changed', listener);
+    },
     list: async () => {
       const list = await ipcRenderer.invoke('project:list');
       return Array.isArray(list) ? list : [];
@@ -21,14 +37,20 @@ contextBridge.exposeInMainWorld('electronAPI', {
     load: (projectId: string) => ipcRenderer.invoke('project:load', projectId),
     save: (project: unknown) => ipcRenderer.invoke('project:save', project),
     delete: (projectId: string) => ipcRenderer.invoke('project:delete', projectId),
-    create: (name: string) => ipcRenderer.invoke('project:create', name),
+    create: (name: unknown) => ipcRenderer.invoke('project:create', name),
+  },
+
+  jobs: {
+    recoverAsset: (request: unknown) => ipcRenderer.invoke('jobs:recoverAsset', request),
+    start: (id: string, options: unknown) => ipcRenderer.invoke('jobs:start', id, options),
+    cancel: (id: string) => ipcRenderer.invoke('jobs:cancel', id),
   },
 
   // 設定操作
   settings: {
     get: () => ipcRenderer.invoke('settings:get'),
     set: (settings: unknown) => ipcRenderer.invoke('settings:set', settings),
-    getApiKey: (service: string) => ipcRenderer.invoke('settings:getApiKey', service),
+    hasApiKey: (service: string) => ipcRenderer.invoke('settings:hasApiKey', service),
     setApiKey: (service: string, apiKey: string) =>
       ipcRenderer.invoke('settings:setApiKey', service, apiKey),
     testConnection: (service: string, apiKey?: string) =>
@@ -53,6 +75,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // 画像生成
   image: {
+    importData: (bytes: ArrayBuffer, projectId: string) =>
+      ipcRenderer.invoke('image:importData', bytes, projectId),
     generate: (prompt: unknown, projectId: string) =>
       ipcRenderer.invoke('image:generate', prompt, projectId),
     generateBatch: (prompts: unknown[], projectId: string) =>
@@ -65,6 +89,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // TTS操作
   tts: {
+    insertPause: (request: unknown) => ipcRenderer.invoke('tts:insertPause', request),
+    replaceSegment: (request: unknown) => ipcRenderer.invoke('tts:replaceSegment', request),
     generate: (text: string, options: unknown, projectId: string) =>
       ipcRenderer.invoke('tts:generate', text, options, projectId),
     generateBatch: (parts: unknown[], options: unknown, projectId: string) =>
@@ -84,9 +110,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
   file: {
     selectFile: (options: unknown) => ipcRenderer.invoke('file:selectFile', options),
     selectDirectory: () => ipcRenderer.invoke('file:selectDirectory'),
-    readFile: (filePath: string) => ipcRenderer.invoke('file:readFile', filePath),
-    writeFile: (filePath: string, content: unknown) =>
-      ipcRenderer.invoke('file:writeFile', filePath, content),
     exists: (filePath: string) => ipcRenderer.invoke('file:exists', filePath),
     listFiles: (dirPath: string) => ipcRenderer.invoke('file:listFiles', dirPath),
     revealInFinder: (targetPath: string) => ipcRenderer.invoke('file:revealInFinder', targetPath),

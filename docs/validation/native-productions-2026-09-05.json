@@ -1,0 +1,71 @@
+{
+  "capturedAt": "2026-09-05T09:05:51.591Z",
+  "method": "Automated native pipeline fixtures; not human production observations",
+  "productions": [
+    {
+      "ratio": "16:9",
+      "elapsedSec": 3.777491834,
+      "durationSec": 7.583333333333333,
+      "width": 1280,
+      "height": 720,
+      "videoTracks": 1,
+      "audioTracks": 1,
+      "captionsVisible": true,
+      "graphicVisible": true,
+      "currentOutput": true,
+      "apiRequests": 0
+    },
+    {
+      "ratio": "9:16",
+      "elapsedSec": 2.915775208,
+      "durationSec": 7.583333333333333,
+      "width": 720,
+      "height": 1280,
+      "videoTracks": 1,
+      "audioTracks": 1,
+      "captionsVisible": true,
+      "graphicVisible": true,
+      "currentOutput": true,
+      "apiRequests": 0
+    },
+    {
+      "ratio": "1:1",
+      "elapsedSec": 2.4366287499999997,
+      "durationSec": 7.583333333333333,
+      "width": 720,
+      "height": 720,
+      "videoTracks": 1,
+      "audioTracks": 1,
+      "captionsVisible": true,
+      "graphicVisible": true,
+      "currentOutput": true,
+      "apiRequests": 0
+    },
+    {
+      "ratio": "16:9",
+      "elapsedSec": 2.9542777919999987,
+      "durationSec": 7.583333333333333,
+      "width": 1280,
+      "height": 720,
+      "videoTracks": 1,
+      "audioTracks": 1,
+      "captionsVisible": true,
+      "graphicVisible": true,
+      "currentOutput": true,
+      "apiRequests": 0
+    },
+    {
+      "ratio": "9:16",
+      "elapsedSec": 2.845876415999999,
+      "durationSec": 7.583333333333333,
+      "width": 720,
+      "height": 1280,
+      "videoTracks": 1,
+      "audioTracks": 1,
+      "captionsVisible": true,
+      "graphicVisible": true,
+      "currentOutput": true,
+      "apiRequests": 0
+    }
+  ]
+}

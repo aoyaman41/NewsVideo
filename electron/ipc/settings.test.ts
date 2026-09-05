@@ -3,6 +3,13 @@ import { DEFAULT_SETTINGS } from '../../shared/settings/appSettings';
 
 type IpcHandler = (event: unknown, ...args: unknown[]) => Promise<unknown>;
 
+const repositoryMock = vi.hoisted(() => ({
+  directories: vi.fn(async () => [] as string[]),
+  readDirectory: vi.fn(),
+  update: vi.fn(),
+}));
+vi.mock('./project', () => ({ getProjectRepository: () => repositoryMock }));
+
 const handlers = new Map<string, IpcHandler>();
 const mockHandle = vi.fn((channel: string, handler: IpcHandler) => {
   handlers.set(channel, handler);
@@ -13,10 +20,13 @@ const writeFileMock = vi.fn();
 const accessMock = vi.fn();
 
 vi.mock('electron', () => ({
+  BrowserWindow: { getAllWindows: () => [] },
   ipcMain: {
     handle: mockHandle,
   },
   app: {
+    isPackaged: false,
+    getAppPath: () => '/app',
     getPath: vi.fn(() => '/tmp/newsvideo-test'),
   },
   safeStorage: {
@@ -33,6 +43,9 @@ vi.mock('node:fs/promises', () => ({
 }));
 
 async function loadSettingsModule(): Promise<void> {
+  repositoryMock.directories.mockReset().mockResolvedValue([]);
+  repositoryMock.readDirectory.mockReset();
+  repositoryMock.update.mockReset();
   handlers.clear();
   mockHandle.mockClear();
   readFileMock.mockReset();
@@ -58,7 +71,7 @@ describe('settings IPC handlers', () => {
   it('registers expected channels', () => {
     expect(handlers.has('settings:get')).toBe(true);
     expect(handlers.has('settings:set')).toBe(true);
-    expect(handlers.has('settings:getApiKey')).toBe(true);
+    expect(handlers.has('settings:hasApiKey')).toBe(true);
     expect(handlers.has('settings:setApiKey')).toBe(true);
     expect(handlers.has('settings:testConnection')).toBe(true);
   });
@@ -80,7 +93,9 @@ describe('settings IPC handlers', () => {
     );
 
     const handler = getHandler('settings:get');
-    const result = (await handler({})) as typeof DEFAULT_SETTINGS & { cost?: unknown };
+    const result = (await handler({
+      senderFrame: { url: 'http://localhost:5173', parent: null },
+    })) as typeof DEFAULT_SETTINGS & { cost?: unknown };
 
     expect(result.ttsEngine).toBe('gemini_tts');
     expect(result.ttsVoice).toBe(DEFAULT_SETTINGS.ttsVoice);
@@ -98,7 +113,9 @@ describe('settings IPC handlers', () => {
     readFileMock.mockResolvedValueOnce(JSON.stringify(DEFAULT_SETTINGS));
     const handler = getHandler('settings:set');
 
-    await expect(handler({}, { videoFps: 'fast' })).rejects.toThrow();
+    await expect(
+      handler({ senderFrame: { url: 'http://localhost:5173', parent: null } }, { videoFps: 'fast' })
+    ).rejects.toThrow();
     expect(writeFileMock).not.toHaveBeenCalled();
   });
 
@@ -107,25 +124,55 @@ describe('settings IPC handlers', () => {
     writeFileMock.mockResolvedValueOnce(undefined);
 
     const handler = getHandler('settings:set');
-    await handler({}, {
-      imageModel: 'gemini-3-pro-image-preview',
-      ttsEngine: 'google_tts',
-      ttsModel: 'gemini-2.5-flash-preview-tts',
-      openaiReasoningEffort: 'high',
-      geminiThinkingLevel: 'low',
-      unknown: true,
-    });
+    await handler(
+      { senderFrame: { url: 'http://localhost:5173', parent: null } },
+      {
+        scriptTextModel: 'gpt-5.6-terra',
+        imagePromptTextModel: 'gpt-5.6-luna',
+        imageModel: 'gemini-3-pro-image-preview',
+        ttsEngine: 'google_tts',
+        ttsModel: 'gemini-2.5-flash-preview-tts',
+        openaiReasoningEffort: 'max',
+        geminiThinkingLevel: 'low',
+        unknown: true,
+      }
+    );
 
     expect(writeFileMock).toHaveBeenCalledTimes(1);
     const [settingsPath, content] = writeFileMock.mock.calls[0];
     expect(settingsPath).toBe('/tmp/newsvideo-test/settings.json');
 
     const saved = JSON.parse(String(content));
+    expect(saved.scriptTextModel).toBe('gpt-5.6-terra');
+    expect(saved.imagePromptTextModel).toBe('gpt-5.6-luna');
     expect(saved.imageModel).toBe('gemini-3-pro-image-preview');
     expect(saved.ttsEngine).toBe('gemini_tts');
+    expect(saved.openaiReasoningEffort).toBe('max');
     expect(saved.ttsModel).toBe('gemini-2.5-flash-preview-tts');
-    expect(saved.openaiReasoningEffort).toBe('high');
     expect(saved.geminiThinkingLevel).toBe('low');
     expect(saved.unknown).toBeUndefined();
+  });
+});
+
+it('propagates only changed generation defaults and leaves running job snapshots intact', async () => {
+  await loadSettingsModule();
+  readFileMock.mockResolvedValueOnce(JSON.stringify(DEFAULT_SETTINGS));
+  repositoryMock.directories.mockResolvedValue(['/idle', '/running']);
+  repositoryMock.readDirectory
+    .mockResolvedValueOnce({ id: 'idle' })
+    .mockResolvedValueOnce({ id: 'running', job: { status: 'running' } });
+  const project = { id: 'idle', revision: 1, generationConfig: { ttsVoice: 'Existing voice' } };
+  repositoryMock.update.mockImplementation(async (_id, mutate) => {
+    mutate(project);
+    return project;
+  });
+  await getHandler('settings:set')(
+    { senderFrame: { url: 'http://localhost:5173', parent: null } },
+    { scriptTextModel: 'gpt-6-astra' }
+  );
+  expect(repositoryMock.update).toHaveBeenCalledTimes(1);
+  expect(project.generationConfig).toMatchObject({
+    scriptTextModel: 'gpt-6-astra',
+    ttsVoice: 'Existing voice',
   });
 });

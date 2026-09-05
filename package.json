@@ -7,7 +7,7 @@
   "scripts": {
     "dev": "vite",
     "build": "npm run typecheck && vite build && electron-builder",
-    "build:release:mac": "npm run prepare:native-video-renderer:mac && npm run typecheck && vite build && electron-builder --publish never --mac dmg zip --arm64",
+    "build:release:mac": "npm run prepare:native-video-renderer:mac && npm run typecheck && npm run test:native && vite build && electron-builder --publish never --mac dmg zip --arm64",
     "build:vite": "vite build",
     "preview": "vite preview",
     "electron:dev": "vite",
@@ -20,7 +20,8 @@
     "lint:fix": "eslint \"src/**/*.{ts,tsx}\" \"electron/**/*.ts\" \"shared/**/*.ts\" \"vite.config.ts\" --fix",
     "format": "prettier --write \"src/**/*.{ts,tsx,css}\" \"electron/**/*.ts\" \"shared/**/*.ts\"",
     "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.electron-check.json",
-    "test": "vitest run --config vitest.config.ts"
+    "test": "vitest run --config vitest.config.ts",
+    "test:native": "NEWSVIDEO_NATIVE_TEST=1 vitest run --config vitest.config.ts electron/video/native.integration.test.ts"
   },
   "repository": {
     "type": "git",
@@ -43,7 +44,8 @@
   },
   "homepage": "https://github.com/aoyaman41/NewsVideo#readme",
   "overrides": {
-    "underscore": "1.13.8"
+    "underscore": "1.13.8",
+    "brace-expansion@^1.0.0": "1.1.18"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4.1.17",
@@ -55,7 +57,7 @@
     "@vitejs/plugin-react": "^5.1.1",
     "autoprefixer": "^10.4.22",
     "concurrently": "^9.2.1",
-    "electron": "^40.7.0",
+    "electron": "^41.10.3",
     "electron-builder": "^26.0.12",
     "eslint": "^9.39.1",
     "eslint-config-prettier": "^10.1.8",
@@ -79,7 +81,7 @@
     "@google/genai": "^1.43.0",
     "@hookform/resolvers": "^5.2.2",
     "mammoth": "^1.11.0",
-    "openai": "^6.10.0",
+    "openai": "^6.46.0",
     "react": "^19.2.1",
     "react-dom": "^19.2.1",
     "react-dropzone": "^14.3.8",

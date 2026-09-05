@@ -1,9 +1,7 @@
-import { useEffect, useMemo, useState } from 'react';
+import { projectClient, useProjectState } from '../../stores/projectStore';
+import { useEffect, useMemo } from 'react';
 import { NavLink, useLocation } from 'react-router-dom';
-import type { Project } from '../../schemas';
 import pkg from '../../../package.json';
-import { nextActionLabel, stageLabel, summarizeProjectProgress } from '../../utils/projectHealth';
-import { StatusChip } from '../ui';
 
 interface NavItem {
   path: string;
@@ -56,10 +54,8 @@ function extractProjectId(pathname: string): string | null {
 export function Sidebar() {
   const location = useLocation();
   const projectId = useMemo(() => extractProjectId(location.pathname), [location.pathname]);
-  const [projectName, setProjectName] = useState<string>('');
-  const [projectSummary, setProjectSummary] = useState<ReturnType<
-    typeof summarizeProjectProgress
-  > | null>(null);
+  const [liveProject] = useProjectState(projectId ?? undefined);
+  const projectName = liveProject?.name ?? '';
 
   const returnTo = useMemo(() => {
     const state = location.state as { returnTo?: string } | null;
@@ -69,50 +65,26 @@ export function Sidebar() {
   }, [location.state]);
 
   useEffect(() => {
-    if (!projectId) {
-      return;
-    }
-
-    let cancelled = false;
-
-    const load = async () => {
-      try {
-        const project: Project = await window.electronAPI.project.load(projectId);
-        if (cancelled) return;
-        setProjectSummary(summarizeProjectProgress(project));
-        setProjectName(project.name);
-      } catch {
-        if (cancelled) return;
-        setProjectSummary(null);
-        setProjectName('');
-      }
-    };
-
-    void load();
-    const interval = setInterval(() => {
-      void load();
-    }, 3000);
-
-    return () => {
-      cancelled = true;
-      clearInterval(interval);
-    };
+    if (projectId) void projectClient.load(projectId).catch(() => {});
   }, [projectId]);
 
   const shouldShowReturnToWork = location.pathname === '/settings' && Boolean(returnTo);
 
   return (
-    <aside className="flex h-full w-64 flex-col border-r border-[#0f2a4d] bg-[var(--nv-color-brand)] text-white">
-      <div className="titlebar-drag border-b border-white/10 px-4 py-3">
-        <p className="text-[11px] uppercase tracking-[0.16em] text-blue-200">NewsVideo</p>
+    <aside className="flex h-full w-16 md:w-44 shrink-0 flex-col border-r border-[#0f2a4d] bg-[var(--nv-color-brand)] text-white">
+      <div className="titlebar-drag hidden md:block border-b border-white/10 px-4 pb-3 pt-9">
+        <p className="text-xs uppercase tracking-[0.16em] text-blue-200">NewsVideo</p>
         <h1 className="mt-1 text-xl font-bold">Desk</h1>
       </div>
 
-      <nav className="flex-1 px-3 py-3">
+      <nav className="flex-1 px-1 md:px-3 pt-10 md:py-3">
         <ul className="space-y-1">
           {navItems.map((item) => (
             <li key={item.path}>
               <NavLink
+                aria-label={
+                  item.path === '/projects' && shouldShowReturnToWork ? '作業に戻る' : item.label
+                }
                 to={
                   item.path === '/projects' && shouldShowReturnToWork && returnTo
                     ? returnTo
@@ -143,7 +115,7 @@ export function Sidebar() {
                 ) : (
                   item.icon
                 )}
-                <span>
+                <span className="hidden md:inline">
                   {item.path === '/projects' && shouldShowReturnToWork ? '作業に戻る' : item.label}
                 </span>
               </NavLink>
@@ -151,22 +123,17 @@ export function Sidebar() {
           ))}
         </ul>
 
-        {projectId && projectSummary && (
-          <div className="mt-5 rounded-[12px] border border-white/15 bg-white/10 p-3 text-blue-50">
-            <p className="truncate text-sm font-semibold">{projectName}</p>
-            <div className="mt-3 space-y-2 text-xs text-blue-100">
-              <StatusChip
-                tone={projectSummary.hasVideoOutput ? 'success' : 'info'}
-                label={projectSummary.hasVideoOutput ? '完成' : `次: ${stageLabel(projectSummary.stage)}`}
-                className="border-white/20 bg-white/10 text-blue-50"
-              />
-              <p>{nextActionLabel(projectSummary)}</p>
-            </div>
-          </div>
+        {projectId && (
+          <p
+            className="hidden md:block mt-4 truncate px-1 text-sm text-blue-100"
+            title={projectName}
+          >
+            {projectName}
+          </p>
         )}
       </nav>
 
-      <div className="border-t border-white/10 px-4 py-3">
+      <div className="hidden md:block border-t border-white/10 px-4 py-3">
         <p className="text-xs text-blue-200">v{pkg.version}</p>
       </div>
     </aside>

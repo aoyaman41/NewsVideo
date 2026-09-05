@@ -1,3 +1,4 @@
+import { toLocalFileUrl } from '../../utils/toLocalFileUrl';
 import { useCallback, useState } from 'react';
 import { useDropzone, type FileWithPath } from 'react-dropzone';
 import type { ImageAsset } from '../../schemas';
@@ -14,9 +15,22 @@ interface ImageDropzoneProps {
 
 // 推奨タグリスト（ニュース動画向け）
 const SUGGESTED_TAGS = [
-  '人物', '風景', '建物', 'グラフ', '図解', 'ロゴ',
-  '記者会見', 'インタビュー', '街頭', 'オフィス', '工場',
-  'イベント', 'スポーツ', '政治', '経済', 'テクノロジー',
+  '人物',
+  '風景',
+  '建物',
+  'グラフ',
+  '図解',
+  'ロゴ',
+  '記者会見',
+  'インタビュー',
+  '街頭',
+  'オフィス',
+  '工場',
+  'イベント',
+  'スポーツ',
+  '政治',
+  '経済',
+  'テクノロジー',
 ];
 
 export function ImageDropzone({
@@ -27,10 +41,12 @@ export function ImageDropzone({
   onImageTagsUpdate,
   blobUrlMap = new Map(),
 }: ImageDropzoneProps) {
+  const [importError, setImportError] = useState<string | null>(null);
   const [selectedImageId, setSelectedImageId] = useState<string | null>(null);
 
   const onDrop = useCallback(
     async (acceptedFiles: FileWithPath[]) => {
+      setImportError(null);
       const newImages: ImageAsset[] = [];
       const newBlobUrls = new Map<string, string>();
 
@@ -47,48 +63,16 @@ export function ImageDropzone({
             img.src = blobUrl;
           });
 
-          let imageAsset: ImageAsset;
-
-          // Electron環境ではメインプロセス側にコピーして永続化する
-          const isAbsolutePath =
-            typeof file.path === 'string' &&
-            (file.path.startsWith('/') || /^[A-Za-z]:\\\\/.test(file.path));
-
-          if (projectId && isAbsolutePath) {
-            const imported = await window.electronAPI.image.import(file.path, projectId);
-            imageAsset = {
-              ...imported,
-              metadata: {
-                ...imported.metadata,
-                width: img.width,
-                height: img.height,
-                mimeType: file.type || imported.metadata.mimeType,
-                fileSize: file.size,
-                tags: imported.metadata.tags || [],
-              },
-            };
-          } else {
-            // フォールバック: 一時的なIDとパス（永続化されません）
-            const imageId = crypto.randomUUID();
-            imageAsset = {
-              id: imageId,
-              filePath: file.name,
-              sourceType: 'imported',
-              metadata: {
-                width: img.width,
-                height: img.height,
-                mimeType: file.type,
-                fileSize: file.size,
-                createdAt: new Date().toISOString(),
-                tags: [],
-              },
-            };
-          }
+          if (!projectId) throw new Error('保存先プロジェクトがありません。');
+          const imageAsset = await window.electronAPI.image.importData(
+            await file.arrayBuffer(),
+            projectId
+          );
 
           newImages.push(imageAsset);
           newBlobUrls.set(imageAsset.id, blobUrl);
         } catch (error) {
-          console.error('Failed to import image:', error);
+          setImportError(error instanceof Error ? error.message : String(error));
           URL.revokeObjectURL(blobUrl);
         }
       }
@@ -109,13 +93,16 @@ export function ImageDropzone({
 
   return (
     <div className="space-y-4">
+      {importError && (
+        <p role="alert" className="text-sm text-red-700">
+          {importError}
+        </p>
+      )}
       {/* ドロップゾーン */}
       <div
         {...getRootProps()}
         className={`border-2 border-dashed rounded-lg p-8 text-center cursor-pointer transition-colors ${
-          isDragActive
-            ? 'border-blue-500 bg-blue-50'
-            : 'border-gray-300 hover:border-gray-400'
+          isDragActive ? 'border-blue-500 bg-blue-50' : 'border-gray-300 hover:border-gray-400'
         }`}
       >
         <input {...getInputProps()} />
@@ -158,7 +145,7 @@ export function ImageDropzone({
               {/* 画像 */}
               <div className="aspect-video">
                 <img
-                  src={blobUrlMap.get(image.id) || `file://${image.filePath}`}
+                  src={blobUrlMap.get(image.id) || toLocalFileUrl(image.filePath)}
                   alt=""
                   className="w-full h-full object-cover"
                 />
