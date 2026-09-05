@@ -35,6 +35,8 @@ export type PresentationProfile = {
   targetDurationPerPartSec: number;
   imageStylePreset: ImageStylePreset;
   aspectRatio: ImageAspectRatio;
+  styleReferenceImageIds: string[];
+  styleReferenceNote: string;
   ttsNarrationStylePreset: TtsNarrationStylePreset;
   ttsNarrationStyleNote: string;
   closingCardEnabled: boolean;
@@ -86,6 +88,8 @@ const presetDefaults: Record<PresentationProfilePreset, PresentationProfile> = {
     targetDurationPerPartSec: 30,
     imageStylePreset: DEFAULT_IMAGE_STYLE_PRESET,
     aspectRatio: DEFAULT_IMAGE_ASPECT_RATIO,
+    styleReferenceImageIds: [],
+    styleReferenceNote: '',
     ttsNarrationStylePreset: 'news',
     ttsNarrationStyleNote: '',
     closingCardEnabled: true,
@@ -102,6 +106,8 @@ const presetDefaults: Record<PresentationProfilePreset, PresentationProfile> = {
     targetDurationPerPartSec: 40,
     imageStylePreset: DEFAULT_IMAGE_STYLE_PRESET,
     aspectRatio: DEFAULT_IMAGE_ASPECT_RATIO,
+    styleReferenceImageIds: [],
+    styleReferenceNote: '',
     ttsNarrationStylePreset: 'explain',
     ttsNarrationStyleNote: '',
     closingCardEnabled: true,
@@ -118,6 +124,8 @@ const presetDefaults: Record<PresentationProfilePreset, PresentationProfile> = {
     targetDurationPerPartSec: 25,
     imageStylePreset: DEFAULT_IMAGE_STYLE_PRESET,
     aspectRatio: DEFAULT_IMAGE_ASPECT_RATIO,
+    styleReferenceImageIds: [],
+    styleReferenceNote: '',
     ttsNarrationStylePreset: 'explain',
     ttsNarrationStyleNote: '',
     closingCardEnabled: true,
@@ -134,6 +142,8 @@ const presetDefaults: Record<PresentationProfilePreset, PresentationProfile> = {
     targetDurationPerPartSec: 15,
     imageStylePreset: DEFAULT_IMAGE_STYLE_PRESET,
     aspectRatio: DEFAULT_IMAGE_ASPECT_RATIO,
+    styleReferenceImageIds: [],
+    styleReferenceNote: '',
     ttsNarrationStylePreset: 'casual',
     ttsNarrationStyleNote: '',
     closingCardEnabled: true,
@@ -144,12 +154,13 @@ const presetDefaults: Record<PresentationProfilePreset, PresentationProfile> = {
   },
 };
 
-export const PRESENTATION_PROFILE_PRESET_CLOSING_LINES: Record<PresentationProfilePreset, string> = {
-  news: '以上、ニュースをお届けしました',
-  explain: '以上、ポイントを解説しました',
-  report: '以上、報告をお伝えしました',
-  short: '以上、ダイジェストでした',
-};
+export const PRESENTATION_PROFILE_PRESET_CLOSING_LINES: Record<PresentationProfilePreset, string> =
+  {
+    news: '以上、ニュースをお届けしました',
+    explain: '以上、ポイントを解説しました',
+    report: '以上、報告をお伝えしました',
+    short: '以上、ダイジェストでした',
+  };
 
 export const presentationProfileSchema = z.object({
   preset: z.enum(PRESENTATION_PROFILE_PRESETS),
@@ -163,6 +174,8 @@ export const presentationProfileSchema = z.object({
     .max(TARGET_DURATION_RANGE.max),
   imageStylePreset: z.enum(IMAGE_STYLE_PRESETS),
   aspectRatio: z.enum(IMAGE_ASPECT_RATIOS),
+  styleReferenceImageIds: z.array(z.string().uuid()),
+  styleReferenceNote: z.string(),
   ttsNarrationStylePreset: z.enum(TTS_NARRATION_STYLE_PRESETS),
   ttsNarrationStyleNote: z.string(),
   closingCardEnabled: z.boolean(),
@@ -175,7 +188,10 @@ export const presentationProfileSchema = z.object({
 export const DEFAULT_PRESENTATION_PROFILE: PresentationProfile = presetDefaults.news;
 
 export function isPresentationProfilePreset(value: unknown): value is PresentationProfilePreset {
-  return typeof value === 'string' && PRESENTATION_PROFILE_PRESETS.includes(value as PresentationProfilePreset);
+  return (
+    typeof value === 'string' &&
+    PRESENTATION_PROFILE_PRESETS.includes(value as PresentationProfilePreset)
+  );
 }
 
 export function isScriptTone(value: unknown): value is ScriptTone {
@@ -206,7 +222,9 @@ export function normalizePresentationProfile(
   defaults: PresentationProfileDefaults = {}
 ): PresentationProfile {
   const raw = input && typeof input === 'object' ? (input as Record<string, unknown>) : {};
-  const preset = isPresentationProfilePreset(raw.preset) ? raw.preset : DEFAULT_PRESENTATION_PROFILE.preset;
+  const preset = isPresentationProfilePreset(raw.preset)
+    ? raw.preset
+    : DEFAULT_PRESENTATION_PROFILE.preset;
   const presetDefaults = getDefaultPresentationProfile(preset, defaults);
   const tone = isScriptTone(raw.tone) ? raw.tone : presetDefaults.tone;
   const closingLineMode = isClosingLineMode(raw.closingLineMode)
@@ -223,7 +241,20 @@ export function normalizePresentationProfile(
   const imageStylePreset = isImageStylePreset(raw.imageStylePreset)
     ? raw.imageStylePreset
     : presetDefaults.imageStylePreset;
-  const aspectRatio = isImageAspectRatio(raw.aspectRatio) ? raw.aspectRatio : presetDefaults.aspectRatio;
+  const aspectRatio = isImageAspectRatio(raw.aspectRatio)
+    ? raw.aspectRatio
+    : presetDefaults.aspectRatio;
+  const styleReferenceImageIds = Array.isArray(raw.styleReferenceImageIds)
+    ? Array.from(
+        new Set(
+          raw.styleReferenceImageIds.filter(
+            (id): id is string => typeof id === 'string' && id.trim().length > 0
+          )
+        )
+      ).slice(0, 3)
+    : presetDefaults.styleReferenceImageIds;
+  const styleReferenceNote =
+    typeof raw.styleReferenceNote === 'string' ? raw.styleReferenceNote.trim() : '';
   const ttsNarrationStylePreset = isTtsNarrationStylePreset(raw.ttsNarrationStylePreset)
     ? raw.ttsNarrationStylePreset
     : presetDefaults.ttsNarrationStylePreset;
@@ -263,6 +294,8 @@ export function normalizePresentationProfile(
     targetDurationPerPartSec,
     imageStylePreset,
     aspectRatio,
+    styleReferenceImageIds,
+    styleReferenceNote,
     ttsNarrationStylePreset,
     ttsNarrationStyleNote,
     closingCardEnabled,

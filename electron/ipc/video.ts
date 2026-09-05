@@ -1,13 +1,22 @@
 import { BrowserWindow, app, dialog, ipcMain } from 'electron';
-import { spawn } from 'child_process';
 import * as fs from 'fs/promises';
 import * as os from 'os';
 import * as path from 'path';
-import { createRequire } from 'module';
 import {
   normalizePresentationProfile,
   resolvePresentationSourceLine,
 } from '../../shared/project/presentationProfile';
+import {
+  resolveVideoBackend,
+  type ResolvedVideoBackend,
+} from '../video/backend';
+import { probeHasAudio, runFfmpeg, type VideoJob } from '../video/ffmpeg';
+import {
+  concatSegmentsNative,
+  normalizeVideoClipNative,
+  renderClosingCardVideoNative,
+  renderPartVideoNative,
+} from '../video/native';
 
 type RenderStage = 'preparing' | 'rendering_parts' | 'concatenating' | 'finalizing';
 
@@ -65,13 +74,7 @@ type ProjectLike = {
   presentationProfile?: PresentationProfileLike;
 };
 
-type VideoJob = {
-  canceled: boolean;
-  processes: Set<ReturnType<typeof spawn>>;
-};
-
 let currentJob: VideoJob | null = null;
-const require = createRequire(import.meta.url);
 
 function sendProgress(payload: Omit<ProgressUpdatePayload, 'source'>) {
   const full: ProgressUpdatePayload = { source: 'video', ...payload };
@@ -198,134 +201,22 @@ async function readSettings(): Promise<Settings> {
   }
 }
 
-function getFfmpegCandidatePaths(): string[] {
-  const bin = process.platform === 'win32' ? 'ffmpeg.exe' : 'ffmpeg';
-  const candidates: string[] = [];
-
-  // packaged: resources/ffmpeg/** に同梱される想定
-  if (app.isPackaged) {
-    candidates.push(path.join(process.resourcesPath, 'ffmpeg', bin));
-    candidates.push(path.join(process.resourcesPath, 'ffmpeg', 'bin', bin));
-    return candidates;
-  }
-
-  // dev: PATH の ffmpeg
-  candidates.push(bin);
-
-  return candidates;
-}
-
-async function resolveFfmpegPath(): Promise<string> {
-  // dev: まずは ffmpeg-static を優先（brew不要）
-  if (!app.isPackaged) {
-    try {
-      const ffmpegStaticPath = require('ffmpeg-static') as string;
-      if (ffmpegStaticPath && (await fileExists(ffmpegStaticPath))) return ffmpegStaticPath;
-    } catch {
-      // ignore and fallback to PATH
-    }
-  }
-
-  const candidates = getFfmpegCandidatePaths();
-  for (const p of candidates) {
-    if (p.includes(path.sep)) {
-      if (await fileExists(p)) return p;
-      continue;
-    }
-    // PATH上のコマンドは存在確認できないのでそのまま返す（spawnで失敗したらハンドリング）
-    return p;
-  }
-  throw new Error(
-    'ffmpegが見つかりません（アプリに同梱されていない可能性があります）。再インストールしてください。'
-  );
-}
-
-async function probeHasAudio(ffmpegPath: string, inputPath: string): Promise<boolean> {
-  return new Promise<boolean>((resolve) => {
-    const proc = spawn(ffmpegPath, ['-hide_banner', '-i', inputPath], {
-      stdio: ['ignore', 'ignore', 'pipe'],
-    });
-    let stderr = '';
-    proc.stderr.on('data', (d) => {
-      stderr += d.toString('utf-8');
-    });
-    proc.on('close', () => {
-      resolve(/Audio:\s/.test(stderr));
-    });
-    proc.on('error', () => resolve(false));
+async function resolveVideoExecutionBackend(): Promise<ResolvedVideoBackend> {
+  return resolveVideoBackend({
+    envValue: process.env.NEWSVIDEO_VIDEO_BACKEND,
+    platform: process.platform,
+    isPackaged: app.isPackaged,
+    resourcesPath: process.resourcesPath,
   });
 }
 
-async function runFfmpeg(
+function runVideoFfmpeg(
   ffmpegPath: string,
   args: string[],
   job: VideoJob,
   onProgress?: (progress: Record<string, string>) => void
 ): Promise<void> {
-  assertNotCanceled(job);
-
-  await new Promise<void>((resolve, reject) => {
-    const proc = spawn(ffmpegPath, args, { stdio: ['ignore', 'pipe', 'pipe'] });
-    job.processes.add(proc);
-
-    let stderr = '';
-    let stdoutBuf = '';
-
-    const cleanup = () => {
-      job.processes.delete(proc);
-    };
-
-    proc.stdout.on('data', (data) => {
-      stdoutBuf += data.toString('utf-8');
-      const lines = stdoutBuf.split(/\r?\n/);
-      stdoutBuf = lines.pop() ?? '';
-      for (const line of lines) {
-        const trimmed = line.trim();
-        if (!trimmed) continue;
-        const idx = trimmed.indexOf('=');
-        if (idx <= 0) continue;
-        const key = trimmed.slice(0, idx);
-        const value = trimmed.slice(idx + 1);
-        onProgress?.({ [key]: value });
-      }
-    });
-
-    proc.stderr.on('data', (data) => {
-      stderr += data.toString('utf-8');
-      // でかくなりすぎないように最後の方だけ保持
-      if (stderr.length > 5000) stderr = stderr.slice(-5000);
-    });
-
-    proc.on('error', (err) => {
-      cleanup();
-      const code = (err as NodeJS.ErrnoException).code;
-      if (code === 'ENOENT') {
-        const message = app.isPackaged
-          ? 'ffmpegが見つかりません（アプリに同梱されていない可能性があります）。再インストールしてください。'
-          : 'ffmpegが見つかりません。`npm i -D ffmpeg-static` または Homebrew で `brew install ffmpeg` を実行してください。';
-        reject(new Error(message));
-        return;
-      }
-      reject(err);
-    });
-
-    proc.on('close', (code, signal) => {
-      cleanup();
-      if (job.canceled) {
-        reject(new Error('キャンセルしました'));
-        return;
-      }
-      if (code === 0) {
-        resolve();
-      } else {
-        reject(
-          new Error(
-            `ffmpegエラー (code=${code ?? 'null'}, signal=${signal ?? 'null'}): ${stderr.trim()}`
-          )
-        );
-      }
-    });
-  });
+  return runFfmpeg(ffmpegPath, args, job, onProgress, { isPackaged: app.isPackaged });
 }
 
 function buildImageMap(project: ProjectLike): Map<string, string> {
@@ -407,13 +298,32 @@ async function writeImageConcatList(
 }
 
 async function normalizeVideoToSpec(
-  ffmpegPath: string,
+  backend: ResolvedVideoBackend,
   inputPath: string,
   outputPath: string,
   options: RenderOptions,
   job: VideoJob
 ): Promise<void> {
   const { width, height } = parseResolution(options.resolution);
+
+  if (backend.id === 'native') {
+    await normalizeVideoClipNative(
+      backend.rendererPath,
+      {
+        inputPath,
+        outputPath,
+        width,
+        height,
+        fps: options.fps,
+        videoBitrate: options.videoBitrate,
+        audioBitrate: options.audioBitrate,
+      },
+      job
+    );
+    return;
+  }
+
+  const ffmpegPath = backend.ffmpegPath;
   const vf = buildScalePadFilter(width, height);
   const hasAudio = await probeHasAudio(ffmpegPath, inputPath);
 
@@ -466,11 +376,11 @@ async function normalizeVideoToSpec(
     outputPath
   );
 
-  await runFfmpeg(ffmpegPath, args, job);
+  await runVideoFfmpeg(ffmpegPath, args, job);
 }
 
 async function renderPartVideo(
-  ffmpegPath: string,
+  backend: ResolvedVideoBackend,
   project: ProjectLike,
   part: PartLike,
   options: RenderOptions,
@@ -509,13 +419,45 @@ async function renderPartVideo(
     durations[0] += clampedLeadInSec;
   }
   const entries = imagePaths.map((p, i) => ({ filePath: p, durationSec: durations[i] }));
+  const { width, height } = parseResolution(options.resolution);
+
+  if (backend.id === 'native') {
+    let lastOutTimeMs = 0;
+    await renderPartVideoNative(
+      backend.rendererPath,
+      {
+        outputPath,
+        width,
+        height,
+        fps: options.fps,
+        videoBitrate: options.videoBitrate,
+        audioBitrate: options.audioBitrate,
+        audioPath,
+        audioDelayMs: leadInMs,
+        imageEntries: entries,
+      },
+      job,
+      (kv) => {
+        const outTimeMs = kv.out_time_ms ? Number(kv.out_time_ms) : null;
+        if (outTimeMs && Number.isFinite(outTimeMs)) {
+          lastOutTimeMs = outTimeMs;
+          const sec = outTimeMs / 1_000_000;
+          const p = Math.max(0, Math.min(1, sec / totalDurationSec));
+          onPercent?.(p);
+        }
+      }
+    );
+
+    const durationSec = lastOutTimeMs > 0 ? lastOutTimeMs / 1_000_000 : totalDurationSec;
+    return { durationSec };
+  }
 
   const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'newsvideo-'));
   const listPath = path.join(tmpDir, `part-${part.id}.txt`);
   await writeImageConcatList(entries, listPath);
 
-  const { width, height } = parseResolution(options.resolution);
   const vf = buildScalePadFilter(width, height);
+  const ffmpegPath = backend.ffmpegPath;
 
   const args = [
     '-y',
@@ -563,7 +505,7 @@ async function renderPartVideo(
   ];
 
   let lastOutTimeMs = 0;
-  await runFfmpeg(ffmpegPath, args, job, (kv) => {
+  await runVideoFfmpeg(ffmpegPath, args, job, (kv) => {
     const outTimeMs = kv.out_time_ms ? Number(kv.out_time_ms) : null;
     if (outTimeMs && Number.isFinite(outTimeMs)) {
       lastOutTimeMs = outTimeMs;
@@ -582,12 +524,32 @@ async function renderPartVideo(
 }
 
 async function concatSegments(
-  ffmpegPath: string,
+  backend: ResolvedVideoBackend,
   segmentPaths: string[],
   outputPath: string,
   options: RenderOptions,
   job: VideoJob
 ): Promise<void> {
+  const { width, height } = parseResolution(options.resolution);
+
+  if (backend.id === 'native') {
+    await concatSegmentsNative(
+      backend.rendererPath,
+      {
+        outputPath,
+        width,
+        height,
+        fps: options.fps,
+        videoBitrate: options.videoBitrate,
+        audioBitrate: options.audioBitrate,
+        segmentPaths,
+      },
+      job
+    );
+    return;
+  }
+
+  const ffmpegPath = backend.ffmpegPath;
   const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'newsvideo-'));
   const listPath = path.join(tmpDir, 'concat.txt');
   const lines = segmentPaths.map((p) => `file '${p.replace(/'/g, "'\\''")}'`);
@@ -612,14 +574,13 @@ async function concatSegments(
     outputPath,
   ];
   try {
-    await runFfmpeg(ffmpegPath, copyArgs, job);
+    await runVideoFfmpeg(ffmpegPath, copyArgs, job);
     await fs.rm(tmpDir, { recursive: true, force: true });
     return;
   } catch {
     // fallback: re-encode
   }
 
-  const { width, height } = parseResolution(options.resolution);
   const vf = buildScalePadFilter(width, height);
   const reencodeArgs = [
     '-y',
@@ -656,12 +617,12 @@ async function concatSegments(
     '+faststart',
     outputPath,
   ];
-  await runFfmpeg(ffmpegPath, reencodeArgs, job);
+  await runVideoFfmpeg(ffmpegPath, reencodeArgs, job);
   await fs.rm(tmpDir, { recursive: true, force: true });
 }
 
 async function renderClosingCardVideo(
-  ffmpegPath: string,
+  backend: ResolvedVideoBackend,
   project: ProjectLike,
   options: RenderOptions,
   outputPath: string,
@@ -686,6 +647,27 @@ async function renderClosingCardVideo(
   const lines = [headline || '', cta || '', source || ''].filter(Boolean);
   if (lines.length === 0) return null;
 
+  if (backend.id === 'native') {
+    const { width, height } = parseResolution(options.resolution);
+    await renderClosingCardVideoNative(
+      backend.rendererPath,
+      {
+        outputPath,
+        width,
+        height,
+        fps: options.fps,
+        videoBitrate: options.videoBitrate,
+        durationSec: 3.6,
+        headline: headline || undefined,
+        cta: cta || undefined,
+        source: source || undefined,
+      },
+      job
+    );
+    return outputPath;
+  }
+
+  const ffmpegPath = backend.ffmpegPath;
   const fontFile = await resolveDrawtextFontFile();
   const textDir = await fs.mkdtemp(path.join(tempDir, 'closing-card-'));
   const filters: string[] = [];
@@ -787,7 +769,7 @@ async function renderClosingCardVideo(
   ];
 
   try {
-    await runFfmpeg(ffmpegPath, args, job);
+    await runVideoFfmpeg(ffmpegPath, args, job);
   } finally {
     await fs.rm(textDir, { recursive: true, force: true });
   }
@@ -932,7 +914,7 @@ ipcMain.handle(
       sendProgress({ stage: 'preparing', percent: 0, message: 'プレビュー準備中...' });
 
       const { project, part } = await findProjectByPartId(partId);
-      const ffmpegPath = await resolveFfmpegPath();
+      const backend = await resolveVideoExecutionBackend();
 
       const settings = await readSettings();
       const leadInSec = settings.videoPartLeadInSec ?? 0.3;
@@ -959,7 +941,7 @@ ipcMain.handle(
       });
 
       await renderPartVideo(
-        ffmpegPath,
+        backend,
         project,
         part,
         previewOptions,
@@ -998,7 +980,7 @@ ipcMain.handle(
 
       sendProgress({ stage: 'preparing', percent: 0, message: 'レンダリング準備中...' });
 
-      const ffmpegPath = await resolveFfmpegPath();
+      const backend = await resolveVideoExecutionBackend();
       const { width, height } = parseResolution(options.resolution);
       if (!Number.isFinite(options.fps) || options.fps <= 0) throw new Error('fps が不正です');
 
@@ -1037,7 +1019,7 @@ ipcMain.handle(
         });
 
         const { durationSec } = await renderPartVideo(
-          ffmpegPath,
+          backend,
           project,
           part,
           options,
@@ -1070,7 +1052,7 @@ ipcMain.handle(
         const openingInputForFfmpeg = await stageVideoInputForFfmpeg(opening, renderTmpDir, 'opening');
         const normalized = path.join(renderTmpDir, 'opening.normalized.mp4');
         sendProgress({ stage: 'preparing', percent: 82, message: 'オープニング動画を調整中...' });
-        await normalizeVideoToSpec(ffmpegPath, openingInputForFfmpeg, normalized, options, job);
+        await normalizeVideoToSpec(backend, openingInputForFfmpeg, normalized, options, job);
         segments.push(normalized);
       }
 
@@ -1080,7 +1062,7 @@ ipcMain.handle(
         const closingCardPath = path.join(renderTmpDir, 'closing-card.mp4');
         sendProgress({ stage: 'preparing', percent: 84, message: '締めカードを生成中...' });
         const renderedClosingCard = await renderClosingCardVideo(
-          ffmpegPath,
+          backend,
           {
             ...project,
             presentationProfile,
@@ -1102,14 +1084,14 @@ ipcMain.handle(
         const endingInputForFfmpeg = await stageVideoInputForFfmpeg(ending, renderTmpDir, 'ending');
         const normalized = path.join(renderTmpDir, 'ending.normalized.mp4');
         sendProgress({ stage: 'preparing', percent: 86, message: 'エンディング動画を調整中...' });
-        await normalizeVideoToSpec(ffmpegPath, endingInputForFfmpeg, normalized, options, job);
+        await normalizeVideoToSpec(backend, endingInputForFfmpeg, normalized, options, job);
         segments.push(normalized);
       }
 
       // concat
       sendProgress({ stage: 'concatenating', percent: 90, message: '全体動画を連結中...' });
       const stagedOutputPath = path.join(renderTmpDir, 'final.rendered.mp4');
-      await concatSegments(ffmpegPath, segments, stagedOutputPath, options, job);
+      await concatSegments(backend, segments, stagedOutputPath, options, job);
       assertNotCanceled(job);
 
       sendProgress({ stage: 'finalizing', percent: 97, message: '出力ファイルを書き込み中...' });

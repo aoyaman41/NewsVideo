@@ -57,6 +57,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('image:generate', prompt, projectId),
     generateBatch: (prompts: unknown[], projectId: string) =>
       ipcRenderer.invoke('image:generateBatch', prompts, projectId),
+    cancelBatch: (projectId?: string) => ipcRenderer.invoke('image:cancelBatch', projectId),
     delete: (filePath: string) => ipcRenderer.invoke('image:delete', filePath),
     import: (sourcePath: string, projectId: string) =>
       ipcRenderer.invoke('image:import', sourcePath, projectId),

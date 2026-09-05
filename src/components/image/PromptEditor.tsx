@@ -58,6 +58,7 @@ export function PromptEditor({
       ...prompt,
       prompt: editedPrompt,
       negativePrompt: editedNegativePrompt,
+      version: hasChanges ? prompt.version + 1 : prompt.version,
     };
     onGenerate(updatedPrompt);
   };
@@ -133,7 +134,7 @@ export function PromptEditor({
         <Button variant="secondary" onClick={handleSave} disabled={!hasChanges}>
           保存
         </Button>
-        <Button onClick={handleGenerate} disabled={isGenerating}>
+        <Button onClick={handleGenerate} disabled={isGenerating || promptCharCount === 0}>
           {isGenerating ? '生成中...' : '画像を生成'}
         </Button>
       </div>

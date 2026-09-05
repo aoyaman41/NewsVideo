@@ -16,7 +16,12 @@ vi.mock('electron', () => ({
     decryptString: () => JSON.stringify(mocks.secrets),
   },
 }));
-vi.mock('../utils/openaiImage', () => ({ generateOpenAIImage: mocks.generate }));
+vi.mock('openai', () => ({
+  default: class {
+    images = { generate: mocks.generate };
+  },
+  toFile: vi.fn(),
+}));
 vi.mock('node:fs/promises', () => ({
   readFile: vi.fn(async (path: string) => {
     if (path.endsWith('settings.json'))
@@ -35,11 +40,8 @@ beforeEach(async () => {
   mocks.secrets = { openai: 'test-openai' };
   await import('./image');
   mocks.generate.mockResolvedValue({
-    base64Data: 'aW1hZ2U=',
-    width: 2560,
-    height: 1440,
-    inputTokens: 10,
-    outputTokens: 20,
+    data: [{ b64_json: 'aW1hZ2U=' }],
+    usage: { input_tokens: 10, output_tokens: 20 },
   });
 });
 
@@ -55,7 +57,9 @@ const prompt = {
 
 it('routes individual image generation through OpenAI without a Google key', async () => {
   const asset = await mocks.handlers.get('image:generate')!(null, prompt, 'project');
-  expect(mocks.generate).toHaveBeenCalledWith('test-openai', expect.any(String), '16:9', '2k');
+  expect(mocks.generate).toHaveBeenCalledWith(
+    expect.objectContaining({ model: 'gpt-image-2', size: '2560x1440' })
+  );
   expect(asset).toMatchObject({
     metadata: { width: 2560, generation: { model: 'gpt-image-2', inputTokens: 10 } },
   });
@@ -68,8 +72,8 @@ it('keeps successful batch assets when one request fails', async () => {
     [prompt, { ...prompt, id: 'second' }],
     'project'
   );
-  expect(assets).toHaveLength(1);
-  expect(assets).toMatchObject([{ metadata: { promptId: 'second' } }]);
+  expect(assets).toMatchObject({ images: expect.any(Array), errors: expect.any(Array) });
+  expect(assets).toMatchObject({ images: [{ metadata: { promptId: 'second' } }] });
 });
 
 it('reports the OpenAI key requirement before generating', async () => {

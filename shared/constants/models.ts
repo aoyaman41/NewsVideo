@@ -3,6 +3,7 @@ export const OPENAI_TEXT_COMPLETION_MODELS = [
   'gpt-5.6-sol',
   'gpt-5.6-terra',
   'gpt-5.6-luna',
+  'gpt-5.5',
   'gpt-5.4',
   'gpt-5.2',
 ] as const;
@@ -36,14 +37,18 @@ export type OpenAIReasoningEffort = (typeof OPENAI_REASONING_EFFORTS)[number];
 export const GEMINI_THINKING_LEVELS = ['default', 'low', 'medium', 'high'] as const;
 export type GeminiThinkingLevel = (typeof GEMINI_THINKING_LEVELS)[number];
 export type SelectableOpenAIReasoningEffort = Exclude<OpenAIReasoningEffort, 'default'>;
-export type SelectableGeminiThinkingLevel = Exclude<GeminiThinkingLevel, 'default' | 'medium'>;
+export type SelectableGeminiThinkingLevel = Exclude<GeminiThinkingLevel, 'default'>;
 
-export const IMAGE_MODELS = [
-  'gpt-image-2',
+export const OPENAI_IMAGE_MODELS = ['gpt-image-2'] as const;
+export const GEMINI_IMAGE_MODELS = [
   'gemini-3.1-flash-image-preview',
   'gemini-3-pro-image-preview',
 ] as const;
+export const IMAGE_MODELS = [...OPENAI_IMAGE_MODELS, ...GEMINI_IMAGE_MODELS] as const;
+export type OpenAIImageModel = (typeof OPENAI_IMAGE_MODELS)[number];
+export type GeminiImageModel = (typeof GEMINI_IMAGE_MODELS)[number];
 export type ImageModel = (typeof IMAGE_MODELS)[number];
+export type ImageModelProvider = 'openai' | 'gemini';
 export const DEFAULT_IMAGE_MODEL: ImageModel = 'gemini-3.1-flash-image-preview';
 
 export const IMAGE_RESOLUTIONS = ['fhd', '2k', '4k'] as const;
@@ -57,6 +62,7 @@ export const TEXT_COMPLETION_MODEL_LABELS: Record<TextCompletionModel, string> =
   'gpt-5.6-sol': 'GPT-5.6 Sol',
   'gpt-5.6-terra': 'GPT-5.6 Terra',
   'gpt-5.6-luna': 'GPT-5.6 Luna',
+  'gpt-5.5': 'GPT-5.5',
   'gpt-5.4': 'GPT-5.4',
   'gpt-5.2': 'GPT-5.2',
   'gemini-3.1-pro': 'Gemini 3.1 Pro',
@@ -74,15 +80,31 @@ export const IMAGE_RESOLUTION_LABELS: Record<ImageResolution, string> = {
   '4k': '4K 相当 (16:9=3840x2160)',
 };
 
-export const DEFAULT_GEMINI_TTS_MODEL = 'gemini-2.5-pro-preview-tts' as const;
+export const GEMINI_TTS_MODELS = [
+  'gemini-3.1-flash-tts-preview',
+  'gemini-2.5-pro-preview-tts',
+  'gemini-2.5-flash-preview-tts',
+] as const;
+export type GeminiTtsModel = (typeof GEMINI_TTS_MODELS)[number];
+
+export const GEMINI_TTS_MODEL_LABELS: Record<GeminiTtsModel, string> = {
+  'gemini-3.1-flash-tts-preview': 'Gemini 3.1 Flash TTS Preview',
+  'gemini-2.5-pro-preview-tts': 'Gemini 2.5 Pro TTS Preview',
+  'gemini-2.5-flash-preview-tts': 'Gemini 2.5 Flash TTS Preview',
+};
+
+export const DEFAULT_GEMINI_TTS_MODEL: GeminiTtsModel = 'gemini-3.1-flash-tts-preview';
 
 const TEXT_COMPLETION_MODEL_SET = new Set<string>(TEXT_COMPLETION_MODELS);
 const OPENAI_TEXT_COMPLETION_MODEL_SET = new Set<string>(OPENAI_TEXT_COMPLETION_MODELS);
 const GEMINI_TEXT_COMPLETION_MODEL_SET = new Set<string>(GEMINI_TEXT_COMPLETION_MODELS);
 const OPENAI_REASONING_EFFORT_SET = new Set<string>(OPENAI_REASONING_EFFORTS);
 const GEMINI_THINKING_LEVEL_SET = new Set<string>(GEMINI_THINKING_LEVELS);
+const OPENAI_IMAGE_MODEL_SET = new Set<string>(OPENAI_IMAGE_MODELS);
+const GEMINI_IMAGE_MODEL_SET = new Set<string>(GEMINI_IMAGE_MODELS);
 const IMAGE_MODEL_SET = new Set<string>(IMAGE_MODELS);
 const IMAGE_RESOLUTION_SET = new Set<string>(IMAGE_RESOLUTIONS);
+const GEMINI_TTS_MODEL_SET = new Set<string>(GEMINI_TTS_MODELS);
 
 export function isTextCompletionModel(value: unknown): value is TextCompletionModel {
   return typeof value === 'string' && TEXT_COMPLETION_MODEL_SET.has(value);
@@ -120,6 +142,7 @@ const OPENAI_REASONING_EFFORTS_BY_MODEL: Record<
   'gpt-5.6-sol': ['none', 'low', 'medium', 'high', 'xhigh', 'max'],
   'gpt-5.6-terra': ['none', 'low', 'medium', 'high', 'xhigh', 'max'],
   'gpt-5.6-luna': ['none', 'low', 'medium', 'high', 'xhigh', 'max'],
+  'gpt-5.5': ['none', 'low', 'medium', 'high', 'xhigh'],
   'gpt-5.4': ['none', 'low', 'medium', 'high', 'xhigh'],
   'gpt-5.2': ['none', 'low', 'medium', 'high', 'xhigh'],
 };
@@ -132,6 +155,7 @@ const OPENAI_DEFAULT_REASONING_EFFORT_BY_MODEL: Record<
   'gpt-5.6-sol': 'medium',
   'gpt-5.6-terra': 'medium',
   'gpt-5.6-luna': 'medium',
+  'gpt-5.5': 'none',
   'gpt-5.4': 'none',
   'gpt-5.2': 'none',
 };
@@ -144,6 +168,7 @@ const OPENAI_TEMPERATURE_SUPPORTED_EFFORTS_BY_MODEL: Record<
   'gpt-5.6-sol': [],
   'gpt-5.6-terra': [],
   'gpt-5.6-luna': [],
+  'gpt-5.5': ['none'],
   'gpt-5.4': ['none'],
   'gpt-5.2': ['none'],
 };
@@ -152,7 +177,7 @@ const GEMINI_THINKING_LEVELS_BY_MODEL: Record<
   GeminiTextCompletionModel,
   readonly SelectableGeminiThinkingLevel[]
 > = {
-  'gemini-3.1-pro': ['low', 'high'],
+  'gemini-3.1-pro': ['low', 'medium', 'high'],
 };
 
 export function getSupportedOpenAIReasoningEfforts(
@@ -203,10 +228,30 @@ export function isImageModel(value: unknown): value is ImageModel {
   return typeof value === 'string' && IMAGE_MODEL_SET.has(value);
 }
 
+export function isOpenAIImageModel(value: unknown): value is OpenAIImageModel {
+  return typeof value === 'string' && OPENAI_IMAGE_MODEL_SET.has(value);
+}
+
+export function isGeminiImageModel(value: unknown): value is GeminiImageModel {
+  return typeof value === 'string' && GEMINI_IMAGE_MODEL_SET.has(value);
+}
+
 export function getImageModelLabel(model: ImageModel): string {
   return IMAGE_MODEL_LABELS[model];
 }
 
+export function getImageModelProvider(model: ImageModel): ImageModelProvider {
+  return isOpenAIImageModel(model) ? 'openai' : 'gemini';
+}
+
 export function isImageResolution(value: unknown): value is ImageResolution {
   return typeof value === 'string' && IMAGE_RESOLUTION_SET.has(value);
+}
+
+export function isGeminiTtsModel(value: unknown): value is GeminiTtsModel {
+  return typeof value === 'string' && GEMINI_TTS_MODEL_SET.has(value);
+}
+
+export function getGeminiTtsModelLabel(model: GeminiTtsModel): string {
+  return GEMINI_TTS_MODEL_LABELS[model];
 }

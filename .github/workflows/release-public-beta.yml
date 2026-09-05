@@ -62,6 +62,12 @@ jobs:
       - name: Install Dependencies
         run: npm ci
 
+      - name: Audit Licenses
+        run: npm run audit:licenses
+
+      - name: Build native video renderer
+        run: npm run prepare:native-video-renderer:mac
+
       - name: Verify package version
         run: |
           PACKAGE_VERSION="$(node -p "require('./package.json').version")"
@@ -82,13 +88,15 @@ jobs:
       - name: Build Public Beta artifacts
         run: npm run build:release:mac
 
-      - name: Verify bundled ffmpeg binaries
+      - name: Verify bundled native video renderer
         run: |
           APP_PATH="release/mac-arm64/NewsVideo.app"
-          test -f "$APP_PATH/Contents/Resources/ffmpeg/ffmpeg"
-          test -f "$APP_PATH/Contents/Resources/ffmpeg/ffprobe"
-          test -x "$APP_PATH/Contents/Resources/ffmpeg/ffmpeg"
-          test -x "$APP_PATH/Contents/Resources/ffmpeg/ffprobe"
+          test -f "$APP_PATH/Contents/Resources/LICENSE"
+          test -f "$APP_PATH/Contents/Resources/THIRD_PARTY_NOTICES.md"
+          test -f "$APP_PATH/Contents/Resources/native-video-renderer/native-video-renderer"
+          test -x "$APP_PATH/Contents/Resources/native-video-renderer/native-video-renderer"
+          test ! -e "$APP_PATH/Contents/Resources/ffmpeg/ffmpeg"
+          test ! -e "$APP_PATH/Contents/Resources/ffmpeg/ffprobe"
 
       - name: Verify release files
         run: |
@@ -99,10 +107,12 @@ jobs:
           test -f "release/latest-mac.yml"
           TMP_DIR="$(mktemp -d)"
           ditto -x -k "release/NewsVideo-${RELEASE_VERSION}-arm64-mac.zip" "$TMP_DIR"
-          test -f "$TMP_DIR/NewsVideo.app/Contents/Resources/ffmpeg/ffmpeg"
-          test -f "$TMP_DIR/NewsVideo.app/Contents/Resources/ffmpeg/ffprobe"
-          test -x "$TMP_DIR/NewsVideo.app/Contents/Resources/ffmpeg/ffmpeg"
-          test -x "$TMP_DIR/NewsVideo.app/Contents/Resources/ffmpeg/ffprobe"
+          test -f "$TMP_DIR/NewsVideo.app/Contents/Resources/LICENSE"
+          test -f "$TMP_DIR/NewsVideo.app/Contents/Resources/THIRD_PARTY_NOTICES.md"
+          test -f "$TMP_DIR/NewsVideo.app/Contents/Resources/native-video-renderer/native-video-renderer"
+          test -x "$TMP_DIR/NewsVideo.app/Contents/Resources/native-video-renderer/native-video-renderer"
+          test ! -e "$TMP_DIR/NewsVideo.app/Contents/Resources/ffmpeg/ffmpeg"
+          test ! -e "$TMP_DIR/NewsVideo.app/Contents/Resources/ffmpeg/ffprobe"
 
       - name: Prepare release notes
         run: |

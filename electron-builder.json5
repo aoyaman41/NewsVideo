@@ -34,8 +34,16 @@
   },
   "extraResources": [
     {
-      "from": "resources/ffmpeg",
-      "to": "ffmpeg",
+      "from": "LICENSE",
+      "to": "LICENSE"
+    },
+    {
+      "from": "THIRD_PARTY_NOTICES.md",
+      "to": "THIRD_PARTY_NOTICES.md"
+    },
+    {
+      "from": "resources/native-video-renderer",
+      "to": "native-video-renderer",
       "filter": ["**/*"]
     }
   ]

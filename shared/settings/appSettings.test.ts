@@ -6,6 +6,7 @@ describe('parseSettingsUpdate', () => {
     const parsed = parseSettingsUpdate({
       scriptTextModel: 'gpt-5.6-sol',
       imagePromptTextModel: 'gpt-5.6-terra',
+      ttsModel: 'gemini-3.1-flash-tts-preview',
       imageModel: 'gemini-3-pro-image-preview',
       imageResolution: '2k',
       openaiReasoningEffort: 'max',
@@ -15,6 +16,7 @@ describe('parseSettingsUpdate', () => {
 
     expect(parsed.scriptTextModel).toBe('gpt-5.6-sol');
     expect(parsed.imagePromptTextModel).toBe('gpt-5.6-terra');
+    expect(parsed.ttsModel).toBe('gemini-3.1-flash-tts-preview');
     expect(parsed.imageModel).toBe('gemini-3-pro-image-preview');
     expect(parsed.imageResolution).toBe('2k');
     expect(parsed.openaiReasoningEffort).toBe('max');
@@ -39,10 +41,19 @@ describe('normalizeSettings', () => {
     expect(normalized.ttsVoice).toBe(DEFAULT_SETTINGS.ttsVoice);
   });
 
+  it('keeps Gemini 3.1 Flash TTS selections', () => {
+    const normalized = normalizeSettings({
+      ttsModel: 'gemini-3.1-flash-tts-preview',
+    });
+
+    expect(normalized.ttsModel).toBe('gemini-3.1-flash-tts-preview');
+  });
+
   it('falls back to defaults for invalid model selections and keeps cost', () => {
     const normalized = normalizeSettings({
       scriptTextModel: 'bad-model',
       imagePromptTextModel: 'bad-model',
+      ttsModel: 'bad-model',
       openaiReasoningEffort: 'bad-effort',
       geminiThinkingLevel: 'bad-level',
       imageModel: 'bad-model',
@@ -52,6 +63,7 @@ describe('normalizeSettings', () => {
 
     expect(normalized.scriptTextModel).toBe(DEFAULT_SETTINGS.scriptTextModel);
     expect(normalized.imagePromptTextModel).toBe(DEFAULT_SETTINGS.imagePromptTextModel);
+    expect(normalized.ttsModel).toBe(DEFAULT_SETTINGS.ttsModel);
     expect(normalized.openaiReasoningEffort).toBe(DEFAULT_SETTINGS.openaiReasoningEffort);
     expect(normalized.geminiThinkingLevel).toBe(DEFAULT_SETTINGS.geminiThinkingLevel);
     expect(normalized.imageModel).toBe(DEFAULT_SETTINGS.imageModel);
@@ -122,6 +134,11 @@ describe('normalizeSettings', () => {
 });
 
 it('round-trips Astra and GPT Image 2 settings', () => {
-  const values = { scriptTextModel: 'gpt-6-astra', imagePromptTextModel: 'gpt-6-astra', imageModel: 'gpt-image-2', openaiReasoningEffort: 'high' };
+  const values = {
+    scriptTextModel: 'gpt-6-astra',
+    imagePromptTextModel: 'gpt-6-astra',
+    imageModel: 'gpt-image-2',
+    openaiReasoningEffort: 'high',
+  };
   expect(normalizeSettings(parseSettingsUpdate(values))).toMatchObject(values);
 });

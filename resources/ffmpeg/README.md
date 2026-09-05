@@ -1,7 +1,7 @@
-# ffmpeg（mac同梱用）
+# ffmpeg（開発用 fallback）
 
-mac向けアプリ配布時に、利用者のPCへ `brew install ffmpeg` を要求しないために、
-`resources/ffmpeg/` に ffmpeg/ffprobe バイナリを同梱します。
+現在の GitHub Releases 向け配布では、`ffmpeg` / `ffprobe` は同梱しません。
+このディレクトリは、開発時に `NEWSVIDEO_VIDEO_BACKEND=ffmpeg` を使う fallback 用のメモです。
 
 ## 生成（mac）
 
@@ -14,4 +14,4 @@ PATH=/usr/local/bin:$PATH npm run prepare:ffmpeg:mac
 - `resources/ffmpeg/ffmpeg`
 - `resources/ffmpeg/ffprobe`
 
-ライセンスと再配布メモは、リポジトリ直下の [THIRD_PARTY_NOTICES.md](../../THIRD_PARTY_NOTICES.md) を参照してください。
+ライセンスと再配布メモは、ルートの `THIRD_PARTY_NOTICES.md` を参照してください。

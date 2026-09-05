@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { Header, WorkflowNav } from '../components/layout';
-import { ImageAssignment, PromptEditor } from '../components/image';
+import { ImageAssignment, ImageGallery, PromptEditor } from '../components/image';
 import {
   Badge,
   Button,
@@ -18,6 +18,23 @@ import {
   IMAGE_STYLE_PRESET_LABELS,
 } from '../../shared/project/imageStylePresets';
 
+type ImageBatchErrorLike = {
+  index: number;
+  partId?: string;
+  error: string;
+};
+
+function formatImageBatchErrors(errors: ImageBatchErrorLike[], project: Project): string {
+  return errors
+    .slice(0, 3)
+    .map((error) => {
+      const part = error.partId ? project.parts.find((item) => item.id === error.partId) : null;
+      const label = part ? `パート${part.index + 1}` : `項目${error.index + 1}`;
+      return `${label}: ${error.error}`;
+    })
+    .join(' / ');
+}
+
 export function ImageManagePage() {
   const { projectId } = useParams<{ projectId: string }>();
   const navigate = useNavigate();
@@ -31,6 +48,7 @@ export function ImageManagePage() {
   const [isGeneratingPrompts, setIsGeneratingPrompts] = useState(false);
   const [isGeneratingSinglePrompt, setIsGeneratingSinglePrompt] = useState(false);
   const [isGeneratingImage, setIsGeneratingImage] = useState(false);
+  const [isGeneratingImageBatch, setIsGeneratingImageBatch] = useState(false);
 
   const reportError = useCallback(
     (message: string, title?: string) => {
@@ -83,6 +101,13 @@ export function ImageManagePage() {
     return missing;
   }, [activePrompts, promptIdsWithAnyImage]);
 
+  const allProjectImages = useMemo(() => {
+    if (!project) return [];
+    return [...project.article.importedImages, ...project.images];
+  }, [project]);
+
+  const styleReferenceImageIds = project?.presentationProfile.styleReferenceImageIds ?? [];
+
   // プロジェクト読み込み
   useEffect(() => {
     const loadProject = async () => {
@@ -125,6 +150,8 @@ export function ImageManagePage() {
         {
           stylePreset: project.presentationProfile.imageStylePreset,
           aspectRatio: project.presentationProfile.aspectRatio,
+          styleReferenceImageIds: project.presentationProfile.styleReferenceImageIds,
+          styleReferenceNote: project.presentationProfile.styleReferenceNote,
         }
       );
       const usageRecord = createOpenAIUsageRecord('image_prompt_generate', result.usage);
@@ -162,6 +189,8 @@ export function ImageManagePage() {
           {
             stylePreset: project.presentationProfile.imageStylePreset,
             aspectRatio: project.presentationProfile.aspectRatio,
+            styleReferenceImageIds: project.presentationProfile.styleReferenceImageIds,
+            styleReferenceNote: project.presentationProfile.styleReferenceNote,
           }
         );
         const usageRecord = createOpenAIUsageRecord('image_prompt_regenerate', result.usage);
@@ -194,12 +223,26 @@ export function ImageManagePage() {
         setIsGeneratingImage(true);
         setError(null);
 
-        const imageAsset = await window.electronAPI.image.generate(prompt, projectId);
+        const savedPromptProject: Project = {
+          ...project,
+          prompts: project.prompts.some((item) => item.id === prompt.id)
+            ? project.prompts.map((item) => (item.id === prompt.id ? prompt : item))
+            : [...project.prompts, prompt],
+          updatedAt: new Date().toISOString(),
+        };
+        await window.electronAPI.project.save(savedPromptProject);
+        setProject(savedPromptProject);
+
+        const promptWithReferences: ImagePrompt = {
+          ...prompt,
+          styleReferenceImageIds: savedPromptProject.presentationProfile.styleReferenceImageIds,
+        };
+        const imageAsset = await window.electronAPI.image.generate(promptWithReferences, projectId);
         const usageRecord = createGeminiImageUsageRecordFromAssets([imageAsset], 'image_generate');
 
         // プロジェクトを更新
         const now = new Date().toISOString();
-        const updatedParts = project.parts.map((part) => {
+        const updatedParts = savedPromptProject.parts.map((part) => {
           if (part.id !== prompt.partId) return part;
           // 初回は自動で割り当て（既に割り当てがある場合はユーザーの選択を尊重して変更しない）
           if ((part.panelImages?.length ?? 0) > 0) return part;
@@ -207,10 +250,12 @@ export function ImageManagePage() {
         });
 
         const updatedProject: Project = {
-          ...project,
+          ...savedPromptProject,
           parts: updatedParts,
-          images: [...project.images, imageAsset],
-          usage: usageRecord ? [...(project.usage ?? []), usageRecord] : (project.usage ?? []),
+          images: [...savedPromptProject.images, imageAsset],
+          usage: usageRecord
+            ? [...(savedPromptProject.usage ?? []), usageRecord]
+            : (savedPromptProject.usage ?? []),
           updatedAt: now,
         };
 
@@ -230,7 +275,12 @@ export function ImageManagePage() {
   const handleGenerateAllImages = useCallback(async () => {
     if (!project || !projectId) return;
 
-    const targetPrompts = activePrompts.filter((prompt) => !promptIdsWithAnyImage.has(prompt.id));
+    const targetPrompts = activePrompts
+      .filter((prompt) => !promptIdsWithAnyImage.has(prompt.id))
+      .map((prompt) => ({
+        ...prompt,
+        styleReferenceImageIds: project.presentationProfile.styleReferenceImageIds,
+      }));
 
     if (targetPrompts.length === 0) {
       setError(null);
@@ -243,9 +293,11 @@ export function ImageManagePage() {
 
     try {
       setIsGeneratingImage(true);
+      setIsGeneratingImageBatch(true);
       setError(null);
 
-      const imageAssets = await window.electronAPI.image.generateBatch(targetPrompts, projectId);
+      const batchResult = await window.electronAPI.image.generateBatch(targetPrompts, projectId);
+      const imageAssets = batchResult.images;
       const usageRecord = createGeminiImageUsageRecordFromAssets(
         imageAssets,
         'image_generate_batch'
@@ -283,13 +335,34 @@ export function ImageManagePage() {
 
       await window.electronAPI.project.save(updatedProject);
       setProject(updatedProject);
+      if (batchResult.errors.length > 0) {
+        const head = formatImageBatchErrors(batchResult.errors, updatedProject);
+        const tail =
+          batchResult.errors.length > 3 ? `（他${batchResult.errors.length - 3}件）` : '';
+        reportError(
+          `一部の画像生成に失敗しました。成功 ${imageAssets.length}/${batchResult.requestedCount}: ${head}${tail}`,
+          '一部失敗しました'
+        );
+      }
     } catch (err) {
       console.error('Failed to generate images:', err);
       reportError(err instanceof Error ? err.message : '画像生成に失敗しました');
     } finally {
+      setIsGeneratingImageBatch(false);
       setIsGeneratingImage(false);
     }
   }, [project, projectId, activePrompts, promptIdsWithAnyImage, reportError, toast]);
+
+  const handleCancelImageBatch = useCallback(async () => {
+    if (!projectId) return;
+
+    try {
+      await window.electronAPI.image.cancelBatch(projectId);
+      toast.info('画像一括生成のキャンセルを要求しました', 'キャンセル中');
+    } catch (err) {
+      reportError(err instanceof Error ? err.message : '画像生成のキャンセルに失敗しました');
+    }
+  }, [projectId, reportError, toast]);
 
   // 画像削除
   const handleDeleteImage = useCallback(
@@ -329,6 +402,12 @@ export function ImageManagePage() {
             ...project.article,
             importedImages: project.article.importedImages.filter((img) => img.id !== imageId),
           },
+          presentationProfile: {
+            ...project.presentationProfile,
+            styleReferenceImageIds: project.presentationProfile.styleReferenceImageIds.filter(
+              (id) => id !== imageId
+            ),
+          },
           parts: updatedParts,
           images: project.images.filter((img) => img.id !== imageId),
           thumbnail: project.thumbnail?.imageId === imageId ? undefined : project.thumbnail,
@@ -363,6 +442,86 @@ export function ImageManagePage() {
     [project]
   );
 
+  const handleToggleStyleReference = useCallback(
+    async (imageId: string) => {
+      if (!project) return;
+
+      const currentIds = project.presentationProfile.styleReferenceImageIds;
+      const nextIds = currentIds.includes(imageId)
+        ? currentIds.filter((id) => id !== imageId)
+        : [...currentIds, imageId].slice(-3);
+
+      const updatedProject: Project = {
+        ...project,
+        presentationProfile: {
+          ...project.presentationProfile,
+          styleReferenceImageIds: nextIds,
+        },
+        updatedAt: new Date().toISOString(),
+      };
+
+      await window.electronAPI.project.save(updatedProject);
+      setProject(updatedProject);
+    },
+    [project]
+  );
+
+  const handleUpdateStyleReferenceNote = useCallback(
+    async (styleReferenceNote: string) => {
+      if (!project) return;
+
+      const updatedProject: Project = {
+        ...project,
+        presentationProfile: {
+          ...project.presentationProfile,
+          styleReferenceNote,
+        },
+        updatedAt: new Date().toISOString(),
+      };
+
+      await window.electronAPI.project.save(updatedProject);
+      setProject(updatedProject);
+    },
+    [project]
+  );
+
+  const handleImportStyleReference = useCallback(async () => {
+    if (!project || !projectId) return;
+
+    try {
+      const sourcePath = await window.electronAPI.file.selectFile({
+        title: 'スタイル参照に使うスライド画像を選択',
+        filters: [{ name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'webp'] }],
+        properties: ['openFile'],
+      });
+      if (!sourcePath) return;
+
+      const imported = await window.electronAPI.image.import(sourcePath, projectId);
+      const nextIds = [...project.presentationProfile.styleReferenceImageIds, imported.id].slice(
+        -3
+      );
+      const updatedProject: Project = {
+        ...project,
+        article: {
+          ...project.article,
+          importedImages: [...project.article.importedImages, imported],
+        },
+        presentationProfile: {
+          ...project.presentationProfile,
+          styleReferenceImageIds: nextIds,
+        },
+        updatedAt: new Date().toISOString(),
+      };
+
+      await window.electronAPI.project.save(updatedProject);
+      setProject(updatedProject);
+      toast.success('スタイル参照画像を追加しました');
+    } catch (err) {
+      console.error('Failed to import style reference:', err);
+      reportError(err instanceof Error ? err.message : 'スタイル参照画像の追加に失敗しました');
+    }
+  }, [project, projectId, reportError, toast]);
+
   // 選択中のパート
   const selectedPart = project?.parts.find((p) => p.id === selectedPartId);
 
@@ -383,11 +542,12 @@ export function ImageManagePage() {
   // 選択中のパートの画像
   const candidateImagesForPart = useMemo(() => {
     if (!project) return [];
-    return project.images.filter(
+    const generatedForPart = project.images.filter(
       (img) =>
         img.metadata.promptId &&
         project.prompts.some((p) => p.id === img.metadata.promptId && p.partId === selectedPartId)
     );
+    return [...project.article.importedImages, ...generatedForPart];
   }, [project, selectedPartId]);
   // パートへの割り当て（panelImages）更新
   const handleUpdatePanelImages = useCallback(
@@ -472,6 +632,11 @@ export function ImageManagePage() {
                   ? '画像生成中...'
                   : `画像一括生成 (未生成 ${missingImagePromptCount}/${activePrompts.length})`}
               </Button>
+              {isGeneratingImageBatch && (
+                <Button variant="secondary" onClick={handleCancelImageBatch}>
+                  キャンセル
+                </Button>
+              )}
             </div>
           }
         >
@@ -484,8 +649,42 @@ export function ImageManagePage() {
             </Badge>
           </div>
           <p className="text-xs text-slate-500">
-            この画面ではプロンプト作成と画像割り当てだけを扱います。全体進捗は上部の Workflow で確認できます。
+            この画面ではプロンプト作成と画像割り当てだけを扱います。全体進捗は上部の Workflow
+            で確認できます。
           </p>
+          <div className="mt-4 border-t border-[var(--nv-color-border)] pt-4">
+            <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <h3 className="text-sm font-semibold text-slate-900">スタイル参照</h3>
+                <p className="text-xs text-slate-500">
+                  最大3枚のスライドサンプルを画像生成時に渡し、色・余白・文字階層を揃えます。
+                </p>
+              </div>
+              <Button variant="secondary" size="sm" onClick={handleImportStyleReference}>
+                参照画像を追加
+              </Button>
+            </div>
+            <textarea
+              key={project.presentationProfile.styleReferenceNote}
+              defaultValue={project.presentationProfile.styleReferenceNote}
+              onBlur={(e) => handleUpdateStyleReferenceNote(e.target.value)}
+              className="nv-input mb-3 min-h-[72px] resize-y text-sm"
+              placeholder="任意: サンプルから特に合わせたい点（例: 太い見出し、左上ロゴ風の余白、青いカード背景など）"
+            />
+            {allProjectImages.length > 0 ? (
+              <ImageGallery
+                images={allProjectImages}
+                selectedImageIds={styleReferenceImageIds}
+                onSelectImage={handleToggleStyleReference}
+                selectLabel="参照"
+                emptyMessage="参照に使える画像がありません"
+              />
+            ) : (
+              <div className="rounded-[8px] border border-dashed border-slate-300 bg-slate-50 px-3 py-6 text-center text-xs text-slate-500">
+                参照に使える画像がありません。スライドサンプルを追加してください。
+              </div>
+            )}
+          </div>
         </Card>
       </div>
 

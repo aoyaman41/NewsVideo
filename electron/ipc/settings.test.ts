@@ -68,6 +68,7 @@ describe('settings IPC handlers', () => {
       JSON.stringify({
         ttsEngine: 'google_tts',
         ttsVoice: 'ja-JP-Chirp3-HD-Aoife',
+        ttsModel: 'invalid-model',
         scriptTextModel: 'invalid-model',
         imagePromptTextModel: 'invalid-model',
         openaiReasoningEffort: 'invalid-effort',
@@ -83,6 +84,7 @@ describe('settings IPC handlers', () => {
 
     expect(result.ttsEngine).toBe('gemini_tts');
     expect(result.ttsVoice).toBe(DEFAULT_SETTINGS.ttsVoice);
+    expect(result.ttsModel).toBe(DEFAULT_SETTINGS.ttsModel);
     expect(result.scriptTextModel).toBe(DEFAULT_SETTINGS.scriptTextModel);
     expect(result.imagePromptTextModel).toBe(DEFAULT_SETTINGS.imagePromptTextModel);
     expect(result.openaiReasoningEffort).toBe(DEFAULT_SETTINGS.openaiReasoningEffort);
@@ -112,6 +114,7 @@ describe('settings IPC handlers', () => {
         imagePromptTextModel: 'gpt-5.6-luna',
         imageModel: 'gemini-3-pro-image-preview',
         ttsEngine: 'google_tts',
+        ttsModel: 'gemini-2.5-flash-preview-tts',
         openaiReasoningEffort: 'max',
         geminiThinkingLevel: 'low',
         unknown: true,
@@ -128,6 +131,7 @@ describe('settings IPC handlers', () => {
     expect(saved.imageModel).toBe('gemini-3-pro-image-preview');
     expect(saved.ttsEngine).toBe('gemini_tts');
     expect(saved.openaiReasoningEffort).toBe('max');
+    expect(saved.ttsModel).toBe('gemini-2.5-flash-preview-tts');
     expect(saved.geminiThinkingLevel).toBe('low');
     expect(saved.unknown).toBeUndefined();
   });

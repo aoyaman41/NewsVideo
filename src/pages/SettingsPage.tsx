@@ -4,6 +4,7 @@ import { useAutoSave } from '../hooks';
 import { Header } from '../components/layout';
 import { Badge, Button, Card, ErrorDetailPanel, StatusChip, useToast } from '../components/ui';
 import {
+  DEFAULT_GEMINI_TTS_MODEL,
   DEFAULT_IMAGE_MODEL,
   DEFAULT_IMAGE_PROMPT_TEXT_MODEL,
   DEFAULT_IMAGE_RESOLUTION,
@@ -11,14 +12,17 @@ import {
   getCommonSupportedOpenAIReasoningEfforts,
   getDefaultGeminiThinkingLevel,
   getDefaultOpenAIReasoningEffort,
+  getGeminiTtsModelLabel,
   getImageModelLabel,
   getSupportedGeminiThinkingLevels,
   getTextCompletionModelLabel,
+  GEMINI_TTS_MODELS,
   IMAGE_MODELS,
   IMAGE_RESOLUTION_LABELS,
   IMAGE_RESOLUTIONS,
   TEXT_COMPLETION_MODELS,
   type GeminiThinkingLevel,
+  type GeminiTtsModel,
   type ImageModel,
   type ImageResolution,
   type OpenAITextCompletionModel,
@@ -46,6 +50,7 @@ interface VoiceInfo {
 
 interface Settings {
   ttsEngine: 'google_tts' | 'gemini_tts' | 'macos_tts';
+  ttsModel: GeminiTtsModel;
   ttsVoice: string;
   ttsSpeakingRate: number;
   ttsPitch: number;
@@ -68,6 +73,7 @@ interface Settings {
 
 const defaultSettings: Settings = {
   ttsEngine: 'gemini_tts',
+  ttsModel: DEFAULT_GEMINI_TTS_MODEL,
   ttsVoice: 'Charon',
   ttsSpeakingRate: 1.0,
   ttsPitch: 0,
@@ -359,9 +365,7 @@ export function SettingsPage() {
       if (activeGeminiModel) {
         const supported = getSupportedGeminiThinkingLevels(activeGeminiModel);
         if (
-          !supported.includes(
-            prev.geminiThinkingLevel as Exclude<GeminiThinkingLevel, 'default' | 'medium'>
-          )
+          !supported.includes(prev.geminiThinkingLevel as Exclude<GeminiThinkingLevel, 'default'>)
         ) {
           next.geminiThinkingLevel = getDefaultGeminiThinkingLevel(activeGeminiModel);
           changed = true;
@@ -771,8 +775,30 @@ export function SettingsPage() {
                 </div>
               </Card>
 
-              <Card title="デフォルト音声設定" subtitle="engine と voice の既定値">
-                <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+              <Card title="デフォルト音声設定" subtitle="engine / model / voice の既定値">
+                <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
+                  <div>
+                    <label className="mb-1 block text-xs font-semibold text-slate-600">
+                      音声生成モデル
+                    </label>
+                    <select
+                      value={settings.ttsModel}
+                      onChange={(e) =>
+                        setSettings((prev) => ({
+                          ...prev,
+                          ttsModel: e.target.value as Settings['ttsModel'],
+                        }))
+                      }
+                      className="nv-input"
+                    >
+                      {GEMINI_TTS_MODELS.map((model) => (
+                        <option key={model} value={model}>
+                          {getGeminiTtsModelLabel(model)}
+                        </option>
+                      ))}
+                    </select>
+                    <p className="mt-1 text-xs text-slate-500">モデルID: {settings.ttsModel}</p>
+                  </div>
                   <div>
                     <label className="mb-1 block text-xs font-semibold text-slate-600">
                       ボイス
@@ -811,9 +837,7 @@ export function SettingsPage() {
                     <p className="text-xs font-semibold text-slate-600">音声エンジン</p>
                     <div className="mt-2 flex flex-wrap items-center gap-2">
                       <Badge tone="info">Gemini TTS</Badge>
-                      <span className="text-sm font-semibold text-slate-900">
-                        gemini-2.5-pro-preview-tts
-                      </span>
+                      <span className="text-sm font-semibold text-slate-900">gemini_tts</span>
                     </div>
                     <p className="mt-2 text-xs text-slate-500">
                       現在のアプリは Gemini TTS を既定の音声エンジンとして使用します。話し方の
@@ -949,7 +973,8 @@ export function SettingsPage() {
                     <p className="mt-1 text-xs text-slate-500">モデルID: {settings.imageModel}</p>
                     {settings.imageModel === 'gpt-image-2' && (
                       <p className="mt-1 text-xs text-slate-500">
-                        OpenAI APIキーを使用します。横長・縦長のFull HD相当は1792×1008、正方形の4K相当は2880×2880です。2Kを超える画素数の出力は実験的対応です。
+                        OpenAI APIキーを使用します。横長・縦長のFull
+                        HD相当は1792×1008、正方形の4K相当は2880×2880です。2Kを超える画素数の出力は実験的対応です。
                       </p>
                     )}
                   </div>
@@ -973,6 +998,10 @@ export function SettingsPage() {
                         </option>
                       ))}
                     </select>
+                    <p className="mt-1 text-xs text-slate-500">
+                      GPT Image 2
+                      では指定解像度を優先し、API制約に応じて近いサイズへ自動調整します。
+                    </p>
                   </div>
                 </div>
               </Card>

@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest';
-import { createGeminiImageUsageRecordFromAssets, createOpenAIUsageRecord } from './usage';
+import { createImageUsageRecordFromAssets, createOpenAIUsageRecord } from './usage';
 import { DEFAULT_COST_RATES, estimateUsageCostUsd } from './cost';
 import type { ImageAsset } from '../schemas';
 
@@ -25,7 +25,7 @@ it('bills GPT Image 2 as OpenAI image generation instead of Gemini or text gener
       },
     },
   };
-  const record = createGeminiImageUsageRecordFromAssets([image], 'image_generate');
+  const record = createImageUsageRecordFromAssets([image], 'image_generate');
   expect(record).toMatchObject({ provider: 'openai', model: 'gpt-image-2', category: 'image' });
   expect(estimateUsageCostUsd(record!, DEFAULT_COST_RATES)).toBeCloseTo(0.065);
 });

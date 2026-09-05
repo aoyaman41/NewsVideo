@@ -42,7 +42,7 @@ const getSecretsPath = () => path.join(app.getPath('userData'), 'secrets.enc');
 const getSettingsPath = () => path.join(app.getPath('userData'), 'settings.json');
 
 type TextGenerationScope = 'script' | 'image_prompt';
-const GEMINI_3_PRO_API_MODEL_ID = 'gemini-3-pro-preview';
+const GEMINI_3_PRO_API_MODEL_ID = 'gemini-3.1-pro-preview';
 
 type TextGenerationConfig = {
   model: TextCompletionModel;
@@ -342,7 +342,7 @@ async function readTextGenerationConfig(scope: TextGenerationScope): Promise<Tex
       : settings.openaiReasoningEffort;
     const geminiThinkingLevel = isGeminiTextCompletionModel(model)
       ? getSupportedGeminiThinkingLevels(model).includes(
-          settings.geminiThinkingLevel as Exclude<GeminiThinkingLevel, 'default' | 'medium'>
+          settings.geminiThinkingLevel as Exclude<GeminiThinkingLevel, 'default'>
         )
         ? settings.geminiThinkingLevel
         : getDefaultGeminiThinkingLevel(model)
@@ -659,6 +659,9 @@ type ImagePrompt = {
   prompt: string;
   negativePrompt: string;
   aspectRatio: ImageAspectRatio;
+  visualCopy?: VisualCopy;
+  layoutPlan?: LayoutPlan;
+  styleReferenceImageIds?: string[];
   version: number;
   createdAt: string;
 };
@@ -666,6 +669,27 @@ type ImagePrompt = {
 type ImagePromptGenerationOptions = {
   stylePreset?: ImageStylePreset;
   aspectRatio?: ImageAspectRatio;
+  styleReferenceImageIds?: string[];
+  styleReferenceNote?: string;
+};
+
+type VisualCopy = {
+  headline: string;
+  subhead?: string;
+  keyNumber?: string;
+  bullets: string[];
+};
+
+type LayoutPlan = {
+  intent: string;
+  composition: string;
+  objects: Array<{
+    type: string;
+    role: string;
+    position: string;
+    content: string;
+    emphasis: string;
+  }>;
 };
 
 const QuantFactSchema = z.object({
@@ -693,6 +717,27 @@ const VisualSlotSchema = z.object({
   source: z.string(),
 });
 
+const VisualCopySchema = z.object({
+  headline: z.string(),
+  subhead: z.string().optional(),
+  keyNumber: z.string().optional(),
+  bullets: z.array(z.string()),
+});
+
+const LayoutPlanSchema = z.object({
+  intent: z.string(),
+  composition: z.string(),
+  objects: z.array(
+    z.object({
+      type: z.string(),
+      role: z.string(),
+      position: z.string(),
+      content: z.string(),
+      emphasis: z.string(),
+    })
+  ),
+});
+
 const ImagePromptExtractionSchema = z.object({
   prompts: z.array(
     z.object({
@@ -704,6 +749,9 @@ const ImagePromptExtractionSchema = z.object({
       heroSubject: z.string(),
       heroSetting: z.string(),
       compositionNote: z.string(),
+      visualCopy: VisualCopySchema.optional(),
+      layoutPlan: LayoutPlanSchema.optional(),
+      styleNotes: z.string().optional(),
     })
   ),
 });
@@ -1103,6 +1151,97 @@ function normalizeLooseVisualSlots(value: unknown, limit: number): VisualSlot[] 
   return normalized.slice(0, limit);
 }
 
+function normalizeVisualCopy(value: unknown): VisualCopy | undefined {
+  const record = toObjectRecord(value);
+  if (!record) return undefined;
+
+  const headline = truncateTextByChars(
+    normalizeString(getFirstDefined(record, ['headline', 'title', 'mainHeadline'])),
+    36
+  );
+  if (!headline) return undefined;
+
+  const subhead = truncateTextByChars(
+    normalizeString(getFirstDefined(record, ['subhead', 'subtitle', 'dek'])),
+    80
+  );
+  const keyNumber = truncateTextByChars(
+    normalizeString(getFirstDefined(record, ['keyNumber', 'key_number', 'number'])),
+    28
+  );
+  const bullets = normalizeLooseStringArray(
+    getFirstDefined(record, ['bullets', 'points', 'callouts']),
+    4
+  ).map((item) => truncateTextByChars(item, 44));
+
+  return {
+    headline,
+    ...(subhead ? { subhead } : {}),
+    ...(keyNumber ? { keyNumber } : {}),
+    bullets,
+  };
+}
+
+function normalizeLayoutPlan(value: unknown): LayoutPlan | undefined {
+  const record = toObjectRecord(value);
+  if (!record) return undefined;
+
+  const intent = truncateTextByChars(
+    normalizeString(getFirstDefined(record, ['intent', 'goal', 'purpose'])),
+    90
+  );
+  const composition = truncateTextByChars(
+    normalizeString(getFirstDefined(record, ['composition', 'layout', 'layoutPolicy'])),
+    140
+  );
+  const rawObjects = getFirstDefined(record, ['objects', 'elements', 'items']);
+  const objects = Array.isArray(rawObjects)
+    ? rawObjects
+        .map((item) => {
+          const objectRecord = toObjectRecord(item);
+          if (!objectRecord) return null;
+          const type = truncateTextByChars(
+            normalizeString(getFirstDefined(objectRecord, ['type', 'elementType'])),
+            32
+          );
+          const role = truncateTextByChars(
+            normalizeString(getFirstDefined(objectRecord, ['role', 'purpose'])),
+            42
+          );
+          const position = truncateTextByChars(
+            normalizeString(getFirstDefined(objectRecord, ['position', 'area', 'slot'])),
+            42
+          );
+          const content = truncateTextByChars(
+            normalizeString(getFirstDefined(objectRecord, ['content', 'text', 'description'])),
+            90
+          );
+          const emphasis = truncateTextByChars(
+            normalizeString(getFirstDefined(objectRecord, ['emphasis', 'weight', 'size'])),
+            32
+          );
+          if (!type || !position || !content) return null;
+          return {
+            type,
+            role: role || '補助要素',
+            position,
+            content,
+            emphasis: emphasis || 'medium',
+          };
+        })
+        .filter((item): item is LayoutPlan['objects'][number] => item !== null)
+        .slice(0, 8)
+    : [];
+
+  if (!intent && !composition && objects.length === 0) return undefined;
+
+  return {
+    intent: intent || '記事内容を1枚のニューススライドとして伝える',
+    composition: composition || '見出し、本文、図解要素を読み順が明確になるように配置',
+    objects,
+  };
+}
+
 function coerceImagePromptExtraction(raw: unknown): ImagePromptExtraction {
   const direct = ImagePromptExtractionSchema.safeParse(raw);
   if (direct.success) return direct.data;
@@ -1169,6 +1308,16 @@ function coerceImagePromptExtraction(raw: unknown): ImagePromptExtraction {
       ),
       MAX_COMPOSITION_NOTE_CHARS
     );
+    const visualCopy = normalizeVisualCopy(
+      getFirstDefined(record, ['visualCopy', 'visual_copy', 'copy'])
+    );
+    const layoutPlan = normalizeLayoutPlan(
+      getFirstDefined(record, ['layoutPlan', 'layout_plan', 'objectLayout', 'object_layout'])
+    );
+    const styleNotes = truncateTextByChars(
+      normalizeString(getFirstDefined(record, ['styleNotes', 'style_notes'])),
+      160
+    );
 
     return {
       topic,
@@ -1179,6 +1328,9 @@ function coerceImagePromptExtraction(raw: unknown): ImagePromptExtraction {
       heroSubject,
       heroSetting,
       compositionNote,
+      visualCopy,
+      layoutPlan,
+      styleNotes,
     };
   });
 
@@ -1191,7 +1343,66 @@ type PromptBuildContext = {
   articleText: string;
   styleConfig: ImageStylePresetConfig;
   aspectRatio: ImageAspectRatio;
+  styleReferenceImageIds: string[];
+  styleReferenceNote: string;
 };
+
+function buildRichSlidePrompt(params: {
+  visualCopy?: VisualCopy;
+  layoutPlan?: LayoutPlan;
+  context: PromptBuildContext;
+  styleNotes?: string;
+}): string {
+  const { visualCopy, layoutPlan, context, styleNotes } = params;
+  const copyLines = visualCopy
+    ? [
+        '画面コピー:',
+        `- 見出し: ${visualCopy.headline}`,
+        visualCopy.subhead ? `- サブ見出し: ${visualCopy.subhead}` : '',
+        visualCopy.keyNumber ? `- キー数値: ${visualCopy.keyNumber}` : '',
+        ...visualCopy.bullets.map((bullet, index) => `- 要点${index + 1}: ${bullet}`),
+      ].filter((line) => line.length > 0)
+    : [];
+
+  const drawableObjects =
+    layoutPlan?.objects.filter((object) => object.type.trim().toLowerCase() !== 'source') ?? [];
+  const objectLines = drawableObjects.map((object, index) => {
+    return `- ${index + 1}: ${object.type} / ${object.position} / ${object.emphasis} / ${object.role} / ${object.content}`;
+  });
+
+  const referenceLines =
+    context.styleReferenceImageIds.length > 0
+      ? [
+          'スタイル参照:',
+          `- 添付されたスライドサンプル ${context.styleReferenceImageIds.length} 枚から、色、余白、文字階層、図形処理、カード/罫線の使い方を読み取って統一する。`,
+          '- サンプル内の古い文字、数値、固有名詞、画像内容はコピーしない。今回の「画面コピー」と「オブジェクト配置」だけを描画する。',
+          context.styleReferenceNote ? `- 補足: ${context.styleReferenceNote}` : '',
+        ].filter((line) => line.length > 0)
+      : [];
+
+  const promptLines = [
+    'リッチニューススライド仕様',
+    `画面比率: ${getImageAspectRatioLabel(context.aspectRatio)}`,
+    `表現スタイル: ${context.styleConfig.id}`,
+    `目的: ${layoutPlan?.intent || 'ニュース内容を1枚の完成スライドとして伝える'}`,
+    `構図: ${layoutPlan?.composition || getImageLayoutVariant(context.aspectRatio, true, false)}`,
+    ...copyLines,
+    'オブジェクト配置:',
+    ...(objectLines.length > 0
+      ? objectLines
+      : ['- 1: headline / upper-left / large / 主情報 / 見出しを大きく配置']),
+    styleNotes ? `スタイル補足: ${styleNotes}` : '',
+    ...referenceLines,
+    '描画要件:',
+    '- 画面コピーは指定どおり正確に描画する。意味の近い別表現へ言い換えない。',
+    '- 画像内に出典表示や「出典: 記事本文」を描画しない。出典は動画の締めカード側で扱う。',
+    '- 指定のない文字、数値、ロゴ、番組名、QRコード、透かしを追加しない。',
+    '- テキストと図形が重ならないよう、十分な余白と読み順を確保する。',
+  ].filter((line) => line.length > 0);
+
+  const promptText = sanitizeImagePromptForRendering(promptLines.join('\n'));
+  return truncateTextByChars(promptText, MAX_IMAGE_PROMPT_CHARS);
+}
 
 function buildImagePromptText(
   candidate: Record<string, unknown> | null | undefined,
@@ -1209,6 +1420,16 @@ function buildImagePromptText(
     if (normalizedSlideSpec) {
       return truncateTextByChars(normalizedSlideSpec, MAX_IMAGE_PROMPT_CHARS);
     }
+  }
+
+  const visualCopy = normalizeVisualCopy((p as { visualCopy?: unknown }).visualCopy);
+  const layoutPlan = normalizeLayoutPlan((p as { layoutPlan?: unknown }).layoutPlan);
+  if (visualCopy || layoutPlan) {
+    const styleNotes = truncateTextByChars(
+      normalizeString((p as { styleNotes?: unknown }).styleNotes),
+      160
+    );
+    return buildRichSlidePrompt({ visualCopy, layoutPlan, context, styleNotes });
   }
 
   const rawTopic = normalizeString(
@@ -1324,7 +1545,13 @@ function buildImagePromptText(
     ...slotInstructions.map((line) => `- ${line}`),
     detailLines.length > 0 ? '要素:' : '',
     ...detailLines,
-    'テキスト: 見出し・ラベル・数値のみ。長文禁止',
+    context.styleReferenceImageIds.length > 0
+      ? `スタイル参照: 添付スライドサンプル${context.styleReferenceImageIds.length}枚の色、余白、文字階層、図形処理に合わせる。サンプル内の古い文字や内容はコピーしない`
+      : '',
+    context.styleReferenceNote ? `スタイル補足: ${context.styleReferenceNote}` : '',
+    context.styleConfig.id === 'textRich' || context.styleConfig.id === 'dataCard'
+      ? 'テキスト: 見出し、サブ見出し、短い要点、数値を読みやすく配置。出典表示は描画しない。指定外の文字は追加しない'
+      : 'テキスト: 見出し・ラベル・数値のみ。長文禁止',
   ].filter((line) => line.length > 0);
 
   const promptText = sanitizeImagePromptForRendering(promptLines.join('\n'));
@@ -1339,108 +1566,59 @@ function createSinglePartExtractionPrompts(
   userPrompt: string;
 } {
   const systemPrompt = `タスク:
-入力の記事情報と対象パート情報から、1枚分の「スライド仕様書」を作成してください。
-出力は日本語のみ。前置き・説明文・Markdownは禁止。指定フォーマットのみ出力してください。
+入力の記事情報と対象パート情報から、1枚分の文字入りニューススライド設計をJSONで作成してください。
+出力は日本語のみ。前置き・説明文・Markdownは禁止。JSONのみを出力してください。
 
 制約:
-- 目的は「このパートを1枚で正確に伝える」こと。
-- 配置指示は解釈余地が出ないように書く（何を/どこに/どの大きさ/どの順に見るか）。
-- 要素ごとのサイズ感は「大・中・小」または「主・補助」で示す。割合数値は使わない。
-- 視線誘導（最初に何を見せ、次に何を読ませるか）を必ず示す。
-- 画面内テキストは短ラベルのみ（1ラベル8文字以内、最大6個）。
+- 目的は「このパートを1枚の完成スライドとして正確に伝える」こと。
+- 画面内テキストを積極的に設計する。見出し、サブ見出し、キー数値、要点を必要に応じて入れる。
+- 見出しは短く強く、サブ見出しと要点は読みやすい長さにする。
+- 画像内に出典表示は作らない。「出典: 記事本文」のような汎用出典も禁止。出典は動画の締めカード側で扱う。
+- オブジェクト配置は自由に設計してよい。何を/どこに/どの強さで/どの順に見るかを具体化する。
+- 配置の position は upper-left, top-center, center-right, bottom-band, left-column, right-panel などの自然言語で示す。割合座標は使わない。
 - 人物・顔・手・ロゴ・透かし・番組名・QRコードは禁止。
 - 推測で新事実を追加しない。入力にない事実は書かない。
-- 冗長表現を避け、全体900文字以内。
+- 画面コピーに記事外の固有名詞や数値を混ぜない。
 
-出力フォーマット:
-スライド仕様:
-主題:
-伝える1文:
-背景要約:
-意図:
-情報の優先順位:
-- 第1:
-- 第2:
-- 第3:
-主ビジュアル:
-レイアウト方針:
-視線誘導:
-配置:
-- 左(サイズ感/内容):
-- 中央(サイズ感/内容):
-- 右上(サイズ感/内容):
-- 右下(サイズ感/内容):
-要素:
-- データ要素:
-- 地理要素:
-- 補助要素:
-画面テキスト:
-- 1:
-- 2:
-- 3:
-- 4:
-- 5:
-- 6:
-
-出力例1:
-スライド仕様:
-主題: 原油価格の上昇
-伝える1文: 供給懸念で原油先物が上昇した
-背景要約: 産油地域の不安定化と需給懸念
-意図: 価格上昇の理由と規模を一目で理解させる
-情報の優先順位:
-- 第1: 原油価格が上昇した事実
-- 第2: 上昇幅の数値
-- 第3: 地理的な背景要因
-主ビジュアル: 原油ドラム缶と上向き矢印
-レイアウト方針: 左に主題を大きく置き、右を上下2段に分けて根拠を配置
-視線誘導: 左中央の矢印 → 右下の数値グラフ → 右上の地図
-配置:
-- 左(サイズ感/内容): 大 / 原油ドラム缶群と上昇矢印
-- 中央(サイズ感/内容): 未使用 / なし
-- 右上(サイズ感/内容): 小 / 産油地域の簡易地図
-- 右下(サイズ感/内容): 小 / 価格推移の折れ線グラフ
-要素:
-- データ要素: 直近高値、前日比
-- 地理要素: 中東の産油地域
-- 補助要素: 注意アイコンを1つ
-画面テキスト:
-- 1: 原油先物
-- 2: 前日比
-- 3: 上昇
-- 4:
-- 5:
-- 6:
-
-出力例2:
-スライド仕様:
-主題: 訪日客数の回復
-伝える1文: 訪日客数が前年同月比で回復した
-背景要約: 入国規制緩和後の需要回復
-意図: 回復傾向を数値と内訳で短時間に把握させる
-情報の優先順位:
-- 第1: 訪日客数が回復した事実
-- 第2: 前年同月比の伸び
-- 第3: 国別の内訳
-主ビジュアル: 空港到着ゲートと増加アイコン
-レイアウト方針: 左に主ビジュアルを大きく置き、右を上下に分割
-視線誘導: 左の主ビジュアル → 右下の棒グラフ → 右上の円グラフ
-配置:
-- 左(サイズ感/内容): 大 / 到着ゲート図解と増加アイコン
-- 中央(サイズ感/内容): 未使用 / なし
-- 右上(サイズ感/内容): 小 / 国別比率の円グラフ
-- 右下(サイズ感/内容): 中 / 月次推移の棒グラフ
-要素:
-- データ要素: 前年同月比、月次推移
-- 地理要素: 主要3市場
-- 補助要素: 飛行機アイコン
-画面テキスト:
-- 1: 訪日客数
-- 2: 前年比
-- 3: 国別比率
-- 4:
-- 5:
-- 6:
+出力形式:
+{
+  "prompts": [
+    {
+      "topic": "対象パートの主題",
+      "entities": ["記事内の重要語"],
+      "locations": ["地名がある場合"],
+      "quantFacts": [
+        {
+          "metric": "指標名",
+          "direction": "increase|decrease|stable|comparison|unknown",
+          "value": "数値",
+          "unit": "単位",
+          "timeframe": "期間"
+        }
+      ],
+      "visualCopy": {
+        "headline": "画像内の大見出し",
+        "subhead": "補足説明",
+        "keyNumber": "最重要数値",
+        "bullets": ["要点1", "要点2", "要点3"]
+      },
+      "layoutPlan": {
+        "intent": "このスライドで伝える狙い",
+        "composition": "全体構図と読み順",
+        "objects": [
+          {
+            "type": "headline|subhead|keyNumber|bullet|chart|map|icon|diagram|callout",
+            "role": "主情報/補助情報/根拠/導線",
+            "position": "配置エリア",
+            "content": "描画内容",
+            "emphasis": "large|medium|small|primary|secondary"
+          }
+        ]
+      },
+      "styleNotes": "必要な質感や余白の補足"
+    }
+  ]
+}
 `;
 
   const userPrompt = `記事情報:
@@ -1535,6 +1713,7 @@ async function extractSinglePartPromptCandidate(params: {
       systemPrompt,
       userPrompt,
       temperature: 0.3,
+      responseMimeType: 'application/json',
       thinkingLevel: params.generationConfig.geminiThinkingLevel,
     });
     const parsed = tryParseJsonResponse<unknown>(geminiResult.text);
@@ -1586,6 +1765,9 @@ ipcMain.handle(
       prompt: string;
       negativePrompt: string;
       aspectRatio: ImageAspectRatio;
+      visualCopy?: VisualCopy;
+      layoutPlan?: LayoutPlan;
+      styleReferenceImageIds?: string[];
       version: number;
       createdAt: string;
     }>;
@@ -1595,6 +1777,17 @@ ipcMain.handle(
     const aspectRatio = isImageAspectRatio(options?.aspectRatio)
       ? options.aspectRatio
       : DEFAULT_IMAGE_ASPECT_RATIO;
+    const styleReferenceImageIds = Array.isArray(options?.styleReferenceImageIds)
+      ? Array.from(
+          new Set(
+            options.styleReferenceImageIds.filter(
+              (id): id is string => typeof id === 'string' && id.trim().length > 0
+            )
+          )
+        ).slice(0, 3)
+      : [];
+    const styleReferenceNote =
+      typeof options?.styleReferenceNote === 'string' ? options.styleReferenceNote.trim() : '';
     const cleanedBodyText = sanitizeArticleText(article.bodyText ?? '');
     const bodyTextForPrompt = cleanedBodyText || article.bodyText || '';
     const articleText = `${article.title}\n${article.source ?? ''}\n${bodyTextForPrompt}`.trim();
@@ -1624,10 +1817,18 @@ ipcMain.handle(
       }
     );
     const now = new Date().toISOString();
-    const promptContext = { articleText, styleConfig, aspectRatio };
+    const promptContext = {
+      articleText,
+      styleConfig,
+      aspectRatio,
+      styleReferenceImageIds,
+      styleReferenceNote,
+    };
     const prompts = parts.map((part, index: number) => {
       const candidate = extractionResults[index]?.candidate;
       const finalPrompt = buildImagePromptText(candidate, promptContext);
+      const visualCopy = normalizeVisualCopy(candidate?.visualCopy);
+      const layoutPlan = normalizeLayoutPlan(candidate?.layoutPlan);
 
       return {
         id: crypto.randomUUID(),
@@ -1636,6 +1837,9 @@ ipcMain.handle(
         prompt: finalPrompt,
         negativePrompt: styleConfig.negative,
         aspectRatio,
+        ...(visualCopy ? { visualCopy } : {}),
+        ...(layoutPlan ? { layoutPlan } : {}),
+        ...(styleReferenceImageIds.length > 0 ? { styleReferenceImageIds } : {}),
         version: 1,
         createdAt: now,
       };
@@ -1669,6 +1873,17 @@ ipcMain.handle(
     const aspectRatio = isImageAspectRatio(options?.aspectRatio)
       ? options.aspectRatio
       : DEFAULT_IMAGE_ASPECT_RATIO;
+    const styleReferenceImageIds = Array.isArray(options?.styleReferenceImageIds)
+      ? Array.from(
+          new Set(
+            options.styleReferenceImageIds.filter(
+              (id): id is string => typeof id === 'string' && id.trim().length > 0
+            )
+          )
+        ).slice(0, 3)
+      : [];
+    const styleReferenceNote =
+      typeof options?.styleReferenceNote === 'string' ? options.styleReferenceNote.trim() : '';
     const cleanedBodyText = sanitizeArticleText(article.bodyText ?? '');
     const bodyTextForPrompt = cleanedBodyText || article.bodyText || '';
     const articleText = `${article.title}\n${article.source ?? ''}\n${bodyTextForPrompt}`.trim();
@@ -1691,7 +1906,15 @@ ipcMain.handle(
       partContext,
       generationConfig,
     });
-    const promptText = buildImagePromptText(candidate, { articleText, styleConfig, aspectRatio });
+    const promptText = buildImagePromptText(candidate, {
+      articleText,
+      styleConfig,
+      aspectRatio,
+      styleReferenceImageIds,
+      styleReferenceNote,
+    });
+    const visualCopy = normalizeVisualCopy(candidate?.visualCopy);
+    const layoutPlan = normalizeLayoutPlan(candidate?.layoutPlan);
 
     const now = new Date().toISOString();
     const prompt: ImagePrompt = {
@@ -1701,6 +1924,9 @@ ipcMain.handle(
       prompt: promptText,
       negativePrompt: styleConfig.negative,
       aspectRatio,
+      ...(visualCopy ? { visualCopy } : {}),
+      ...(layoutPlan ? { layoutPlan } : {}),
+      ...(styleReferenceImageIds.length > 0 ? { styleReferenceImageIds } : {}),
       version: 1,
       createdAt: now,
     };
