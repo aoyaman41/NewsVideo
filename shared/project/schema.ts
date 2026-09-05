@@ -1,3 +1,6 @@
+import { metricsSchema } from './metrics';
+import { captionSchema, graphicSchema } from './captions';
+import { sourceRecordSchema, claimSchema, rightsSchema } from './provenance';
 import { jobSchema } from './jobs';
 import { z } from 'zod';
 import {
@@ -18,6 +21,7 @@ import { TTS_NARRATION_STYLE_PRESETS } from './ttsNarrationStyles';
 export const imageAssetSchema = z.object({
   id: z.string().uuid(),
   filePath: z.string(),
+  rights: rightsSchema.optional(),
   sourceType: z.enum(['generated', 'imported']),
   metadata: z.object({
     width: z.number().int().positive(),
@@ -177,6 +181,11 @@ export type AutoGenerationStatus = z.infer<typeof autoGenerationStatusSchema>;
 
 // パート
 export const partSchema = z.object({
+  claims: z.array(claimSchema).optional(),
+  captions: z.array(captionSchema).optional(),
+  captionsEnabled: z.boolean().optional(),
+  graphic: graphicSchema.optional(),
+  narrationText: z.string().optional(),
   id: z.string().uuid(),
   index: z.number().int().nonnegative(),
   title: z.string().min(1, 'パートタイトルを入力してください'),
@@ -197,6 +206,7 @@ export type Part = z.infer<typeof partSchema>;
 // 記事
 export const articleSchema = z.object({
   title: z.string().min(1, '記事タイトルを入力してください'),
+  sources: z.array(sourceRecordSchema).optional(),
   source: z.string().optional(),
   bodyText: z.string().min(1, '記事本文を入力してください'),
   importedImages: z.array(imageAssetSchema),
@@ -239,6 +249,9 @@ export type ProjectMeta = z.infer<typeof projectMetaSchema>;
 // プロジェクト（フル）
 export const projectSchema = projectMetaSchema.extend({
   schemaVersion: z.string(),
+  metrics: metricsSchema.optional(),
+  archived: z.boolean().optional(),
+  template: z.boolean().optional(),
   job: jobSchema.optional(),
   generationConfig: z.record(z.string(), z.unknown()).optional(),
   revision: z.number().int().nonnegative().optional(),

@@ -34,6 +34,11 @@ struct ImageEntry: Codable {
   let durationSec: Double
 }
 
+struct CaptionCue: Codable { let start: Double; let end: Double; let text: String }
+struct GraphicBar: Codable { let label: String; let value: Double }
+struct GraphicOverlay: Codable { let enabled: Bool; let headline: String; let keyNumber: String; let source: String; let bars: [GraphicBar] }
+struct ProbeRequest: Codable { let inputPath: String }
+
 struct RenderPartRequest: Codable {
   let outputPath: String
   let width: Int
@@ -44,6 +49,8 @@ struct RenderPartRequest: Codable {
   let audioPath: String
   let audioDelayMs: Int
   let imageEntries: [ImageEntry]
+  let captions: [CaptionCue]?
+  let graphic: GraphicOverlay?
 }
 
 struct NormalizeClipRequest: Codable {
@@ -197,7 +204,7 @@ func loadCGImage(imagePath: String) throws -> CGImage {
   return cgImage
 }
 
-func drawCGImageToPixelBuffer(cgImage: CGImage, width: Int, height: Int) throws -> CVPixelBuffer {
+func drawCGImageToPixelBuffer(cgImage: CGImage, width: Int, height: Int, caption: String? = nil, graphic: GraphicOverlay? = nil) throws -> CVPixelBuffer {
 
   let pixelBuffer = try makePixelBuffer(width: width, height: height)
   CVPixelBufferLockBaseAddress(pixelBuffer, [])
@@ -239,6 +246,29 @@ func drawCGImageToPixelBuffer(cgImage: CGImage, width: Int, height: Int) throws 
   )
 
   context.draw(cgImage, in: drawRect)
+  NSGraphicsContext.saveGraphicsState()
+  NSGraphicsContext.current = NSGraphicsContext(cgContext: context, flipped: false)
+  let w = CGFloat(width), h = CGFloat(height), unit = CGFloat(min(width, height))
+  func label(_ text: String, rect: NSRect, size: CGFloat, background: Bool = true) {
+    if text.isEmpty { return }
+    if background { context.setFillColor(NSColor.black.withAlphaComponent(0.82).cgColor); context.fill(rect.insetBy(dx: -unit * 0.015, dy: -unit * 0.012)) }
+    let paragraph = NSMutableParagraphStyle(); paragraph.alignment = .left; paragraph.lineBreakMode = .byWordWrapping
+    let attrs: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: size, weight: .semibold), .foregroundColor: NSColor.white, .paragraphStyle: paragraph]
+    NSAttributedString(string: text, attributes: attrs).draw(with: rect, options: [.usesLineFragmentOrigin, .usesFontLeading])
+  }
+  if let graphic, graphic.enabled {
+    label(graphic.headline, rect: NSRect(x: w * 0.08, y: h * 0.76, width: w * 0.84, height: h * 0.16), size: unit * 0.048)
+    label(graphic.keyNumber, rect: NSRect(x: w * 0.08, y: h * 0.61, width: w * 0.84, height: h * 0.1), size: unit * 0.075)
+    for (index, bar) in graphic.bars.prefix(4).enumerated() {
+      let y = h * 0.51 - CGFloat(index) * unit * 0.065
+      context.setFillColor(NSColor.systemTeal.withAlphaComponent(0.95).cgColor)
+      context.fill(CGRect(x: w * 0.08, y: y, width: w * 0.84 * max(0, min(100, bar.value)) / 100, height: unit * 0.05))
+      label("\(bar.label)  \(bar.value)", rect: NSRect(x: w * 0.09, y: y, width: w * 0.8, height: unit * 0.05), size: unit * 0.025, background: false)
+    }
+    label(graphic.source, rect: NSRect(x: w * 0.08, y: h * 0.035, width: w * 0.84, height: unit * 0.05), size: unit * 0.023)
+  }
+  if let caption { label(caption, rect: NSRect(x: w * 0.08, y: h * 0.11, width: w * 0.84, height: unit * 0.14), size: unit * 0.042) }
+  NSGraphicsContext.restoreGraphicsState()
   return pixelBuffer
 }
 
@@ -248,7 +278,9 @@ func renderImageSequenceVideo(
   height: Int,
   fps: Int,
   videoBitrate: Int,
-  outputURL: URL
+  outputURL: URL,
+  captions: [CaptionCue] = [],
+  graphic: GraphicOverlay? = nil
 ) async throws -> CMTime {
   try removeItemIfExists(outputURL)
 
@@ -302,7 +334,9 @@ func renderImageSequenceVideo(
       let pixelBuffer = try drawCGImageToPixelBuffer(
         cgImage: cgImage,
         width: width,
-        height: height
+        height: height,
+        caption: captions.first(where: { $0.start <= CMTimeGetSeconds(presentationTime) && $0.end > CMTimeGetSeconds(presentationTime) })?.text,
+        graphic: graphic
       )
 
       guard adaptor.append(pixelBuffer, withPresentationTime: presentationTime) else {
@@ -391,7 +425,9 @@ func exportPartVideo(_ request: RenderPartRequest) async throws {
     height: request.height,
     fps: request.fps,
     videoBitrate: parseBitrate(request.videoBitrate),
-    outputURL: tempVideoURL
+    outputURL: tempVideoURL,
+    captions: request.captions ?? [],
+    graphic: request.graphic
   )
 
   let composition = AVMutableComposition()
@@ -651,6 +687,11 @@ struct NativeVideoRenderer {
       let requestPath = CommandLine.arguments[2]
 
       switch command {
+      case "probe":
+        let request = try decodeRequest(ProbeRequest.self, from: requestPath)
+        let asset = AVURLAsset(url: URL(fileURLWithPath: request.inputPath))
+        let duration = try await asset.load(.duration)
+        writeProgress("duration", String(CMTimeGetSeconds(duration)))
       case "render-part":
         let request = try decodeRequest(RenderPartRequest.self, from: requestPath)
         try await exportPartVideo(request)

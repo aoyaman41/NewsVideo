@@ -1,3 +1,4 @@
+import { readingEntrySchema, type ReadingEntry } from '../project/narration';
 import { z } from 'zod';
 import {
   DEFAULT_GEMINI_TTS_MODEL,
@@ -36,6 +37,7 @@ export const TTS_ENGINES = ['google_tts', 'gemini_tts', 'macos_tts'] as const;
 export type TTSEngine = (typeof TTS_ENGINES)[number];
 
 export type AppSettings = {
+  readingDictionary: ReadingEntry[];
   generationConcurrency: number;
   ttsEngine: TTSEngine;
   ttsModel: GeminiTtsModel;
@@ -61,6 +63,7 @@ export type AppSettings = {
 };
 
 export const DEFAULT_SETTINGS: AppSettings = {
+  readingDictionary: [],
   generationConcurrency: 2,
   ttsEngine: 'gemini_tts',
   ttsModel: DEFAULT_GEMINI_TTS_MODEL,
@@ -86,6 +89,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
 
 export const settingsUpdateSchema = z
   .object({
+    readingDictionary: z.array(readingEntrySchema).max(500).optional(),
     generationConcurrency: z.number().int().min(1).max(4).optional(),
     ttsEngine: z.enum(TTS_ENGINES).optional(),
     ttsModel: z.enum(GEMINI_TTS_MODELS).optional(),
@@ -150,6 +154,7 @@ export function normalizeSettings(input: unknown): AppSettings {
   const raw = input && typeof input === 'object' ? (input as Record<string, unknown>) : {};
   const merged = { ...DEFAULT_SETTINGS, ...(raw as Partial<AppSettings>) };
 
+  merged.readingDictionary = z.array(readingEntrySchema).max(500).catch([]).parse(merged.readingDictionary);
   merged.generationConcurrency = Number.isFinite(merged.generationConcurrency) ? Math.max(1, Math.min(4, Math.round(merged.generationConcurrency))) : 2;
 
   // 旧ボイス名の移行

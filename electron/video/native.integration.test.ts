@@ -142,6 +142,7 @@ describe.skipIf(process.platform !== 'darwin' || process.env.NEWSVIDEO_NATIVE_TE
             settings: { speakingRate: 1, pitch: 0, languageCode: 'ja-JP' },
             generatedAt: new Date().toISOString(),
           };
+          if (index === 0) { part.graphic = { enabled: true, headline: '編集できる見出し', keyNumber: '42%', source: '固定素材で検証', bars: [{ label: '項目', value: 70 }] }; part.captionsEnabled = true; part.captions = [{ id: crypto.randomUUID(), start: 0, end: 1, text: '字幕を表示する検証', timing: 'manual' }]; }
           project.parts.push(part);
         }
         project.integrity = deriveIntegrity(null, project);
@@ -195,6 +196,8 @@ describe.skipIf(process.platform !== 'darwin' || process.env.NEWSVIDEO_NATIVE_TE
         const [width, height] = resolution.split('x').map(Number);
         expect(result).toMatchObject({ videoTracks: 1, audioTracks: 1, width, height });
         expect(result.duration).toBeCloseTo(7.6, 0);
+        expect(result.samples[1].brightTop).toBeGreaterThan(100);
+        expect(result.samples[1].brightBottom).toBeGreaterThan(100);
         const colors = result.samples.map((sample: { rgb: number[] }) => sample.rgb);
         expect(colors[0][1]).toBeGreaterThan(colors[0][0] * 3);
         expect(colors[1][0]).toBeGreaterThan(colors[1][2] * 3);

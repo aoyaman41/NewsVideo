@@ -2,8 +2,6 @@ import { projectClient, useProjectState } from '../../stores/projectStore';
 import { useEffect, useMemo } from 'react';
 import { NavLink, useLocation } from 'react-router-dom';
 import pkg from '../../../package.json';
-import { nextActionLabel, stageLabel, summarizeProjectProgress } from '../../utils/projectHealth';
-import { StatusChip } from '../ui';
 
 interface NavItem {
   path: string;
@@ -58,7 +56,6 @@ export function Sidebar() {
   const projectId = useMemo(() => extractProjectId(location.pathname), [location.pathname]);
   const [liveProject] = useProjectState(projectId ?? undefined);
   const projectName = liveProject?.name ?? '';
-  const projectSummary = liveProject ? summarizeProjectProgress(liveProject) : null;
 
   const returnTo = useMemo(() => {
     const state = location.state as { returnTo?: string } | null;
@@ -72,8 +69,8 @@ export function Sidebar() {
   const shouldShowReturnToWork = location.pathname === '/settings' && Boolean(returnTo);
 
   return (
-    <aside className="flex h-full w-64 flex-col border-r border-[#0f2a4d] bg-[var(--nv-color-brand)] text-white">
-      <div className="titlebar-drag border-b border-white/10 px-4 py-3">
+    <aside className="flex h-full w-44 shrink-0 flex-col border-r border-[#0f2a4d] bg-[var(--nv-color-brand)] text-white">
+      <div className="titlebar-drag border-b border-white/10 px-4 pb-3 pt-9">
         <p className="text-[11px] uppercase tracking-[0.16em] text-blue-200">NewsVideo</p>
         <h1 className="mt-1 text-xl font-bold">Desk</h1>
       </div>
@@ -121,19 +118,7 @@ export function Sidebar() {
           ))}
         </ul>
 
-        {projectId && projectSummary && (
-          <div className="mt-5 rounded-[12px] border border-white/15 bg-white/10 p-3 text-blue-50">
-            <p className="truncate text-sm font-semibold">{projectName}</p>
-            <div className="mt-3 space-y-2 text-xs text-blue-100">
-              <StatusChip
-                tone={projectSummary.hasVideoOutput ? 'success' : 'info'}
-                label={projectSummary.hasVideoOutput ? '完成' : `次: ${stageLabel(projectSummary.stage)}`}
-                className="border-white/20 bg-white/10 text-blue-50"
-              />
-              <p>{nextActionLabel(projectSummary)}</p>
-            </div>
-          </div>
-        )}
+        {projectId && <p className="mt-4 truncate px-1 text-sm text-blue-100" title={projectName}>{projectName}</p>}
       </nav>
 
       <div className="border-t border-white/10 px-4 py-3">

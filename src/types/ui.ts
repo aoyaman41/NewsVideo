@@ -20,6 +20,12 @@ export interface ProjectListItem {
   updatedAt: string;
   path: string;
   storageError?: string;
+  metrics?: ReturnType<typeof import('../../shared/project/metrics').productionMetrics>;
+  archived?: boolean;
+  template?: boolean;
+  durationSec?: number;
+  thumbnailPath?: string;
+  lastVideoPath?: string;
   articleTitle?: string;
   thumbnailImageId?: string;
   summary?: ProjectProgressSummary;

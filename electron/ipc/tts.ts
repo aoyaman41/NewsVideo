@@ -1,3 +1,8 @@
+import { generationSettings } from '../utils/generationContext';
+import { invokeOperation } from './operations';
+import { measurePcmWav } from '../../shared/project/audioQuality';
+import { applyReadings } from '../../shared/project/narration';
+import { normalizeSettings } from '../../shared/settings/appSettings';
 import { retryTransient } from '../utils/generationPolicy';
 import { registerOperation } from './operations';
 import { app, safeStorage } from 'electron';
@@ -421,7 +426,7 @@ async function synthesizeMacosTts(
   return {
     id: audioId,
     filePath: wavPath,
-    durationSec: estimateDurationSec(text, options.speakingRate),
+    durationSec: measurePcmWav(await fs.readFile(wavPath)).durationSec,
     ttsEngine: 'macos_tts',
     voiceId: options.voiceName || 'default',
     settings: {
@@ -549,6 +554,8 @@ registerOperation(
   ): Promise<{ audio: AudioAsset; usage: TokenUsage | null }> => {
     if (!projectId) throw new Error('projectId が指定されていません');
     const projectPath = await getProjectPath(projectId);
+    const dictionary = normalizeSettings(generationSettings.getStore() ?? await invokeOperation('settings:get')).readingDictionary;
+    text = applyReadings(text, dictionary);
 
     if (options.ttsEngine === 'macos_tts') {
       const audio = await synthesizeMacosTts(text, options, projectPath);
@@ -571,7 +578,7 @@ registerOperation(
     projectId: string
   ): Promise<Array<{ audio: AudioAsset; usage: TokenUsage | null }>> => {
     if (!projectId) throw new Error('projectId が指定されていません');
-    const projectPath = await getProjectPath(projectId);
+    await getProjectPath(projectId);
 
     const targets = parts
       .map((part) => ({ part, text: part.scriptText || '' }))
@@ -585,12 +592,7 @@ registerOperation(
     await Promise.all(
       targets.map(async (item) => {
         try {
-          const result =
-            options.ttsEngine === 'macos_tts'
-              ? { audio: await synthesizeMacosTts(item.text, options, projectPath), usage: null }
-              : options.ttsEngine === 'gemini_tts'
-                ? await synthesizeGeminiTts(item.text, options, projectPath)
-                : { audio: await synthesizeGoogleTts(item.text, options, projectPath), usage: null };
+          const result = await invokeOperation<{ audio: AudioAsset; usage: TokenUsage | null }>('tts:generate', item.text, options, projectId);
           out[item.index] = result;
         } catch (error) {
           errors.push({

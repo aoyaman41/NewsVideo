@@ -409,7 +409,7 @@ export function SettingsPage() {
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
       <Header
         title="設定"
-        subtitle="変更は自動保存されます"
+        subtitle="新しい制作に使う既定値。変更は自動保存されます"
         statusLabel={settingsStatus.label}
         statusTone={settingsStatus.tone}
         actions={
@@ -451,6 +451,8 @@ export function SettingsPage() {
               </button>
             ))}
           </div>
+
+          <details className="rounded-lg border bg-white p-3"><summary className="cursor-pointer text-sm font-semibold">サポートと診断</summary><div className="mt-2 space-y-2 text-sm"><p>保存形式・アプリの版・生成状態・件数をJSONに書き出します。記事本文、画像、APIキー、ファイルパスは含めず、自動送信もしません。</p><Button size="sm" variant="secondary" onClick={async () => { try { const file = await window.electronAPI.diagnostics.export(); if (file) toast.success(`診断を書き出しました: ${file}`); } catch (error) { toast.error(String(error)); } }}>診断ファイルを保存</Button><p>不具合報告には、再現手順と期待した結果、実際の結果を添えてください。公開する前に診断内容をご確認ください。</p></div></details>
 
           {activeTab === 'api' && (
             <Card title="APIキー設定" subtitle="各サービスの接続状態を確認しながら保存">

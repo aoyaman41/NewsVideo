@@ -1,3 +1,4 @@
+import { metricsSchema } from '../../shared/project/metrics';
 import * as fs from 'node:fs/promises';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -208,6 +209,11 @@ export class ProjectRepository {
         updatedAt: new Date().toISOString(),
       };
       next.integrity = deriveIntegrity(current, next);
+      next.metrics = metricsSchema.parse(next.metrics ?? {});
+      if (next.autoGenerationStatus?.lastVideoPath && next.integrity?.video) next.metrics.firstOutputAt ??= new Date().toISOString();
+      if (next.job?.id !== current.job?.id && current.job) next.metrics.restarts++;
+      if (next.job?.status === 'cancelled' && current.job?.status !== 'cancelled') next.metrics.stops++;
+      if (next.job?.status === 'failed') next.metrics.lastFailureKind = next.job.error?.kind;
       // Materialize legacy data as a complete backup before changing the commit point.
       await this.atomicWrite(
         path.join(directory, 'project.previous.json'),

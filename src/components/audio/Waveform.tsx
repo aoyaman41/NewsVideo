@@ -141,6 +141,7 @@ export function Waveform({
     <div ref={containerRef} className="w-full">
       <div className="relative">
         <canvas
+          aria-hidden="true"
           ref={canvasRef}
           onClick={(e) => {
             if (!canSeek || !onSeek) return;
@@ -164,6 +165,7 @@ export function Waveform({
           </div>
         )}
       </div>
+      {canSeek && <label className="mt-2 block text-sm text-slate-700">再生位置 {currentTimeSec.toFixed(1)} / {durationSec.toFixed(1)} 秒<input aria-label="音声の再生位置（秒）" type="range" min="0" max={durationSec} step="0.1" value={clamp(currentTimeSec, 0, durationSec)} onChange={(event) => onSeek?.(Number(event.target.value))} className="w-full" /></label>}
     </div>
   );
 }

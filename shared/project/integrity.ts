@@ -58,7 +58,7 @@ export function sourceInputs(project: Project, part: Part) {
     prompt: promptInput,
     image: inputFingerprint({ promptInput, prompt, model: project.generationConfig?.imageModel, resolution: project.generationConfig?.imageResolution }),
     audio: inputFingerprint({
-      text: part.scriptText,
+      text: part.scriptText, narrationText: part.narrationText, dictionary: project.generationConfig?.readingDictionary,
       engine: project.generationConfig?.ttsEngine, model: project.generationConfig?.ttsModel, voice: project.generationConfig?.ttsVoice, rate: project.generationConfig?.ttsSpeakingRate, pitch: project.generationConfig?.ttsPitch,
       style: profile.ttsNarrationStylePreset,
       note: profile.ttsNarrationStyleNote,
@@ -74,7 +74,7 @@ export function videoInput(project: Project) {
       index: part.index,
       title: part.title,
       scriptText: part.scriptText,
-      panelImages: part.panelImages,
+      panelImages: part.panelImages, captions: part.captions, captionsEnabled: part.captionsEnabled, graphic: part.graphic,
       audio: part.audio,
     })),
     profile: project.presentationProfile,

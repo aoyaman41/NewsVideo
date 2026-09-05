@@ -41,7 +41,10 @@ type TokenUsage = {
 };
 
 interface ElectronAPI {
+  diagnostics: { export: () => Promise<string | null> };
   project: {
+    captions: (request: { id: string; format: "srt" | "vtt" }) => Promise<string>,
+    manage: (request: { action: "clone" | "archive" | "export" | "import" | "trash" | "restore"; id?: string; template?: boolean; archived?: boolean; key?: string }) => Promise<unknown>,
     onFlushRequested: (callback: () => void) => () => void;
     finishFlush: (success: boolean) => void;
     onChanged: (callback: (event: { id: string; revision?: number }) => void) => () => void;
@@ -49,7 +52,7 @@ interface ElectronAPI {
     load: (projectId: string) => Promise<Project>;
     save: (project: Project) => Promise<{ success: boolean; savedAt: string; revision: number; project: Project }>;
     delete: (projectId: string) => Promise<{ success: boolean }>;
-    create: (name: string) => Promise<ProjectMeta>;
+    create: (name: string | { name: string; purpose?: "short" | "explain" | "news"; sample?: boolean }) => Promise<ProjectMeta>;
   };
 
   jobs: {
@@ -102,6 +105,8 @@ interface ElectronAPI {
   };
 
   tts: {
+    insertPause: (request: { projectId: string; partId: string; at: number; seconds: number }) => Promise<Project>,
+    replaceSegment: (request: { projectId: string; partId: string; start: number; end: number; text: string }) => Promise<Project>,
     generate: (
       text: string,
       options: TTSOptions,
@@ -172,6 +177,7 @@ interface ImageBatchGenerationResult {
 
 // 設定関連の型
 interface Settings {
+  readingDictionary?: Array<{ word: string; reading: string }>;
   generationConcurrency: number;
   ttsEngine: TTSEngine;
   ttsModel: GeminiTtsModel;

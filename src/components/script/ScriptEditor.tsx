@@ -108,7 +108,7 @@ export function ScriptEditor({
   }, [autoSaveStatus]);
 
   return (
-    <div className="flex h-full min-h-0 flex-col gap-3 p-3">
+    <div className="flex min-h-0 flex-col gap-3 p-3">
       <Card
         title={`パート ${part.index + 1} 編集`}
         subtitle="タイトル・要約・原稿を編集"
@@ -135,16 +135,16 @@ export function ScriptEditor({
       >
         <form className="space-y-3" onChange={() => onSave(part.id, getValues())}>
           <div>
-            <label className="mb-1 block text-xs font-semibold text-slate-600">
+            <label htmlFor="scene-title" className="mb-1 block text-xs font-semibold text-slate-600">
               パートタイトル
             </label>
-            <input type="text" {...register('title')} className="nv-input" />
-            {errors.title && <p className="mt-1 text-xs text-red-600">{errors.title.message}</p>}
+            <input id="scene-title" aria-invalid={!!errors.title} aria-describedby={errors.title ? "scene-title-error" : undefined} type="text" {...register('title')} className="nv-input" />
+            {errors.title && <p id="scene-title-error" className="mt-1 text-xs text-red-600">{errors.title.message}</p>}
           </div>
 
           <div>
-            <label className="mb-1 block text-xs font-semibold text-slate-600">要約</label>
-            <textarea {...register('summary')} rows={2} className="nv-input resize-y" />
+            <label htmlFor="scene-summary" className="mb-1 block text-xs font-semibold text-slate-600">要約</label>
+            <textarea id="scene-summary" aria-invalid={!!errors.summary} {...register('summary')} rows={2} className="nv-input resize-y" />
             {errors.summary && (
               <p className="mt-1 text-xs text-red-600">{errors.summary.message}</p>
             )}
@@ -152,18 +152,19 @@ export function ScriptEditor({
 
           <div>
             <div className="mb-1 flex items-center justify-between">
-              <label className="block text-xs font-semibold text-slate-600">ナレーション原稿</label>
+              <label htmlFor="scene-script" className="block text-xs font-semibold text-slate-600">ナレーション原稿</label>
               <span className="text-xs text-slate-500">
                 {estimateCharCount(watchedScript)}文字 / 約{estimateDuration(watchedScript)}秒
               </span>
             </div>
             <textarea
+              id="scene-script" aria-invalid={!!errors.scriptText} aria-describedby={errors.scriptText ? 'scene-script-error' : undefined}
               {...register('scriptText')}
               rows={12}
               className="nv-input resize-y font-mono text-sm"
             />
             {errors.scriptText && (
-              <p className="mt-1 text-xs text-red-600">{errors.scriptText.message}</p>
+              <p id="scene-script-error" className="mt-1 text-xs text-red-600">{errors.scriptText.message}</p>
             )}
           </div>
         </form>
@@ -173,6 +174,7 @@ export function ScriptEditor({
         <Card title="コメントで再生成" subtitle="改善点を短く指定してAIで書き直し">
           <div className="space-y-2">
             <textarea
+              aria-label="AIへの修正指示"
               value={comment}
               onChange={(e) => setComment(e.target.value)}
               rows={2}

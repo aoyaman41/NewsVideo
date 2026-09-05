@@ -1,3 +1,4 @@
+import { metricsSchema } from '../../shared/project/metrics';
 import { resolutionForAspect } from '../../shared/project/videoFormat';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
@@ -249,6 +250,8 @@ export class GenerationJobEngine {
     const expected = signature(source);
     await this.commit(id, (latest) => {
       latest.job!.pendingOperation = { step, kind, estimatedUsd: allowance };
+      latest.metrics = metricsSchema.parse(latest.metrics ?? {});
+      latest.metrics.generationRequests++;
     });
     const result = await call();
     let inputChanged = false;
@@ -370,7 +373,7 @@ export class GenerationJobEngine {
           () =>
             this.invoke<{ audio: AudioAsset; usage: Usage }>(
               'tts:generate',
-              part.scriptText,
+              part.narrationText || part.scriptText,
               {
                 ttsEngine: settings.ttsEngine,
                 ttsModel: settings.ttsModel,

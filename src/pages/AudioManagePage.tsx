@@ -1,3 +1,4 @@
+import { useSceneSelection, rememberedScene } from '../stores/sceneSelection';
 import { partFreshness } from '../../shared/project/integrity';
 import { projectClient, useProjectState } from '../stores/projectStore';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -75,7 +76,7 @@ export function AudioManagePage() {
 
   const [project, setProject] = useProjectState(projectId);
   const [settings, setSettings] = useState<Settings>(defaultSettings);
-  const [selectedPartId, setSelectedPartId] = useState<string | null>(null);
+  const [selectedPartId, setSelectedPartId] = useSceneSelection(projectId);
   const projectRef = useRef<Project | null>(null);
 
   const [isLoading, setIsLoading] = useState(true);
@@ -127,7 +128,7 @@ export function AudioManagePage() {
         });
 
         if (loadedProject.parts.length > 0) {
-          setSelectedPartId(loadedProject.parts[0].id);
+          setSelectedPartId(rememberedScene(projectId, loadedProject.parts[0].id));
         }
       } catch (err) {
         console.error('Failed to load project/settings:', err);
@@ -138,7 +139,7 @@ export function AudioManagePage() {
     };
 
     load();
-  }, [projectId, reportError, setProject]);
+  }, [projectId, reportError, setProject, setSelectedPartId]);
 
   const selectedPart = useMemo(() => {
     return project?.parts.find((p) => p.id === selectedPartId) || null;
@@ -210,7 +211,7 @@ export function AudioManagePage() {
       setError(null);
 
       const result = await window.electronAPI.tts.generate(
-        selectedPart.scriptText,
+        selectedPart.narrationText || selectedPart.scriptText,
         ttsOptions,
         projectId
       );

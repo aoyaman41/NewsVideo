@@ -29,6 +29,8 @@ export type NativeRenderPartRequest = {
   audioPath: string;
   audioDelayMs: number;
   imageEntries: Array<{ filePath: string; durationSec: number }>;
+  captions?: Array<{ start: number; end: number; text: string }>;
+  graphic?: import('../../shared/project/schema').Part['graphic'];
 };
 
 export type NativeNormalizeClipRequest = {
@@ -298,4 +300,11 @@ export async function renderClosingCardVideoNative(
   onProgress?: ProgressHandler
 ): Promise<void> {
   await runNativeTool(binaryPath, 'render-closing-card', request, job, onProgress);
+}
+
+export async function probeDurationNative(binaryPath: string, inputPath: string) {
+  let duration = 0;
+  await runNativeTool(binaryPath, 'probe', { inputPath }, { canceled: false, processes: new Set() }, (record) => { if (record.duration) duration = Number(record.duration); });
+  if (!Number.isFinite(duration) || duration <= 0) throw new Error('動画の長さを読み込めません。');
+  return duration;
 }

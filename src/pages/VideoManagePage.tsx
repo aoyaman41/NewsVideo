@@ -1,3 +1,4 @@
+import { useSceneSelection, rememberedScene } from '../stores/sceneSelection';
 import { resolutionForAspect, type RenderOptions } from '../../shared/project/videoFormat';
 import { videoInput } from '../../shared/project/integrity';
 import { projectClient, useProjectState } from '../stores/projectStore';
@@ -56,7 +57,7 @@ export function VideoManagePage() {
 
   const [project, setProject] = useProjectState(projectId);
   const [settings, setSettings] = useState<Settings | null>(null);
-  const [selectedPartId, setSelectedPartId] = useState<string | null>(null);
+  const [selectedPartId, setSelectedPartId] = useSceneSelection(projectId);
 
   const [renderOptions, setRenderOptions] = useState<RenderOptions>({
     resolution: '1920x1080',
@@ -290,7 +291,7 @@ export function VideoManagePage() {
         };
         setSettings(normalizedSettings);
 
-        setSelectedPartId(normalizedProject.parts[0]?.id ?? null);
+        setSelectedPartId(normalizedProject.parts[0] ? rememberedScene(projectId, normalizedProject.parts[0].id) : null);
 
         const defaults: RenderOptions = {
           resolution: resolutionForAspect(normalizedSettings.videoResolution, normalizedProject.presentationProfile.aspectRatio),
@@ -342,7 +343,7 @@ export function VideoManagePage() {
     };
 
     load();
-  }, [applyResolvedVideoAsset, clearVideoAsset, projectId, reportError, resolveExistingVideoPath, setProject]);
+  }, [applyResolvedVideoAsset, clearVideoAsset, projectId, reportError, resolveExistingVideoPath, setProject, setSelectedPartId]);
 
   useEffect(() => {
     if (!project) return;
@@ -675,12 +676,12 @@ export function VideoManagePage() {
         <div className="space-y-4 overflow-auto">
           <Card
             title="締めカード設定"
-            subtitle="案件ごとの outro 文言をここで調整"
+            subtitle="この動画の締め画面を調整"
           >
             <div className="space-y-4">
               <div className="rounded-[10px] border border-[var(--nv-color-border)] bg-slate-50 p-3 text-xs text-slate-600">
                 <p>
-                  ここで調整するのは project ごとの締めカードです。設定画面の `オープニング / エンディング動画` は共通素材で、必要ならこの締めカードの前後に差し込みます。
+                  締め画面の文言はこの動画だけに適用します。共通の前後動画は設定画面で選べます。
                 </p>
               </div>
 
@@ -815,7 +816,7 @@ export function VideoManagePage() {
 
           <Card
             title="今回の書き出し設定"
-            subtitle="品質は app settings、付加素材は今回の書き出しで切り替え"
+            subtitle="保存済みの品質設定と、今回使う前後動画"
             actions={
               <Button
                 variant="secondary"
@@ -834,24 +835,24 @@ export function VideoManagePage() {
               <div className="rounded-[10px] border border-[var(--nv-color-border)] bg-slate-50 p-3">
                 <div className="grid gap-2 sm:grid-cols-2 text-xs text-slate-600">
                   <div>
-                    <div className="font-semibold text-slate-700">既定解像度</div>
+                    <div className="font-semibold text-slate-700">解像度</div>
                     <div className="mt-1 text-sm text-slate-900">{resolutionForAspect(renderOptions.resolution, presentationProfile.aspectRatio)}</div>
                   </div>
                   <div>
-                    <div className="font-semibold text-slate-700">既定FPS</div>
+                    <div className="font-semibold text-slate-700">フレームレート</div>
                     <div className="mt-1 text-sm text-slate-900">{renderOptions.fps}</div>
                   </div>
                   <div>
-                    <div className="font-semibold text-slate-700">既定動画ビットレート</div>
+                    <div className="font-semibold text-slate-700">動画品質</div>
                     <div className="mt-1 text-sm text-slate-900">{renderOptions.videoBitrate}</div>
                   </div>
                   <div>
-                    <div className="font-semibold text-slate-700">既定音声ビットレート</div>
+                    <div className="font-semibold text-slate-700">音声品質</div>
                     <div className="mt-1 text-sm text-slate-900">{renderOptions.audioBitrate}</div>
                   </div>
                 </div>
                 <p className="mt-3 text-xs text-slate-500">
-                  これらは設定画面の既定値です。動画ページでは今回の出力先と付加動画だけを切り替えます。
+                  このプロジェクトに保存した品質です。新規制作の既定値は設定画面で変更できます。
                 </p>
               </div>
 
@@ -861,10 +862,7 @@ export function VideoManagePage() {
                     type="checkbox"
                     checked={renderOptions.includeOpening}
                     onChange={(e) =>
-                      setRenderOptions((prev) => ({
-                        ...prev,
-                        includeOpening: e.target.checked,
-                      }))
+                      (() => { const next = { ...renderOptions, includeOpening: e.target.checked }; setRenderOptions(next); setProject({ ...project, outputSettings: next }); })()
                     }
                     disabled={!settings.openingVideoPath || isRendering || isPreviewing}
                   />
@@ -875,10 +873,7 @@ export function VideoManagePage() {
                     type="checkbox"
                     checked={renderOptions.includeEnding}
                     onChange={(e) =>
-                      setRenderOptions((prev) => ({
-                        ...prev,
-                        includeEnding: e.target.checked,
-                      }))
+                      (() => { const next = { ...renderOptions, includeEnding: e.target.checked }; setRenderOptions(next); setProject({ ...project, outputSettings: next }); })()
                     }
                     disabled={!settings.endingVideoPath || isRendering || isPreviewing}
                   />

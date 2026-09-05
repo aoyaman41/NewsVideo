@@ -68,6 +68,9 @@ function SortablePartItem({
           : 'border-[var(--nv-color-border)] bg-white hover:bg-slate-50'
       } ${isDragging ? 'z-50 shadow-[var(--nv-shadow-md)]' : ''}`}
       onClick={onSelect}
+      tabIndex={0}
+      aria-current={isSelected ? "true" : undefined}
+      onKeyDown={(event) => { if (event.target === event.currentTarget && (event.key === "Enter" || event.key === " ")) { event.preventDefault(); onSelect(); } }}
     >
       <div className="flex items-start gap-3 p-3">
         <button
@@ -103,8 +106,8 @@ function SortablePartItem({
             e.stopPropagation();
             await onDelete();
           }}
-          className="rounded-[8px] p-1 text-slate-400 opacity-0 transition-all hover:bg-red-50 hover:text-red-600 group-hover:opacity-100"
-          title="削除"
+          className="rounded-[8px] p-1 text-slate-400 opacity-100 transition-all hover:bg-red-50 hover:text-red-600 group-hover:opacity-100"
+          title="削除" aria-label={`${part.title}を削除`}
         >
           <svg
             className="w-4 h-4"

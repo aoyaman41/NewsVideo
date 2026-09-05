@@ -12,8 +12,11 @@ type AllowedEventChannel =
 
 // Renderer プロセスに公開するAPI
 contextBridge.exposeInMainWorld('electronAPI', {
+  diagnostics: { export: () => ipcRenderer.invoke('diagnostics:export') },
   // プロジェクト操作
   project: {
+    captions: (request: unknown) => ipcRenderer.invoke('project:captions', request),
+    manage: (request: unknown) => ipcRenderer.invoke('project:manage', request),
     onFlushRequested: (callback: () => void) => { ipcRenderer.on('project:flush', callback); return () => ipcRenderer.removeListener('project:flush', callback); },
     finishFlush: (success: boolean) => ipcRenderer.send('project:flushed', success),
     onChanged: (callback: (event: { id: string; revision?: number }) => void) => {
@@ -28,7 +31,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     load: (projectId: string) => ipcRenderer.invoke('project:load', projectId),
     save: (project: unknown) => ipcRenderer.invoke('project:save', project),
     delete: (projectId: string) => ipcRenderer.invoke('project:delete', projectId),
-    create: (name: string) => ipcRenderer.invoke('project:create', name),
+    create: (name: unknown) => ipcRenderer.invoke('project:create', name),
   },
 
   jobs: {
@@ -78,6 +81,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // TTS操作
   tts: {
+    insertPause: (request: unknown) => ipcRenderer.invoke('tts:insertPause', request),
+    replaceSegment: (request: unknown) => ipcRenderer.invoke('tts:replaceSegment', request),
     generate: (text: string, options: unknown, projectId: string) =>
       ipcRenderer.invoke('tts:generate', text, options, projectId),
     generateBatch: (parts: unknown[], options: unknown, projectId: string) =>

@@ -1,3 +1,5 @@
+import { metricsSchema } from '../../shared/project/metrics';
+import { getProjectRepository } from './project';
 import { fileAccess } from '../utils/fileAccess';
 import { resolutionForAspect, type RenderOptions, renderOptionsSchema } from '../../shared/project/videoFormat';
 import { generationSettings } from '../utils/generationContext';
@@ -62,6 +64,9 @@ type PartLike = {
   index: number;
   title: string;
   panelImages: ImageAssetRefLike[];
+  captions?: import('../../shared/project/schema').Part['captions'];
+  captionsEnabled?: boolean;
+  graphic?: import('../../shared/project/schema').Part['graphic'];
   audio?: AudioAssetLike;
 };
 type ProjectLike = {
@@ -439,6 +444,8 @@ async function renderPartVideo(
         audioPath,
         audioDelayMs: leadInMs,
         imageEntries: entries,
+        captions: part.captionsEnabled ? part.captions?.map((cue) => ({ ...cue, start: cue.start + clampedLeadInSec, end: cue.end + clampedLeadInSec })) : undefined,
+        graphic: part.graphic,
       },
       job,
       (kv) => {
@@ -962,6 +969,7 @@ registerOperation(
       );
 
       sendProgress({ stage: 'finalizing', percent: 100, message: '完了' });
+      await getProjectRepository().update(project.id, (data) => { data.metrics = metricsSchema.parse(data.metrics ?? {}); data.metrics.firstPreviewAt ??= new Date().toISOString(); }).catch(() => {});
       return { previewPath };
     } finally {
       currentJob = null;
@@ -990,6 +998,7 @@ registerOperation(
     currentJob = job;
 
     let renderTmpDir: string | null = null;
+    let renderSucceeded = false;
     try {
       if (!outputPath) throw new Error('出力先が未指定です');
 
@@ -1113,8 +1122,10 @@ registerOperation(
       await copyRenderedOutput(stagedOutputPath, outputPath);
 
       sendProgress({ stage: 'finalizing', percent: 100, message: 'レンダリング完了' });
+      renderSucceeded = true;
       return { outputPath };
     } finally {
+      await getProjectRepository().update(project.id, (data) => { data.metrics = metricsSchema.parse(data.metrics ?? {}); data.metrics.renderAttempts++; if (!renderSucceeded) data.metrics.renderFailures++; else { data.metrics.firstPreviewAt ??= new Date().toISOString(); data.metrics.firstOutputAt ??= new Date().toISOString(); } }).catch(() => {});
       if (renderTmpDir) {
         try {
           await fs.rm(renderTmpDir, { recursive: true, force: true });

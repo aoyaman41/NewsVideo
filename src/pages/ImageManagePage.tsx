@@ -1,3 +1,4 @@
+import { useSceneSelection, rememberedScene } from '../stores/sceneSelection';
 import { projectClient, useProjectState } from '../stores/projectStore';
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
@@ -43,7 +44,7 @@ export function ImageManagePage() {
   const toast = useToast();
 
   const [project, setProject] = useProjectState(projectId);
-  const [selectedPartId, setSelectedPartId] = useState<string | null>(null);
+  const [selectedPartId, setSelectedPartId] = useSceneSelection(projectId);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [isGeneratingPrompts, setIsGeneratingPrompts] = useState(false);
@@ -121,7 +122,7 @@ export function ImageManagePage() {
 
         // 最初のパートを選択
         if (loadedProject.parts.length > 0) {
-          setSelectedPartId(loadedProject.parts[0].id);
+          setSelectedPartId(rememberedScene(projectId, loadedProject.parts[0].id));
         }
       } catch (err) {
         console.error('Failed to load project:', err);
@@ -135,7 +136,7 @@ export function ImageManagePage() {
     };
 
     loadProject();
-  }, [projectId, reportError, setProject]);
+  }, [projectId, reportError, setProject, setSelectedPartId]);
 
   // 画像プロンプト生成
   const handleGeneratePrompts = useCallback(async () => {

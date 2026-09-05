@@ -24,7 +24,19 @@ struct InspectVideo {
         let context = CGContext(data: bytes.baseAddress, width: 1, height: 1, bitsPerComponent: 8, bytesPerRow: 4, space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
         context.draw(image, in: CGRect(x: -image.width / 2, y: -image.height / 2, width: image.width, height: image.height))
       }
-      samples.append(["time": actual.seconds, "rgb": Array(pixel.prefix(3)).map(Int.init)])
+      var pixels = [UInt8](repeating: 0, count: image.width * image.height * 4)
+      pixels.withUnsafeMutableBytes { bytes in
+        let context = CGContext(data: bytes.baseAddress, width: image.width, height: image.height, bitsPerComponent: 8, bytesPerRow: image.width * 4, space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+        context.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
+      }
+      var brightTop = 0, brightBottom = 0
+      for y in 0..<image.height { for x in 0..<image.width {
+        let offset = (y * image.width + x) * 4
+        if pixels[offset] > 200 && pixels[offset + 1] > 200 && pixels[offset + 2] > 200 {
+          if y < image.height / 3 { brightTop += 1 }; if y > image.height * 2 / 3 { brightBottom += 1 }
+        }
+      } }
+      samples.append(["time": actual.seconds, "rgb": Array(pixel.prefix(3)).map(Int.init), "brightTop": brightTop, "brightBottom": brightBottom])
     }
     let output: [String: Any] = ["videoTracks": video.count, "audioTracks": audio.count, "width": size.width, "height": size.height, "duration": duration, "samples": samples]
     let data = try JSONSerialization.data(withJSONObject: output, options: [.sortedKeys])

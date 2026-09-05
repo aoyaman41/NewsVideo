@@ -297,6 +297,8 @@ app.on('window-all-closed', () => {
 });
 
 // IPC ハンドラーの登録
+import './project/finishing';
+import './ipc/diagnostics';
 import './ipc/project.js';
 import './ipc/settings.js';
 import './ipc/ai.js';

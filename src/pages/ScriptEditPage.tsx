@@ -1,3 +1,8 @@
+import { FinishingEditor } from '../components/script/FinishingEditor';
+import { SceneStudio } from '../components/script/SceneStudio';
+import { EvidenceReview } from '../components/script/EvidenceReview';
+import { AssetRights } from '../components/script/AssetRights';
+import { useSceneSelection, rememberedScene } from '../stores/sceneSelection';
 import { AssetReview } from '../components/script/AssetReview';
 import { projectClient, useProjectState, useProjectSaveStatus } from '../stores/projectStore';
 import { useState, useEffect, useCallback } from 'react';
@@ -16,7 +21,7 @@ export function ScriptEditPage() {
   const toast = useToast();
 
   const [project, setProject] = useProjectState(projectId);
-  const [selectedPartId, setSelectedPartId] = useState<string | null>(null);
+  const [selectedPartId, setSelectedPartId] = useSceneSelection(projectId);
   const [isLoading, setIsLoading] = useState(true);
   const [isProcessing, setIsProcessing] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -42,7 +47,7 @@ export function ScriptEditPage() {
         const loaded = await projectClient.load(projectId);
         setProject(loaded);
         if (loaded.parts.length > 0) {
-          setSelectedPartId(loaded.parts[0].id);
+          setSelectedPartId(rememberedScene(projectId, loaded.parts[0].id));
         }
       } catch (err) {
         console.error('Failed to load project:', err);
@@ -53,7 +58,7 @@ export function ScriptEditPage() {
     };
 
     void loadProject();
-  }, [projectId, reportError, setProject]);
+  }, [projectId, reportError, setProject, setSelectedPartId]);
 
   const saveStatus = useProjectSaveStatus(projectId);
   const autoSaveState = { isDirty: saveStatus.dirty, isSaving: saveStatus.saving, lastSavedAt: saveStatus.lastSavedAt ? new Date(saveStatus.lastSavedAt) : null, saveNow: saveStatus.retry };
@@ -75,7 +80,7 @@ export function ScriptEditPage() {
       console.error('Failed to save project after adding part:', err);
       reportError('パート追加の保存に失敗しました');
     }
-  }, [project, reportError, setProject]);
+  }, [project, reportError, setProject, setSelectedPartId]);
 
   const handleDeletePart = useCallback(
     async (partId: string) => {
@@ -102,7 +107,7 @@ export function ScriptEditPage() {
         reportError('パート削除の保存に失敗しました');
       }
     },
-    [project, reportError, selectedPartId, setProject]
+    [project, reportError, selectedPartId, setProject, setSelectedPartId]
   );
 
   const handleReorderParts = useCallback(
@@ -239,7 +244,7 @@ export function ScriptEditPage() {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-      <Header title="スクリプト" subtitle={project.name} />
+      <Header title="シーンと台本" subtitle={project.name} />
 
       {projectId && <WorkflowNav projectId={projectId} current="script" project={project} />}
 
@@ -249,8 +254,8 @@ export function ScriptEditPage() {
         </div>
       )}
 
-      <div className="flex min-h-0 flex-1 gap-4 overflow-hidden p-4">
-        <div className="w-80 min-w-[280px] overflow-hidden rounded-[12px] border border-[var(--nv-color-border)] bg-white">
+      <div className="grid min-h-0 flex-1 gap-3 overflow-auto p-4 lg:grid-cols-[200px_minmax(0,1fr)] 2xl:grid-cols-[220px_minmax(0,1fr)_260px]">
+        <div className="max-h-64 lg:max-h-none overflow-auto rounded-[12px] border border-[var(--nv-color-border)] bg-white">
           <PartList
             parts={project.parts}
             selectedPartId={selectedPartId}
@@ -263,6 +268,8 @@ export function ScriptEditPage() {
 
         <div className="min-w-0 flex-1 overflow-auto rounded-[12px] border border-[var(--nv-color-border)] bg-[var(--nv-color-canvas)]">
           {selectedPart ? (
+            <>
+            <SceneStudio key={`studio-${selectedPart.id}`} project={project} part={selectedPart} onChange={setProject} />
             <ScriptEditor
               key={selectedPart.id}
               part={selectedPart}
@@ -274,6 +281,9 @@ export function ScriptEditPage() {
               autoSaveDelayMs={1200}
               diffPreview={lastDiffByPart[selectedPart.id] ?? null}
             />
+            <FinishingEditor key={`finish-${selectedPart.id}`} project={project} part={selectedPart} onChange={setProject} />
+            <EvidenceReview project={project} part={selectedPart} onChange={setProject} />
+            </>
           ) : (
             <div className="p-4">
               <EmptyState title="パートを選択してください" />
@@ -281,15 +291,8 @@ export function ScriptEditPage() {
           )}
         </div>
 
-        <div className="w-72 min-w-[260px] space-y-3 overflow-auto">
-          <Card title="編集メモ" subtitle="この画面の使い方">
-            <ul className="space-y-2 text-xs text-slate-600">
-              <li>・要約と原稿を編集すると自動保存されます。</li>
-              <li>・コメント修正でAI再生成できます。</li>
-              <li>・差分は「再生成差分」に表示されます。</li>
-            </ul>
-          </Card>
-
+        <div className="space-y-3 lg:col-start-2 2xl:col-start-auto">
+          {selectedPart && <AssetRights project={project} part={selectedPart} onChange={setProject} />}
           {selectedPart && <AssetReview project={project} part={selectedPart} onChange={setProject} />}
           {selectedPart && (
             <Card title="選択中パート" subtitle={`No.${selectedPart.index + 1}`}>

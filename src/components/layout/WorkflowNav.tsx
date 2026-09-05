@@ -10,9 +10,8 @@ import {
   sumUsageCostUsd,
   type CostRates,
 } from '../../utils/cost';
-import { nextActionLabel, stageLabel, summarizeProjectProgress } from '../../utils/projectHealth';
+import { nextActionLabel, summarizeProjectProgress } from '../../utils/projectHealth';
 import type { WorkflowStage } from '../../types/ui';
-import { Badge, ProgressBar, StatusChip } from '../ui';
 
 type NonCurrentStepStatus = 'done' | 'warning' | 'todo';
 type StepStatus = NonCurrentStepStatus | 'current';
@@ -135,51 +134,15 @@ export function WorkflowNav({
 
   return (
     <nav
-      aria-label="Workflow"
-      className="titlebar-no-drag border-b border-[var(--nv-color-border)] bg-white px-5 py-4"
+      aria-label="制作工程"
+      className="titlebar-no-drag border-b border-[var(--nv-color-border)] bg-white px-5 py-2"
     >
-      <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-start">
-        <div className="min-w-0 space-y-2">
-          <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
-            <span className="font-semibold uppercase tracking-[0.08em] text-slate-700">Workflow</span>
-            {summary && (
-              <Badge tone={summary.hasVideoOutput ? 'success' : 'info'}>
-                {summary.completedSteps}/{summary.totalSteps}
-              </Badge>
-            )}
-            {summary && (
-              <StatusChip
-                tone={summary.hasVideoOutput ? 'success' : 'info'}
-                label={summary.hasVideoOutput ? '完成' : `次: ${stageLabel(summary.stage)}`}
-              />
-            )}
-            {summary && <span>推奨: {nextActionLabel(summary)}</span>}
-          </div>
-          {summary && (
-            <>
-              <ProgressBar
-                value={summary.completedSteps}
-                max={summary.totalSteps}
-                tone={summary.hasVideoOutput ? 'success' : 'accent'}
-              />
-              <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
-                <span>パート {summary.partCount}</span>
-                {summary.missingPrompts > 0 && <Badge tone="warning">未プロンプト {summary.missingPrompts}</Badge>}
-                {summary.missingImages > 0 && <Badge tone="warning">未画像 {summary.missingImages}</Badge>}
-                {summary.missingAudio > 0 && <Badge tone="warning">未音声 {summary.missingAudio}</Badge>}
-              </div>
-            </>
-          )}
-        </div>
-        {displayProject && (
-          <div className="rounded-[10px] border border-[var(--nv-color-border)] bg-slate-50 px-3 py-2 text-right text-xs text-slate-500">
-            <div className="font-semibold text-slate-700">推定コスト</div>
-            <div className="mt-1 text-sm font-semibold text-slate-900">{formatUsd(totalCost)}</div>
-          </div>
-        )}
+      <div className="flex flex-wrap items-center justify-between gap-2 text-sm text-slate-600">
+        <span>{summary?.hasVideoOutput ? '現在の入力で完成' : summary ? `次: ${nextActionLabel(summary)}` : '制作の工程'}</span>
+        {displayProject && <span>累計の推定費用 {formatUsd(totalCost)}{usageRecords.some((record) => record.inputTokens === undefined && record.outputTokens === undefined) ? '＋料金未確定あり' : ''}</span>}
       </div>
 
-      <ol className="mt-4 flex items-center gap-2 overflow-x-auto pb-1">
+      <ol className="mt-2 flex items-center gap-2 overflow-x-auto pb-1">
         {steps.map((step) => {
           const status: StepStatus = step.key === current ? 'current' : stepStatuses[step.key];
           return (

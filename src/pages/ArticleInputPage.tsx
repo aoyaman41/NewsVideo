@@ -1,3 +1,4 @@
+import { SourceRecords } from '../components/article/SourceRecords';
 import { JOB_STATUS_LABELS } from '../../shared/project/jobs';
 import { GenerationQuote } from '../components/article/GenerationQuote';
 import { projectClient, useProjectState } from '../stores/projectStore';
@@ -105,6 +106,7 @@ export function ArticleInputPage() {
         const normalizedProfile = normalizePresentationProfile(project.presentationProfile);
         setPresentationProfile(normalizedProfile);
         savedPresentationProfileRef.current = JSON.stringify(normalizedProfile);
+        if (typeof project.generationConfig?.targetPartCount === 'number') setTargetPartCount(project.generationConfig.targetPartCount);
         if (project.parts?.length) {
           const nextCount = Math.min(20, Math.max(1, project.parts.length));
           setTargetPartCount(nextCount);
@@ -288,7 +290,8 @@ export function ArticleInputPage() {
           <div className="space-y-4">
             {error && <ErrorDetailPanel message={error} onDismiss={() => setError(null)} />}
 
-            <Card title="生成設定" subtitle="配信スタイルと画像の既定値を指定">
+            <details className="rounded-lg border border-slate-200 bg-white p-3"><summary className="cursor-pointer text-sm font-semibold">今回の動画の声・見た目・詳細設定</summary>
+            <Card title="今回の生成設定" subtitle="このプロジェクトに適用します。アプリ全体の既定値は設定画面で変更できます。">
               <div className="grid gap-4 md:grid-cols-2">
                 <div>
                   <label className="mb-1 block text-xs font-semibold text-slate-600">
@@ -497,7 +500,7 @@ export function ArticleInputPage() {
                   短い補足だけを上書きできます。engine やボイス設定は変更しません。
                 </p>
               </div>
-            </Card>
+            </Card></details>
 
             <Card title="記事情報" subtitle="必須項目を入力してスクリプトを生成">
               {project && <GenerationQuote project={project} partCount={targetPartCount} />}
@@ -512,7 +515,7 @@ export function ArticleInputPage() {
                 <p>開始前に推定料金の余裕を含めて予算を確認します。実際の料金を厳密に上限へ抑えるものではありません。</p>
               </div>}
               <ArticleInput
-                onChange={(data) => { setArticleData(data); setProject((previous) => previous ? { ...previous, article: { ...previous.article, ...data, importedImages: images } } : previous); }}
+                onChange={(data) => { setArticleData(data); setProject((previous) => previous ? { ...previous, name: previous.name === '新しい動画' && data.title?.trim() ? data.title.trim() : previous.name, article: { ...previous.article, ...data, importedImages: images } } : previous); }}
                 onSaveDraft={() => { if (projectId) void projectClient.flush(projectId).catch((error) => setError(String(error))); }}
                 defaultValues={articleData}
                 onSubmit={handleSubmit}
@@ -551,6 +554,7 @@ export function ArticleInputPage() {
               </div>
             </Card>
 
+            {project && <SourceRecords project={project} onChange={setProject} />}
             <Card title="テキストインポート" subtitle="txt / md / docx を読み込み">
               <FileImport onTextImported={handleImportedText} />
             </Card>
