@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useState } from 'react';
+import { projectClient, useProjectState } from '../../stores/projectStore';
+import { useEffect, useMemo } from 'react';
 import { NavLink, useLocation } from 'react-router-dom';
-import type { Project } from '../../schemas';
 import pkg from '../../../package.json';
 import { nextActionLabel, stageLabel, summarizeProjectProgress } from '../../utils/projectHealth';
 import { StatusChip } from '../ui';
@@ -56,10 +56,9 @@ function extractProjectId(pathname: string): string | null {
 export function Sidebar() {
   const location = useLocation();
   const projectId = useMemo(() => extractProjectId(location.pathname), [location.pathname]);
-  const [projectName, setProjectName] = useState<string>('');
-  const [projectSummary, setProjectSummary] = useState<ReturnType<
-    typeof summarizeProjectProgress
-  > | null>(null);
+  const [liveProject] = useProjectState(projectId ?? undefined);
+  const projectName = liveProject?.name ?? '';
+  const projectSummary = liveProject ? summarizeProjectProgress(liveProject) : null;
 
   const returnTo = useMemo(() => {
     const state = location.state as { returnTo?: string } | null;
@@ -68,36 +67,7 @@ export function Sidebar() {
     return state.returnTo;
   }, [location.state]);
 
-  useEffect(() => {
-    if (!projectId) {
-      return;
-    }
-
-    let cancelled = false;
-
-    const load = async () => {
-      try {
-        const project: Project = await window.electronAPI.project.load(projectId);
-        if (cancelled) return;
-        setProjectSummary(summarizeProjectProgress(project));
-        setProjectName(project.name);
-      } catch {
-        if (cancelled) return;
-        setProjectSummary(null);
-        setProjectName('');
-      }
-    };
-
-    void load();
-    const interval = setInterval(() => {
-      void load();
-    }, 3000);
-
-    return () => {
-      cancelled = true;
-      clearInterval(interval);
-    };
-  }, [projectId]);
+  useEffect(() => { if (projectId) void projectClient.load(projectId).catch(() => {}); }, [projectId]);
 
   const shouldShowReturnToWork = location.pathname === '/settings' && Boolean(returnTo);
 

@@ -45,9 +45,12 @@ type TokenUsage = {
 
 interface ElectronAPI {
   project: {
+    onFlushRequested: (callback: () => void) => () => void;
+    finishFlush: (success: boolean) => void;
+    onChanged: (callback: (event: { id: string; revision?: number }) => void) => () => void;
     list: () => Promise<ProjectListItem[]>;
     load: (projectId: string) => Promise<Project>;
-    save: (project: Project) => Promise<{ success: boolean; savedAt: string }>;
+    save: (project: Project) => Promise<{ success: boolean; savedAt: string; revision: number; project: Project }>;
     delete: (projectId: string) => Promise<{ success: boolean }>;
     create: (name: string) => Promise<ProjectMeta>;
   };
@@ -86,6 +89,7 @@ interface ElectronAPI {
   };
 
   image: {
+    importData: (bytes: ArrayBuffer, projectId: string) => Promise<ImageAsset>;
     generate: (prompt: ImagePrompt, projectId: string) => Promise<ImageAsset>;
     generateBatch: (
       prompts: ImagePrompt[],

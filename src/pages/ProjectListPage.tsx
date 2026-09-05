@@ -62,7 +62,7 @@ export function ProjectListPage() {
   const handleDeleteProject = async (project: ProjectListItem) => {
     const accepted = await confirm({
       title: 'プロジェクトを削除しますか？',
-      description: `「${project.name}」を削除します。この操作は取り消せません。`,
+      description: `「${project.name}」を削除します。ゴミ箱へ移動します。`,
       confirmLabel: '削除',
       confirmVariant: 'danger',
     });
@@ -229,7 +229,7 @@ export function ProjectListPage() {
                                 }
                               />
                             ) : (
-                              <Badge tone="neutral">旧データ</Badge>
+                              <Badge tone={project.storageError ? "danger" : "neutral"}>{project.storageError ? "読み込みに問題があります" : "旧データ"}</Badge>
                             )}
                           </div>
 
@@ -241,6 +241,7 @@ export function ProjectListPage() {
                             )}
                           </div>
 
+                          {project.storageError && <p role="alert" className="mt-2 text-sm text-red-700">{project.storageError}</p>}
                           {summary && (
                             <div className="mt-3 space-y-2">
                               <ProgressBar
@@ -261,11 +262,11 @@ export function ProjectListPage() {
                           <Button
                             variant="primary"
                             onClick={() => handleOpenProject(project.id)}
-                            disabled={isOpening}
+                            disabled={isOpening || Boolean(project.storageError)}
                           >
                             {isOpening ? '開いています...' : '再開'}
                           </Button>
-                          <Button variant="secondary" onClick={() => void handleDeleteProject(project)}>
+                          <Button variant="secondary" disabled={Boolean(project.storageError)} onClick={() => void handleDeleteProject(project)}>
                             削除
                           </Button>
                         </div>

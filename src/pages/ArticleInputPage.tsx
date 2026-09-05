@@ -1,3 +1,4 @@
+import { projectClient, useProjectState } from '../stores/projectStore';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { Header, WorkflowNav } from '../components/layout';
@@ -44,7 +45,7 @@ export function ArticleInputPage() {
   const navigate = useNavigate();
   const toast = useToast();
 
-  const [project, setProject] = useState<Project | null>(null);
+  const [project, setProject] = useProjectState(projectId);
   const [articleData, setArticleData] = useState<Partial<ArticleInputType>>({
     title: '',
     source: '',
@@ -103,7 +104,7 @@ export function ArticleInputPage() {
     const load = async () => {
       if (!projectId) return;
       try {
-        const project = await window.electronAPI.project.load(projectId);
+        const project = await projectClient.load(projectId);
         if (cancelled) return;
 
         setProject(project);
@@ -149,7 +150,7 @@ export function ArticleInputPage() {
     return () => {
       cancelled = true;
     };
-  }, [projectId, reportError]);
+  }, [projectId, reportError, setProject]);
 
   useEffect(() => {
     if (!project) return;
@@ -165,9 +166,9 @@ export function ArticleInputPage() {
           presentationProfile,
           updatedAt,
         };
-        await window.electronAPI.project.save(updatedProject);
+        await projectClient.save(updatedProject);
         savedPresentationProfileRef.current = serialized;
-        setProjectSafe(updatedProject);
+        setProject(updatedProject);
       } catch (err) {
         console.error('Failed to save presentation profile:', err);
         reportError(
@@ -178,7 +179,7 @@ export function ArticleInputPage() {
     }, 250);
 
     return () => window.clearTimeout(timeoutId);
-  }, [presentationProfile, project, reportError]);
+  }, [presentationProfile, project, reportError, setProject]);
 
   useEffect(() => {
     if (!projectId) return;
@@ -186,7 +187,7 @@ export function ArticleInputPage() {
     let cancelled = false;
     const tick = async () => {
       try {
-        const latest = await window.electronAPI.project.load(projectId);
+        const latest = await projectClient.load(projectId);
         if (cancelled) return;
         setProject(latest);
 
@@ -211,7 +212,7 @@ export function ArticleInputPage() {
       cancelled = true;
       clearInterval(interval);
     };
-  }, [projectId]);
+  }, [projectId, setProject]);
 
   const notifyCompletion = (message: string) => {
     if (!('Notification' in window)) {
@@ -270,7 +271,7 @@ export function ArticleInputPage() {
     let latestStatus = project.autoGenerationStatus;
     if (projectId) {
       try {
-        const latest = await window.electronAPI.project.load(projectId);
+        const latest = await projectClient.load(projectId);
         latestStatus = latest.autoGenerationStatus ?? latestStatus;
       } catch {
         // ignore
@@ -310,7 +311,7 @@ export function ArticleInputPage() {
       lastVideoPath,
     };
     project.updatedAt = now;
-    await window.electronAPI.project.save(project);
+    await projectClient.save(project);
     setProjectSafe(project);
     if (patch.step) {
       setAutoStatusSafe(patch.step);
@@ -323,7 +324,7 @@ export function ArticleInputPage() {
     }
     if (!projectId) return;
     try {
-      const latest = await window.electronAPI.project.load(projectId);
+      const latest = await projectClient.load(projectId);
       if (latest.autoGenerationStatus?.cancelRequested) {
         throw new Error('キャンセルしました');
       }
@@ -416,7 +417,7 @@ export function ArticleInputPage() {
 
     try {
       // 記事データをプロジェクトに保存
-      const project = await window.electronAPI.project.load(projectId);
+      const project = await projectClient.load(projectId);
       project.article = {
         title: data.title,
         source: data.source,
@@ -425,7 +426,7 @@ export function ArticleInputPage() {
       };
       project.presentationProfile = presentationProfile;
       project.updatedAt = new Date().toISOString();
-      await window.electronAPI.project.save(project);
+      await projectClient.save(project);
 
       // スクリプト生成を実行
       const result = await window.electronAPI.ai.generateScript(project.article, {
@@ -442,7 +443,7 @@ export function ArticleInputPage() {
         project.usage = [...(project.usage ?? []), usageRecord];
       }
       project.updatedAt = new Date().toISOString();
-      await window.electronAPI.project.save(project);
+      await projectClient.save(project);
 
       // スクリプト編集画面に遷移
       navigate(`/projects/${projectId}/script`);
@@ -463,7 +464,7 @@ export function ArticleInputPage() {
     autoCancelRef.current = false;
 
     try {
-      const project = await window.electronAPI.project.load(projectId);
+      const project = await projectClient.load(projectId);
       if (project.autoGenerationStatus?.running) {
         setProjectSafe(project);
         setAutoStatusSafe(project.autoGenerationStatus.step ?? '自動生成中...');
@@ -478,7 +479,7 @@ export function ArticleInputPage() {
         project.images = [];
         project.audio = [];
         project.updatedAt = startedAt;
-        await window.electronAPI.project.save(project);
+        await projectClient.save(project);
         setProjectSafe(project);
       }
       project.article = {
@@ -537,7 +538,7 @@ export function ArticleInputPage() {
           project.usage = [...(project.usage ?? []), scriptUsage];
         }
         project.updatedAt = new Date().toISOString();
-        await window.electronAPI.project.save(project);
+        await projectClient.save(project);
         setProjectSafe(project);
         steps = computeStepState(project);
         await updateAutoStatus(project, {
@@ -854,7 +855,7 @@ export function ArticleInputPage() {
         }
 
         project.updatedAt = now;
-        await window.electronAPI.project.save(project);
+        await projectClient.save(project);
         setProjectSafe(project);
 
         steps = computeStepState(project);
@@ -915,7 +916,7 @@ export function ArticleInputPage() {
         reportInfo('自動生成をキャンセルしました。', 'キャンセル');
         if (projectId) {
           try {
-            const latest = await window.electronAPI.project.load(projectId);
+            const latest = await projectClient.load(projectId);
             await updateAutoStatus(latest, {
               running: false,
               step: 'キャンセル',
@@ -930,7 +931,7 @@ export function ArticleInputPage() {
         reportError(message, '自動生成に失敗しました');
         if (projectId) {
           try {
-            const latest = await window.electronAPI.project.load(projectId);
+            const latest = await projectClient.load(projectId);
             await updateAutoStatus(latest, {
               running: false,
               step: 'エラー',
@@ -954,7 +955,7 @@ export function ArticleInputPage() {
     autoCancelRef.current = true;
     setAutoStatusSafe('キャンセル中...');
     try {
-      const latest = await window.electronAPI.project.load(projectId);
+      const latest = await projectClient.load(projectId);
       if (latest.autoGenerationStatus?.running) {
         const now = new Date().toISOString();
         latest.autoGenerationStatus = {
@@ -965,7 +966,7 @@ export function ArticleInputPage() {
           cancelRequested: true,
         };
         latest.updatedAt = now;
-        await window.electronAPI.project.save(latest);
+        await projectClient.save(latest);
         setProjectSafe(latest);
       }
       await Promise.allSettled([
@@ -989,6 +990,7 @@ export function ArticleInputPage() {
   const currentAutoStatus = autoStatus ?? project?.autoGenerationStatus?.step;
 
   const handleImportedText = (title: string, text: string) => {
+    setProject((previous) => previous ? { ...previous, article: { ...previous.article, title: previous.article.title.trim() ? previous.article.title : title, bodyText: text } } : previous);
     setArticleData((prev) => ({
       ...prev,
       title: prev.title && prev.title.trim().length > 0 ? prev.title : title,
@@ -998,6 +1000,7 @@ export function ArticleInputPage() {
 
   const handleImagesAdded = (added: ImageAsset[], addedBlobUrls: Map<string, string>) => {
     setImages((prev) => [...prev, ...added]);
+    setProject((previous) => previous ? { ...previous, article: { ...previous.article, importedImages: [...previous.article.importedImages, ...added] } } : previous);
     setBlobUrls((prev) => {
       const next = new Map(prev);
       for (const [id, url] of addedBlobUrls.entries()) {
@@ -1009,6 +1012,7 @@ export function ArticleInputPage() {
 
   const handleImageRemoved = (imageId: string) => {
     setImages((prev) => prev.filter((image) => image.id !== imageId));
+    setProject((previous) => previous ? { ...previous, article: { ...previous.article, importedImages: previous.article.importedImages.filter((image) => image.id !== imageId) } } : previous);
     setBlobUrls((prev) => {
       const next = new Map(prev);
       const url = next.get(imageId);
@@ -1242,6 +1246,8 @@ export function ArticleInputPage() {
 
             <Card title="記事情報" subtitle="必須項目を入力してスクリプトを生成">
               <ArticleInput
+                onChange={(data) => { setArticleData(data); setProject((previous) => previous ? { ...previous, article: { ...previous.article, ...data, importedImages: images } } : previous); }}
+                onSaveDraft={() => { if (projectId) void projectClient.flush(projectId).catch((error) => setError(String(error))); }}
                 defaultValues={articleData}
                 onSubmit={handleSubmit}
                 onAutoSubmit={handleAutoResume}

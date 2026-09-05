@@ -1,4 +1,4 @@
-import { app, BrowserWindow, protocol } from 'electron';
+import { app, BrowserWindow, protocol, ipcMain } from 'electron';
 import * as fs from 'node:fs';
 import * as fsPromises from 'node:fs/promises';
 import { Readable } from 'node:stream';
@@ -148,7 +148,21 @@ function createWindow(): void {
   mainWindow.once('ready-to-show', revealWindow);
   mainWindow.webContents.once('did-finish-load', revealWindow);
 
+  let closeReady = false;
+  let flushPending = false;
+  const flushed = (event: Electron.IpcMainEvent, success: boolean) => {
+    if (event.sender !== mainWindow?.webContents || !flushPending) return;
+    flushPending = false;
+    if (success) { closeReady = true; mainWindow?.close(); }
+  };
+  ipcMain.on('project:flushed', flushed);
+  mainWindow.on('close', (event) => {
+    if (closeReady || mainWindow?.webContents.isDestroyed()) return;
+    event.preventDefault();
+    if (!flushPending) { flushPending = true; mainWindow?.webContents.send('project:flush'); }
+  });
   mainWindow.on('closed', () => {
+    ipcMain.removeListener('project:flushed', flushed);
     mainWindow = null;
   });
 }

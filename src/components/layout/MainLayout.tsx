@@ -1,4 +1,5 @@
 import { Outlet } from 'react-router-dom';
+import { SaveStatus } from './SaveStatus';
 import { Sidebar } from './Sidebar';
 
 export function MainLayout() {
@@ -6,6 +7,7 @@ export function MainLayout() {
     <div className="flex h-screen w-full overflow-hidden bg-[var(--nv-color-canvas)]">
       <Sidebar />
       <main className="flex min-w-0 flex-1 flex-col overflow-hidden">
+        <SaveStatus />
         <Outlet />
       </main>
     </div>

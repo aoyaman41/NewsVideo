@@ -1,3 +1,4 @@
+import { projectClient, useProjectState } from '../stores/projectStore';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { Header, WorkflowNav } from '../components/layout';
@@ -58,7 +59,7 @@ export function VideoManagePage() {
   const navigate = useNavigate();
   const toast = useToast();
 
-  const [project, setProject] = useState<Project | null>(null);
+  const [project, setProject] = useProjectState(projectId);
   const [settings, setSettings] = useState<Settings | null>(null);
   const [selectedPartId, setSelectedPartId] = useState<string | null>(null);
 
@@ -265,7 +266,7 @@ export function VideoManagePage() {
         setError(null);
 
         const [loadedProject, loadedSettings] = await Promise.all([
-          window.electronAPI.project.load(projectId),
+          projectClient.load(projectId),
           window.electronAPI.settings.get(),
         ]);
 
@@ -331,7 +332,7 @@ export function VideoManagePage() {
               autoGenerationStatus: nextStatus,
               updatedAt: now,
             };
-            await window.electronAPI.project.save(updatedProject);
+            await projectClient.save(updatedProject);
             setProject(updatedProject);
           }
         } else {
@@ -346,7 +347,7 @@ export function VideoManagePage() {
     };
 
     load();
-  }, [applyResolvedVideoAsset, clearVideoAsset, projectId, reportError, resolveExistingVideoPath]);
+  }, [applyResolvedVideoAsset, clearVideoAsset, projectId, reportError, resolveExistingVideoPath, setProject]);
 
   useEffect(() => {
     if (!project) return;
@@ -362,7 +363,7 @@ export function VideoManagePage() {
           presentationProfile,
           updatedAt,
         };
-        await window.electronAPI.project.save(updatedProject);
+        await projectClient.save(updatedProject);
         savedPresentationProfileRef.current = serialized;
         setProject(updatedProject);
       } catch (err) {
@@ -375,7 +376,7 @@ export function VideoManagePage() {
     }, 250);
 
     return () => window.clearTimeout(timeoutId);
-  }, [presentationProfile, project, reportError]);
+  }, [presentationProfile, project, reportError, setProject]);
 
   useEffect(() => {
     if (!projectId) return;
@@ -383,7 +384,7 @@ export function VideoManagePage() {
     const interval = setInterval(async () => {
       if (isRendering || isPreviewing) return;
       try {
-        const latest = await window.electronAPI.project.load(projectId);
+        const latest = await projectClient.load(projectId);
         if (cancelled) return;
         setProject({
           ...latest,
@@ -400,7 +401,7 @@ export function VideoManagePage() {
       cancelled = true;
       clearInterval(interval);
     };
-  }, [applyResolvedVideoAsset, projectId, resolveExistingVideoPath, isRendering, isPreviewing]);
+  }, [applyResolvedVideoAsset, projectId, resolveExistingVideoPath, isRendering, isPreviewing, setProject]);
 
   const handleSelectOutputDir = useCallback(async () => {
     if (!project) return;
@@ -473,7 +474,7 @@ export function VideoManagePage() {
           autoGenerationStatus: nextStatus,
           updatedAt: now,
         };
-        await window.electronAPI.project.save(updatedProject);
+        await projectClient.save(updatedProject);
         setProject(updatedProject);
       } catch {
         // ignore
@@ -487,7 +488,7 @@ export function VideoManagePage() {
     } finally {
       setIsRendering(false);
     }
-  }, [forceReloadVideoAsset, outputPath, presentationProfile, project, renderOptions, reportError, toast]);
+  }, [forceReloadVideoAsset, outputPath, presentationProfile, project, renderOptions, reportError, setProject, toast]);
 
   const handleCancel = useCallback(async () => {
     try {

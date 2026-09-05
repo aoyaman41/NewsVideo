@@ -28,13 +28,11 @@ export function ScriptEditor({
   isProcessing,
   lastCommentAppliedAt,
   autoSaveStatus,
-  autoSaveDelayMs = 1500,
   diffPreview,
 }: ScriptEditorProps) {
   const [showCommentInput, setShowCommentInput] = useState(false);
   const [comment, setComment] = useState('');
   const [showAppliedPulse, setShowAppliedPulse] = useState(false);
-  const autoSaveTimerRef = useRef<NodeJS.Timeout | null>(null);
   const prevPartIdRef = useRef<string | null>(null);
 
   const {
@@ -96,32 +94,10 @@ export function ScriptEditor({
   const estimateCharCount = (text?: string) => text?.length ?? 0;
   const estimateDuration = (text?: string) => Math.round((text?.length ?? 0) / 4);
 
-  const [watchedTitle = '', watchedSummary = '', watchedScript = ''] = useWatch({
+  const watchedScript = useWatch({
     control,
-    name: ['title', 'summary', 'scriptText'],
+    name: 'scriptText',
   });
-
-  useEffect(() => {
-    if (!isDirty || isProcessing) return;
-    if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current);
-    autoSaveTimerRef.current = setTimeout(() => {
-      onSave(part.id, { title: watchedTitle, summary: watchedSummary, scriptText: watchedScript });
-      reset({ title: watchedTitle, summary: watchedSummary, scriptText: watchedScript });
-    }, autoSaveDelayMs);
-    return () => {
-      if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current);
-    };
-  }, [
-    autoSaveDelayMs,
-    isDirty,
-    isProcessing,
-    onSave,
-    part.id,
-    reset,
-    watchedTitle,
-    watchedSummary,
-    watchedScript,
-  ]);
 
   const saveStatusLabel = useMemo(() => {
     if (!autoSaveStatus) return null;
@@ -157,7 +133,7 @@ export function ScriptEditor({
           </div>
         }
       >
-        <form className="space-y-3">
+        <form className="space-y-3" onChange={() => onSave(part.id, getValues())}>
           <div>
             <label className="mb-1 block text-xs font-semibold text-slate-600">
               パートタイトル

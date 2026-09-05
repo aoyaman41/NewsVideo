@@ -1,3 +1,4 @@
+import { projectClient, useProjectState } from '../../stores/projectStore';
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import type { Project } from '../../schemas';
@@ -95,7 +96,7 @@ export function WorkflowNav({
 }) {
   const navigate = useNavigate();
   const [costRates, setCostRates] = useState<CostRates>(DEFAULT_COST_RATES);
-  const [liveProject, setLiveProject] = useState<Project | null | undefined>(project);
+  const [liveProject] = useProjectState(projectId);
   const displayProject = liveProject ?? project;
   const summary = useMemo(
     () => (displayProject ? summarizeProjectProgress(displayProject) : null),
@@ -111,10 +112,6 @@ export function WorkflowNav({
     () => sumUsageCostUsd(usageRecords, costRates),
     [usageRecords, costRates]
   );
-
-  useEffect(() => {
-    setLiveProject(project);
-  }, [project]);
 
   useEffect(() => {
     let cancelled = false;
@@ -133,28 +130,7 @@ export function WorkflowNav({
     };
   }, []);
 
-  useEffect(() => {
-    if (!projectId) return;
-    let cancelled = false;
-
-    const tick = async () => {
-      try {
-        const latest = await window.electronAPI.project.load(projectId);
-        if (cancelled) return;
-        setLiveProject(latest);
-      } catch {
-        // noop
-      }
-    };
-
-    void tick();
-    const interval = setInterval(tick, 3000);
-
-    return () => {
-      cancelled = true;
-      clearInterval(interval);
-    };
-  }, [projectId]);
+  useEffect(() => { if (projectId) void projectClient.load(projectId).catch(() => {}); }, [projectId]);
 
   return (
     <nav

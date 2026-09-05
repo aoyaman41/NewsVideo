@@ -14,6 +14,13 @@ type AllowedEventChannel =
 contextBridge.exposeInMainWorld('electronAPI', {
   // プロジェクト操作
   project: {
+    onFlushRequested: (callback: () => void) => { ipcRenderer.on('project:flush', callback); return () => ipcRenderer.removeListener('project:flush', callback); },
+    finishFlush: (success: boolean) => ipcRenderer.send('project:flushed', success),
+    onChanged: (callback: (event: { id: string; revision?: number }) => void) => {
+      const listener = (_event: Electron.IpcRendererEvent, data: { id: string; revision?: number }) => callback(data);
+      ipcRenderer.on('project:changed', listener);
+      return () => ipcRenderer.removeListener('project:changed', listener);
+    },
     list: async () => {
       const list = await ipcRenderer.invoke('project:list');
       return Array.isArray(list) ? list : [];
@@ -53,6 +60,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // 画像生成
   image: {
+    importData: (bytes: ArrayBuffer, projectId: string) => ipcRenderer.invoke('image:importData', bytes, projectId),
     generate: (prompt: unknown, projectId: string) =>
       ipcRenderer.invoke('image:generate', prompt, projectId),
     generateBatch: (prompts: unknown[], projectId: string) =>

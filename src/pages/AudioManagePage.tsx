@@ -1,3 +1,4 @@
+import { projectClient, useProjectState } from '../stores/projectStore';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { Waveform } from '../components/audio';
@@ -71,7 +72,7 @@ export function AudioManagePage() {
   const { confirm } = useConfirm();
   const toast = useToast();
 
-  const [project, setProject] = useState<Project | null>(null);
+  const [project, setProject] = useProjectState(projectId);
   const [settings, setSettings] = useState<Settings>(defaultSettings);
   const [selectedPartId, setSelectedPartId] = useState<string | null>(null);
   const projectRef = useRef<Project | null>(null);
@@ -114,7 +115,7 @@ export function AudioManagePage() {
         setError(null);
 
         const [loadedProject, loadedSettings] = await Promise.all([
-          window.electronAPI.project.load(projectId),
+          projectClient.load(projectId),
           window.electronAPI.settings.get(),
         ]);
 
@@ -136,7 +137,7 @@ export function AudioManagePage() {
     };
 
     load();
-  }, [projectId, reportError]);
+  }, [projectId, reportError, setProject]);
 
   const selectedPart = useMemo(() => {
     return project?.parts.find((p) => p.id === selectedPartId) || null;
@@ -168,10 +169,10 @@ export function AudioManagePage() {
   }, [project?.presentationProfile, settings]);
 
   const saveProject = useCallback(async (updated: Project) => {
-    await window.electronAPI.project.save(updated);
+    await projectClient.save(updated);
     projectRef.current = updated;
     setProject(updated);
-  }, []);
+  }, [setProject]);
 
   const applyAudioToPart = useCallback(
     async (partId: string, audio: AudioAsset, usageRecord?: UsageRecord | null) => {

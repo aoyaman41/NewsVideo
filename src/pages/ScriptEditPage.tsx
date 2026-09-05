@@ -1,11 +1,11 @@
+import { projectClient, useProjectState, useProjectSaveStatus } from '../stores/projectStore';
 import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useParams } from 'react-router-dom';
 import { Header, WorkflowNav } from '../components/layout';
 import { PartList, ScriptEditor } from '../components/script';
 import { Badge, Button, Card, EmptyState, ErrorDetailPanel, StatusChip, useToast } from '../components/ui';
-import { useAutoSave } from '../hooks';
-import type { Project, PartEdit } from '../schemas';
+import type { PartEdit } from '../schemas';
 import { createNewPart } from '../schemas';
 import { createOpenAIUsageRecord } from '../utils/usage';
 
@@ -14,7 +14,7 @@ export function ScriptEditPage() {
   const navigate = useNavigate();
   const toast = useToast();
 
-  const [project, setProject] = useState<Project | null>(null);
+  const [project, setProject] = useProjectState(projectId);
   const [selectedPartId, setSelectedPartId] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isProcessing, setIsProcessing] = useState(false);
@@ -38,7 +38,7 @@ export function ScriptEditPage() {
     const loadProject = async () => {
       setIsLoading(true);
       try {
-        const loaded = await window.electronAPI.project.load(projectId);
+        const loaded = await projectClient.load(projectId);
         setProject(loaded);
         if (loaded.parts.length > 0) {
           setSelectedPartId(loaded.parts[0].id);
@@ -52,22 +52,10 @@ export function ScriptEditPage() {
     };
 
     void loadProject();
-  }, [projectId, reportError]);
+  }, [projectId, reportError, setProject]);
 
-  const handleSave = useCallback(async (data: Project) => {
-    try {
-      await window.electronAPI.project.save(data);
-    } catch (err) {
-      console.error('Auto-save failed:', err);
-    }
-  }, []);
-
-  const autoSaveState = useAutoSave({
-    data: project!,
-    onSave: handleSave,
-    interval: 1500,
-    enabled: !!project,
-  });
+  const saveStatus = useProjectSaveStatus(projectId);
+  const autoSaveState = { isDirty: saveStatus.dirty, isSaving: saveStatus.saving, lastSavedAt: saveStatus.lastSavedAt ? new Date(saveStatus.lastSavedAt) : null, saveNow: saveStatus.retry };
 
   const handleAddPart = useCallback(async () => {
     if (!project) return;
@@ -81,12 +69,12 @@ export function ScriptEditPage() {
     setProject(updatedProject);
     setSelectedPartId(newPart.id);
     try {
-      await window.electronAPI.project.save(updatedProject);
+      await projectClient.save(updatedProject);
     } catch (err) {
       console.error('Failed to save project after adding part:', err);
       reportError('パート追加の保存に失敗しました');
     }
-  }, [project, reportError]);
+  }, [project, reportError, setProject]);
 
   const handleDeletePart = useCallback(
     async (partId: string) => {
@@ -107,13 +95,13 @@ export function ScriptEditPage() {
         setSelectedPartId(updatedParts.length > 0 ? updatedParts[0].id : null);
       }
       try {
-        await window.electronAPI.project.save(updatedProject);
+        await projectClient.save(updatedProject);
       } catch (err) {
         console.error('Failed to save project after deleting part:', err);
         reportError('パート削除の保存に失敗しました');
       }
     },
-    [project, reportError, selectedPartId]
+    [project, reportError, selectedPartId, setProject]
   );
 
   const handleReorderParts = useCallback(
@@ -132,13 +120,13 @@ export function ScriptEditPage() {
       };
       setProject(updatedProject);
       try {
-        await window.electronAPI.project.save(updatedProject);
+        await projectClient.save(updatedProject);
       } catch (err) {
         console.error('Failed to save project after reordering parts:', err);
         reportError('パート並び替えの保存に失敗しました');
       }
     },
-    [project, reportError]
+    [project, reportError, setProject]
   );
 
   const handleSavePart = useCallback(
@@ -164,7 +152,7 @@ export function ScriptEditPage() {
         updatedAt: new Date().toISOString(),
       });
     },
-    [project]
+    [project, setProject]
   );
 
   const handleRegenerateWithComment = useCallback(
@@ -223,7 +211,7 @@ export function ScriptEditPage() {
         setIsProcessing(false);
       }
     },
-    [project, reportError]
+    [project, reportError, setProject]
   );
 
   const selectedPart = project?.parts.find((p) => p.id === selectedPartId) ?? null;

@@ -19,6 +19,7 @@ export interface ProjectListItem {
   createdAt: string;
   updatedAt: string;
   path: string;
+  storageError?: string;
   articleTitle?: string;
   thumbnailImageId?: string;
   summary?: ProjectProgressSummary;

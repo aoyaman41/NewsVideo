@@ -1,4 +1,4 @@
-import { ipcMain, app, safeStorage } from 'electron';
+import { ipcMain, app, safeStorage, nativeImage } from 'electron';
 import { createReadStream } from 'node:fs';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
@@ -22,6 +22,7 @@ import {
 } from '../../shared/project/imageStylePresets';
 import { sanitizeImagePromptForRendering } from '../../shared/utils/imagePromptSanitizer';
 import { getOpenAIImageDimensions } from '../utils/openaiImage';
+import { ProjectRepository } from '../project/repository';
 import { logger } from '../utils/logger';
 
 // シークレットファイルのパス
@@ -393,16 +394,7 @@ async function resolveStyleReferenceImages(
     : [];
   if (ids.length === 0) return [];
 
-  const [generatedImages, article] = await Promise.all([
-    fs
-      .readFile(path.join(projectPath, 'images.json'), 'utf-8')
-      .then((content) => JSON.parse(content) as ImageAsset[])
-      .catch(() => []),
-    fs
-      .readFile(path.join(projectPath, 'article.json'), 'utf-8')
-      .then((content) => JSON.parse(content) as { importedImages?: ImageAsset[] })
-      .catch(() => ({ importedImages: [] })),
-  ]);
+  const { images: generatedImages, article } = await new ProjectRepository(getProjectsPath()).readDirectory(projectPath);
 
   const byId = new Map<string, ImageAsset>();
   for (const image of generatedImages) byId.set(image.id, image);
@@ -1061,3 +1053,19 @@ ipcMain.handle(
     return imageAsset;
   }
 );
+
+// Browser File objects no longer expose an absolute path in current Electron.
+ipcMain.handle('image:importData', async (_, bytes: ArrayBuffer, projectId: string): Promise<ImageAsset> => {
+  if (!(bytes instanceof ArrayBuffer) || bytes.byteLength === 0 || bytes.byteLength > 50 * 1024 * 1024) throw new Error('画像は50MB以内で指定してください。');
+  const projectPath = await getProjectPath(projectId);
+  const decoded = nativeImage.createFromBuffer(Buffer.from(bytes));
+  if (decoded.isEmpty()) throw new Error('対応していない画像形式です。PNGまたはJPEG画像を選択してください。');
+  const dimensions = decoded.getSize();
+  if (dimensions.width * dimensions.height > 40_000_000) throw new Error('画像の画素数が大きすぎます。');
+  const id = randomUUID();
+  const data = decoded.toPNG();
+  const filePath = path.join(projectPath, 'images', 'imported', `${id}.png`);
+  await fs.mkdir(path.dirname(filePath), { recursive: true });
+  await fs.writeFile(filePath, data);
+  return { id, filePath, sourceType: 'imported', metadata: { ...dimensions, mimeType: 'image/png', fileSize: data.byteLength, createdAt: new Date().toISOString(), tags: [] } };
+});

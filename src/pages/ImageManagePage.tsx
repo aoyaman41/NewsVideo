@@ -1,3 +1,4 @@
+import { projectClient, useProjectState } from '../stores/projectStore';
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { Header, WorkflowNav } from '../components/layout';
@@ -41,7 +42,7 @@ export function ImageManagePage() {
   const { confirm } = useConfirm();
   const toast = useToast();
 
-  const [project, setProject] = useState<Project | null>(null);
+  const [project, setProject] = useProjectState(projectId);
   const [selectedPartId, setSelectedPartId] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -115,7 +116,7 @@ export function ImageManagePage() {
 
       try {
         setIsLoading(true);
-        const loadedProject = await window.electronAPI.project.load(projectId);
+        const loadedProject = await projectClient.load(projectId);
         setProject(loadedProject);
 
         // 最初のパートを選択
@@ -134,7 +135,7 @@ export function ImageManagePage() {
     };
 
     loadProject();
-  }, [projectId, reportError]);
+  }, [projectId, reportError, setProject]);
 
   // 画像プロンプト生成
   const handleGeneratePrompts = useCallback(async () => {
@@ -164,7 +165,7 @@ export function ImageManagePage() {
         updatedAt: new Date().toISOString(),
       };
 
-      await window.electronAPI.project.save(updatedProject);
+      await projectClient.save(updatedProject);
       setProject(updatedProject);
     } catch (err) {
       console.error('Failed to generate prompts:', err);
@@ -172,7 +173,7 @@ export function ImageManagePage() {
     } finally {
       setIsGeneratingPrompts(false);
     }
-  }, [project, reportError]);
+  }, [project, reportError, setProject]);
 
   const handleGeneratePromptForTarget = useCallback(
     async (targetId: string) => {
@@ -202,7 +203,7 @@ export function ImageManagePage() {
           updatedAt: new Date().toISOString(),
         };
 
-        await window.electronAPI.project.save(updatedProject);
+        await projectClient.save(updatedProject);
         setProject(updatedProject);
       } catch (err) {
         console.error('Failed to generate prompt:', err);
@@ -211,7 +212,7 @@ export function ImageManagePage() {
         setIsGeneratingSinglePrompt(false);
       }
     },
-    [project, reportError]
+    [project, reportError, setProject]
   );
 
   // 画像生成
@@ -230,7 +231,7 @@ export function ImageManagePage() {
             : [...project.prompts, prompt],
           updatedAt: new Date().toISOString(),
         };
-        await window.electronAPI.project.save(savedPromptProject);
+        await projectClient.save(savedPromptProject);
         setProject(savedPromptProject);
 
         const promptWithReferences: ImagePrompt = {
@@ -259,7 +260,7 @@ export function ImageManagePage() {
           updatedAt: now,
         };
 
-        await window.electronAPI.project.save(updatedProject);
+        await projectClient.save(updatedProject);
         setProject(updatedProject);
       } catch (err) {
         console.error('Failed to generate image:', err);
@@ -268,7 +269,7 @@ export function ImageManagePage() {
         setIsGeneratingImage(false);
       }
     },
-    [project, projectId, reportError]
+    [project, projectId, reportError, setProject]
   );
 
   // 全パートの画像を一括生成
@@ -333,7 +334,7 @@ export function ImageManagePage() {
         updatedAt: now,
       };
 
-      await window.electronAPI.project.save(updatedProject);
+      await projectClient.save(updatedProject);
       setProject(updatedProject);
       if (batchResult.errors.length > 0) {
         const head = formatImageBatchErrors(batchResult.errors, updatedProject);
@@ -351,7 +352,7 @@ export function ImageManagePage() {
       setIsGeneratingImageBatch(false);
       setIsGeneratingImage(false);
     }
-  }, [project, projectId, activePrompts, promptIdsWithAnyImage, reportError, toast]);
+  }, [project, projectId, activePrompts, promptIdsWithAnyImage, toast, setProject, reportError]);
 
   const handleCancelImageBatch = useCallback(async () => {
     if (!projectId) return;
@@ -414,7 +415,7 @@ export function ImageManagePage() {
           updatedAt: now,
         };
 
-        await window.electronAPI.project.save(updatedProject);
+        await projectClient.save(updatedProject);
         setProject(updatedProject);
         toast.success('画像を削除しました');
       } catch (err) {
@@ -422,7 +423,7 @@ export function ImageManagePage() {
         reportError(err instanceof Error ? err.message : '画像の削除に失敗しました');
       }
     },
-    [confirm, project, reportError, toast]
+    [confirm, project, reportError, setProject, toast]
   );
 
   // プロンプト更新
@@ -436,10 +437,10 @@ export function ImageManagePage() {
         updatedAt: new Date().toISOString(),
       };
 
-      await window.electronAPI.project.save(updatedProject);
+      await projectClient.save(updatedProject);
       setProject(updatedProject);
     },
-    [project]
+    [project, setProject]
   );
 
   const handleToggleStyleReference = useCallback(
@@ -460,10 +461,10 @@ export function ImageManagePage() {
         updatedAt: new Date().toISOString(),
       };
 
-      await window.electronAPI.project.save(updatedProject);
+      await projectClient.save(updatedProject);
       setProject(updatedProject);
     },
-    [project]
+    [project, setProject]
   );
 
   const handleUpdateStyleReferenceNote = useCallback(
@@ -479,10 +480,10 @@ export function ImageManagePage() {
         updatedAt: new Date().toISOString(),
       };
 
-      await window.electronAPI.project.save(updatedProject);
+      await projectClient.save(updatedProject);
       setProject(updatedProject);
     },
-    [project]
+    [project, setProject]
   );
 
   const handleImportStyleReference = useCallback(async () => {
@@ -513,14 +514,14 @@ export function ImageManagePage() {
         updatedAt: new Date().toISOString(),
       };
 
-      await window.electronAPI.project.save(updatedProject);
+      await projectClient.save(updatedProject);
       setProject(updatedProject);
       toast.success('スタイル参照画像を追加しました');
     } catch (err) {
       console.error('Failed to import style reference:', err);
       reportError(err instanceof Error ? err.message : 'スタイル参照画像の追加に失敗しました');
     }
-  }, [project, projectId, reportError, toast]);
+  }, [project, projectId, reportError, setProject, toast]);
 
   // 選択中のパート
   const selectedPart = project?.parts.find((p) => p.id === selectedPartId);
@@ -564,14 +565,14 @@ export function ImageManagePage() {
           updatedAt: now,
         };
 
-        await window.electronAPI.project.save(updatedProject);
+        await projectClient.save(updatedProject);
         setProject(updatedProject);
       } catch (err) {
         console.error('Failed to update panel images:', err);
         reportError(err instanceof Error ? err.message : '画像の割り当て更新に失敗しました');
       }
     },
-    [project, reportError]
+    [project, reportError, setProject]
   );
 
   if (isLoading) {

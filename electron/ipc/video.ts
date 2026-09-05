@@ -1,3 +1,4 @@
+import { ProjectRepository } from '../project/repository';
 import { BrowserWindow, app, dialog, ipcMain } from 'electron';
 import * as fs from 'fs/promises';
 import * as os from 'os';
@@ -860,13 +861,8 @@ async function findProjectByPartId(partId: string): Promise<{ projectPath: strin
     if (!entry.isDirectory() || !entry.name.endsWith('.newsproj')) continue;
     const projectPath = path.join(projectsDir, entry.name);
     try {
-      const [meta, article, parts, images, audio] = await Promise.all([
-        fs.readFile(path.join(projectPath, 'project.json'), 'utf-8').then(JSON.parse),
-        fs.readFile(path.join(projectPath, 'article.json'), 'utf-8').then(JSON.parse),
-        fs.readFile(path.join(projectPath, 'parts.json'), 'utf-8').then(JSON.parse),
-        fs.readFile(path.join(projectPath, 'images.json'), 'utf-8').then(JSON.parse),
-        fs.readFile(path.join(projectPath, 'audio.json'), 'utf-8').then(JSON.parse),
-      ]);
+      const meta = await new ProjectRepository(projectsDir).readDirectory(projectPath);
+      const { article, parts, images, audio } = meta;
 
       const hit = (parts as PartLike[]).find((p) => p.id === partId);
       if (!hit) continue;
