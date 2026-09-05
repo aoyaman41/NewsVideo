@@ -8,18 +8,23 @@ import {
   IMAGE_MODELS,
   IMAGE_RESOLUTIONS,
   OPENAI_REASONING_EFFORTS,
+  OPENAI_TEXT_COMPLETION_MODELS,
   TEXT_COMPLETION_MODELS,
   getDefaultGeminiThinkingLevel,
   getDefaultOpenAIReasoningEffort,
+  getCommonSupportedOpenAIReasoningEfforts,
   isGeminiThinkingLevel,
   isImageModel,
   isImageResolution,
   isOpenAIReasoningEffort,
+  isOpenAITextCompletionModel,
   isTextCompletionModel,
   type GeminiThinkingLevel,
   type ImageModel,
   type ImageResolution,
   type OpenAIReasoningEffort,
+  type SelectableOpenAIReasoningEffort,
+  type OpenAITextCompletionModel,
   type TextCompletionModel,
 } from '../constants/models';
 
@@ -102,6 +107,35 @@ export function parseSettingsUpdate(input: unknown): SettingsUpdate {
   return settingsUpdateSchema.parse(input);
 }
 
+function resolveSettingsOpenAIModel(settings: {
+  scriptTextModel: TextCompletionModel;
+  imagePromptTextModel: TextCompletionModel;
+}): OpenAITextCompletionModel {
+  if (isOpenAITextCompletionModel(settings.scriptTextModel)) {
+    return settings.scriptTextModel;
+  }
+  if (isOpenAITextCompletionModel(settings.imagePromptTextModel)) {
+    return settings.imagePromptTextModel;
+  }
+  if (isOpenAITextCompletionModel(DEFAULT_SCRIPT_TEXT_MODEL)) {
+    return DEFAULT_SCRIPT_TEXT_MODEL;
+  }
+  return OPENAI_TEXT_COMPLETION_MODELS[0];
+}
+
+function getCommonSettingsOpenAIReasoningEfforts(settings: {
+  scriptTextModel: TextCompletionModel;
+  imagePromptTextModel: TextCompletionModel;
+}): readonly SelectableOpenAIReasoningEffort[] {
+  const models = [settings.scriptTextModel, settings.imagePromptTextModel].filter(
+    (model, index, values): model is OpenAITextCompletionModel =>
+      isOpenAITextCompletionModel(model) && values.indexOf(model) === index
+  );
+  if (models.length === 0) return [];
+
+  return getCommonSupportedOpenAIReasoningEfforts(models);
+}
+
 export function normalizeSettings(input: unknown): AppSettings {
   const raw = input && typeof input === 'object' ? (input as Record<string, unknown>) : {};
   const merged = { ...DEFAULT_SETTINGS, ...(raw as Partial<AppSettings>) };
@@ -131,10 +165,19 @@ export function normalizeSettings(input: unknown): AppSettings {
   if (!isTextCompletionModel(merged.imagePromptTextModel)) {
     merged.imagePromptTextModel = DEFAULT_SETTINGS.imagePromptTextModel;
   }
-  if (!isOpenAIReasoningEffort(merged.openaiReasoningEffort)) {
-    merged.openaiReasoningEffort = DEFAULT_SETTINGS.openaiReasoningEffort;
-  } else if (merged.openaiReasoningEffort === 'default') {
-    merged.openaiReasoningEffort = getDefaultOpenAIReasoningEffort('gpt-5.2');
+  const openAIModel = resolveSettingsOpenAIModel(merged);
+  const commonOpenAIEfforts = getCommonSettingsOpenAIReasoningEfforts(merged);
+  const savedOpenAIEffort = merged.openaiReasoningEffort;
+  if (
+    !isOpenAIReasoningEffort(savedOpenAIEffort) ||
+    savedOpenAIEffort === 'default' ||
+    (commonOpenAIEfforts.length > 0 &&
+      !commonOpenAIEfforts.includes(savedOpenAIEffort as SelectableOpenAIReasoningEffort))
+  ) {
+    const modelDefault = getDefaultOpenAIReasoningEffort(openAIModel);
+    merged.openaiReasoningEffort = commonOpenAIEfforts.includes(modelDefault)
+      ? modelDefault
+      : (commonOpenAIEfforts[0] ?? modelDefault);
   }
   if (!isGeminiThinkingLevel(merged.geminiThinkingLevel)) {
     merged.geminiThinkingLevel = DEFAULT_SETTINGS.geminiThinkingLevel;

@@ -12,7 +12,10 @@ type TokenUsage = {
   inputTokens?: number;
   outputTokens?: number;
   cachedInputTokens?: number;
+  cacheWriteTokens?: number;
+  reasoningTokens?: number;
   totalTokens?: number;
+  requestCount?: number;
   model?: string;
   provider?: 'openai' | 'gemini';
 };
@@ -51,7 +54,16 @@ export function createOpenAIUsageRecord(
     operation,
     inputTokens: clampNonNegative(usage.inputTokens),
     outputTokens: clampNonNegative(usage.outputTokens),
-    cachedInputTokens: clampNonNegative(usage.cachedInputTokens),
+    ...(usage.cachedInputTokens !== undefined
+      ? { cachedInputTokens: clampNonNegative(usage.cachedInputTokens) }
+      : {}),
+    ...(usage.cacheWriteTokens !== undefined
+      ? { cacheWriteTokens: clampNonNegative(usage.cacheWriteTokens) }
+      : {}),
+    ...(usage.reasoningTokens !== undefined
+      ? { reasoningTokens: clampNonNegative(usage.reasoningTokens) }
+      : {}),
+    requestCount: Math.max(1, clampNonNegative(usage.requestCount) || 1),
     createdAt: new Date().toISOString(),
   };
 }
@@ -78,7 +90,7 @@ export function createGeminiImageUsageRecord(details: GeminiImageUsageDetails): 
   if (count <= 0) return null;
   return {
     id: crypto.randomUUID(),
-    provider: 'gemini',
+    provider: details.model === 'gpt-image-2' ? 'openai' : 'gemini',
     category: 'image',
     model: details.model || DEFAULT_IMAGE_MODEL,
     operation: details.operation,
@@ -98,7 +110,9 @@ export function createGeminiImageUsageRecordFromAssets(
 ): UsageRecord | null {
   const generated = images
     .map((image) => image.metadata.generation)
-    .filter((metadata): metadata is NonNullable<ImageAsset['metadata']['generation']> => !!metadata);
+    .filter(
+      (metadata): metadata is NonNullable<ImageAsset['metadata']['generation']> => !!metadata
+    );
 
   if (generated.length === 0) {
     return createGeminiImageUsageRecord({
@@ -110,7 +124,9 @@ export function createGeminiImageUsageRecordFromAssets(
   const first = generated[0];
   const sameModel = generated.every((metadata) => metadata.model === first.model);
   const sameResolution = generated.every((metadata) => metadata.resolution === first.resolution);
-  const sameSizeTier = generated.every((metadata) => metadata.imageSizeTier === first.imageSizeTier);
+  const sameSizeTier = generated.every(
+    (metadata) => metadata.imageSizeTier === first.imageSizeTier
+  );
   const sameAspectRatio = generated.every((metadata) => metadata.aspectRatio === first.aspectRatio);
 
   return createGeminiImageUsageRecord({

@@ -77,7 +77,7 @@
     "@google/genai": "^1.43.0",
     "@hookform/resolvers": "^5.2.2",
     "mammoth": "^1.11.0",
-    "openai": "^6.10.0",
+    "openai": "^6.46.0",
     "react": "^19.2.1",
     "react-dom": "^19.2.1",
     "react-dropzone": "^14.3.8",

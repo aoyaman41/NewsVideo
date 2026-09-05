@@ -8,11 +8,11 @@ import {
   DEFAULT_IMAGE_PROMPT_TEXT_MODEL,
   DEFAULT_IMAGE_RESOLUTION,
   DEFAULT_SCRIPT_TEXT_MODEL,
+  getCommonSupportedOpenAIReasoningEfforts,
   getDefaultGeminiThinkingLevel,
   getDefaultOpenAIReasoningEffort,
   getImageModelLabel,
   getSupportedGeminiThinkingLevels,
-  getSupportedOpenAIReasoningEfforts,
   getTextCompletionModelLabel,
   IMAGE_MODELS,
   IMAGE_RESOLUTION_LABELS,
@@ -21,7 +21,9 @@ import {
   type GeminiThinkingLevel,
   type ImageModel,
   type ImageResolution,
+  type OpenAITextCompletionModel,
   type OpenAIReasoningEffort,
+  type SelectableOpenAIReasoningEffort,
   isGeminiTextCompletionModel,
   isOpenAITextCompletionModel,
   type TextCompletionModel,
@@ -93,9 +95,19 @@ function formatOpenAIReasoningLabel(value: OpenAIReasoningEffort): string {
     low: '低',
     medium: '中',
     high: '高',
-    xhigh: '最高',
+    xhigh: '非常に高い',
+    max: '最大',
   };
   return value === 'default' ? 'モデル既定値' : labels[value];
+}
+
+function getTextCompletionModelDescription(model: TextCompletionModel): string | null {
+  const descriptions: Partial<Record<TextCompletionModel, string>> = {
+    'gpt-5.6-sol': '最高品質。複雑な構成や品質重視の生成に向いています。',
+    'gpt-5.6-terra': '品質とコストのバランスを重視する標準的な生成に向いています。',
+    'gpt-5.6-luna': '速度とコストを重視する大量生成に向いています。',
+  };
+  return descriptions[model] ?? null;
 }
 
 function formatGeminiThinkingLabel(value: GeminiThinkingLevel): string {
@@ -293,44 +305,64 @@ export function SettingsPage() {
   const serviceLabels: Record<ApiKeyService, { name: string; description: string; url: string }> = {
     openai: {
       name: 'OpenAI',
-      description: '選択した文章生成モデルがOpenAI系の場合に使用します',
+      description: 'OpenAI系の文章生成とGPT Image 2の画像生成に使用します',
       url: 'https://platform.openai.com/',
     },
     google_ai: {
       name: 'Google AI',
-      description: '画像生成、Gemini系の文章生成、Gemini TTS に使用します',
+      description: 'Gemini系の画像・文章生成、Gemini TTS に使用します',
       url: 'https://aistudio.google.com/',
     },
   };
 
-  const activeOpenAIModel = useMemo(() => {
-    if (isOpenAITextCompletionModel(settings.scriptTextModel)) return settings.scriptTextModel;
-    if (isOpenAITextCompletionModel(settings.imagePromptTextModel)) return settings.imagePromptTextModel;
-    return null;
+  const activeOpenAIModels = useMemo(() => {
+    const models: OpenAITextCompletionModel[] = [];
+    if (isOpenAITextCompletionModel(settings.scriptTextModel)) {
+      models.push(settings.scriptTextModel);
+    }
+    if (
+      isOpenAITextCompletionModel(settings.imagePromptTextModel) &&
+      !models.includes(settings.imagePromptTextModel)
+    ) {
+      models.push(settings.imagePromptTextModel);
+    }
+    return models;
   }, [settings.imagePromptTextModel, settings.scriptTextModel]);
 
   const activeGeminiModel = useMemo(() => {
     if (isGeminiTextCompletionModel(settings.scriptTextModel)) return settings.scriptTextModel;
-    if (isGeminiTextCompletionModel(settings.imagePromptTextModel)) return settings.imagePromptTextModel;
+    if (isGeminiTextCompletionModel(settings.imagePromptTextModel))
+      return settings.imagePromptTextModel;
     return null;
   }, [settings.imagePromptTextModel, settings.scriptTextModel]);
+
+  const openAIReasoningOptions = useMemo((): readonly SelectableOpenAIReasoningEffort[] => {
+    return getCommonSupportedOpenAIReasoningEfforts(activeOpenAIModels);
+  }, [activeOpenAIModels]);
 
   useEffect(() => {
     setSettings((prev) => {
       let changed = false;
       const next = { ...prev };
 
-      if (activeOpenAIModel) {
-        const supported = getSupportedOpenAIReasoningEfforts(activeOpenAIModel);
-        if (!supported.includes(prev.openaiReasoningEffort as Exclude<OpenAIReasoningEffort, 'default'>)) {
-          next.openaiReasoningEffort = getDefaultOpenAIReasoningEffort(activeOpenAIModel);
+      if (activeOpenAIModels.length > 0) {
+        const effort = prev.openaiReasoningEffort as Exclude<OpenAIReasoningEffort, 'default'>;
+        if (!openAIReasoningOptions.includes(effort)) {
+          const selectedModelDefault = getDefaultOpenAIReasoningEffort(activeOpenAIModels[0]);
+          next.openaiReasoningEffort = openAIReasoningOptions.includes(selectedModelDefault)
+            ? selectedModelDefault
+            : (openAIReasoningOptions[0] ?? selectedModelDefault);
           changed = true;
         }
       }
 
       if (activeGeminiModel) {
         const supported = getSupportedGeminiThinkingLevels(activeGeminiModel);
-        if (!supported.includes(prev.geminiThinkingLevel as Exclude<GeminiThinkingLevel, 'default' | 'medium'>)) {
+        if (
+          !supported.includes(
+            prev.geminiThinkingLevel as Exclude<GeminiThinkingLevel, 'default' | 'medium'>
+          )
+        ) {
           next.geminiThinkingLevel = getDefaultGeminiThinkingLevel(activeGeminiModel);
           changed = true;
         }
@@ -338,16 +370,16 @@ export function SettingsPage() {
 
       return changed ? next : prev;
     });
-  }, [activeGeminiModel, activeOpenAIModel]);
+  }, [activeGeminiModel, activeOpenAIModels, openAIReasoningOptions]);
 
   const scriptOpenAIReasoningOptions = isOpenAITextCompletionModel(settings.scriptTextModel)
-    ? getSupportedOpenAIReasoningEfforts(settings.scriptTextModel)
+    ? openAIReasoningOptions
     : [];
   const scriptGeminiThinkingOptions = isGeminiTextCompletionModel(settings.scriptTextModel)
     ? getSupportedGeminiThinkingLevels(settings.scriptTextModel)
     : [];
   const imageOpenAIReasoningOptions = isOpenAITextCompletionModel(settings.imagePromptTextModel)
-    ? getSupportedOpenAIReasoningEfforts(settings.imagePromptTextModel)
+    ? openAIReasoningOptions
     : [];
   const imageGeminiThinkingOptions = isGeminiTextCompletionModel(settings.imagePromptTextModel)
     ? getSupportedGeminiThinkingLevels(settings.imagePromptTextModel)
@@ -677,6 +709,11 @@ export function SettingsPage() {
                     <p className="mt-1 text-xs text-slate-500">
                       モデルID: {settings.scriptTextModel}
                     </p>
+                    {getTextCompletionModelDescription(settings.scriptTextModel) && (
+                      <p className="mt-1 text-xs text-slate-500">
+                        {getTextCompletionModelDescription(settings.scriptTextModel)}
+                      </p>
+                    )}
                   </div>
                   {isOpenAITextCompletionModel(settings.scriptTextModel) ? (
                     <div>
@@ -688,8 +725,8 @@ export function SettingsPage() {
                         onChange={(e) =>
                           setSettings((prev) => ({
                             ...prev,
-                            openaiReasoningEffort:
-                              e.target.value as Settings['openaiReasoningEffort'],
+                            openaiReasoningEffort: e.target
+                              .value as Settings['openaiReasoningEffort'],
                           }))
                         }
                         className="nv-input"
@@ -701,7 +738,7 @@ export function SettingsPage() {
                         ))}
                       </select>
                       <p className="mt-1 text-xs text-slate-500">
-                        選択中の {getTextCompletionModelLabel(settings.scriptTextModel)} で使える値だけを表示しています。
+                        現在選択中のOpenAIモデルで共通して使える値だけを表示しています。
                       </p>
                     </div>
                   ) : (
@@ -726,7 +763,8 @@ export function SettingsPage() {
                         ))}
                       </select>
                       <p className="mt-1 text-xs text-slate-500">
-                        選択中の {getTextCompletionModelLabel(settings.scriptTextModel)} で使える値だけを表示しています。
+                        選択中の {getTextCompletionModelLabel(settings.scriptTextModel)}{' '}
+                        で使える値だけを表示しています。
                       </p>
                     </div>
                   )}
@@ -778,7 +816,8 @@ export function SettingsPage() {
                       </span>
                     </div>
                     <p className="mt-2 text-xs text-slate-500">
-                      現在のアプリは Gemini TTS を既定の音声エンジンとして使用します。話し方の preset はプロジェクト設定側で切り替えます。
+                      現在のアプリは Gemini TTS を既定の音声エンジンとして使用します。話し方の
+                      preset はプロジェクト設定側で切り替えます。
                     </p>
                   </div>
                   <div className="rounded-[10px] border border-[var(--nv-color-border)] bg-slate-50 p-3">
@@ -787,7 +826,8 @@ export function SettingsPage() {
                       {settings.ttsSpeakingRate.toFixed(1)}x
                     </div>
                     <p className="mt-2 text-xs text-slate-500">
-                      Gemini TTS では話速の個別調整 UI をまだ提供していないため、この値を表示のみとしています。
+                      Gemini TTS では話速の個別調整 UI
+                      をまだ提供していないため、この値を表示のみとしています。
                     </p>
                   </div>
                 </div>
@@ -822,6 +862,11 @@ export function SettingsPage() {
                     <p className="mt-1 text-xs text-slate-500">
                       モデルID: {settings.imagePromptTextModel}
                     </p>
+                    {getTextCompletionModelDescription(settings.imagePromptTextModel) && (
+                      <p className="mt-1 text-xs text-slate-500">
+                        {getTextCompletionModelDescription(settings.imagePromptTextModel)}
+                      </p>
+                    )}
                   </div>
                   {isOpenAITextCompletionModel(settings.imagePromptTextModel) ? (
                     <div>
@@ -833,8 +878,8 @@ export function SettingsPage() {
                         onChange={(e) =>
                           setSettings((prev) => ({
                             ...prev,
-                            openaiReasoningEffort:
-                              e.target.value as Settings['openaiReasoningEffort'],
+                            openaiReasoningEffort: e.target
+                              .value as Settings['openaiReasoningEffort'],
                           }))
                         }
                         className="nv-input"
@@ -846,7 +891,7 @@ export function SettingsPage() {
                         ))}
                       </select>
                       <p className="mt-1 text-xs text-slate-500">
-                        選択中の {getTextCompletionModelLabel(settings.imagePromptTextModel)} で使える値だけを表示しています。
+                        現在選択中のOpenAIモデルで共通して使える値だけを表示しています。
                       </p>
                     </div>
                   ) : (
@@ -871,7 +916,8 @@ export function SettingsPage() {
                         ))}
                       </select>
                       <p className="mt-1 text-xs text-slate-500">
-                        選択中の {getTextCompletionModelLabel(settings.imagePromptTextModel)} で使える値だけを表示しています。
+                        選択中の {getTextCompletionModelLabel(settings.imagePromptTextModel)}{' '}
+                        で使える値だけを表示しています。
                       </p>
                     </div>
                   )}
@@ -901,6 +947,11 @@ export function SettingsPage() {
                       ))}
                     </select>
                     <p className="mt-1 text-xs text-slate-500">モデルID: {settings.imageModel}</p>
+                    {settings.imageModel === 'gpt-image-2' && (
+                      <p className="mt-1 text-xs text-slate-500">
+                        OpenAI APIキーを使用します。横長・縦長のFull HD相当は1792×1008、正方形の4K相当は2880×2880です。2Kを超える画素数の出力は実験的対応です。
+                      </p>
+                    )}
                   </div>
                   <div>
                     <label className="mb-1 block text-xs font-semibold text-slate-600">

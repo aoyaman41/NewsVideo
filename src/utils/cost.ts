@@ -12,6 +12,10 @@ type TokenRate = {
   inputPer1MTokensUsd: number;
   outputPer1MTokensUsd: number;
   cachedInputPer1MTokensUsd?: number;
+  cacheWritePer1MTokensUsd?: number;
+  longContextThresholdTokens?: number;
+  longContextInputMultiplier?: number;
+  longContextOutputMultiplier?: number;
 };
 
 type GeminiTextRate = TokenRate & {
@@ -54,6 +58,11 @@ export type CostRates = {
 };
 
 const LEGACY_IMAGE_INPUT_PER_IMAGE_USD = 0.0011;
+const LONG_CONTEXT_RATE_272K = {
+  longContextThresholdTokens: 272_000,
+  longContextInputMultiplier: 2,
+  longContextOutputMultiplier: 1.5,
+} as const;
 const GEMINI_FLASH_IMAGE_OUTPUT_PER_1M_TOKENS_USD = 30;
 const GEMINI_FLASH_IMAGE_OUTPUT_TOKENS_BY_SIZE: Record<ImageSizeTier, number> = {
   '1K': 1290,
@@ -93,10 +102,33 @@ function cloneImageRate(rate: GeminiImageRate): GeminiImageRate {
 }
 
 const DEFAULT_OPENAI_TEXT_RATES: Record<string, TokenRate> = {
+  'gpt-6-astra': { inputPer1MTokensUsd: 10, cachedInputPer1MTokensUsd: 1, cacheWritePer1MTokensUsd: 12.5, outputPer1MTokensUsd: 50, ...LONG_CONTEXT_RATE_272K },
+  'gpt-5.6-sol': {
+    inputPer1MTokensUsd: 5,
+    cachedInputPer1MTokensUsd: 0.5,
+    cacheWritePer1MTokensUsd: 6.25,
+    outputPer1MTokensUsd: 30,
+    ...LONG_CONTEXT_RATE_272K,
+  },
+  'gpt-5.6-terra': {
+    inputPer1MTokensUsd: 2.5,
+    cachedInputPer1MTokensUsd: 0.25,
+    cacheWritePer1MTokensUsd: 3.125,
+    outputPer1MTokensUsd: 15,
+    ...LONG_CONTEXT_RATE_272K,
+  },
+  'gpt-5.6-luna': {
+    inputPer1MTokensUsd: 1,
+    cachedInputPer1MTokensUsd: 0.1,
+    cacheWritePer1MTokensUsd: 1.25,
+    outputPer1MTokensUsd: 6,
+    ...LONG_CONTEXT_RATE_272K,
+  },
   'gpt-5.4': {
     inputPer1MTokensUsd: 2.5,
     cachedInputPer1MTokensUsd: 0.25,
     outputPer1MTokensUsd: 15.0,
+    ...LONG_CONTEXT_RATE_272K,
   },
   'gpt-5.2': {
     inputPer1MTokensUsd: 1.75,
@@ -162,7 +194,10 @@ export const DEFAULT_COST_RATES: CostRates = {
     ttsRatesByModel: { ...DEFAULT_GEMINI_TTS_RATES },
     imageModel: DEFAULT_IMAGE_MODEL,
     imageRatesByModel: Object.fromEntries(
-      Object.entries(DEFAULT_GEMINI_IMAGE_RATES).map(([model, rate]) => [model, cloneImageRate(rate)])
+      Object.entries(DEFAULT_GEMINI_IMAGE_RATES).map(([model, rate]) => [
+        model,
+        cloneImageRate(rate),
+      ])
     ),
   },
 };
@@ -183,7 +218,9 @@ function resolveImageSizeTier(
 }
 
 function cloneTokenRates<T extends TokenRate>(rates: Record<string, T>): Record<string, T> {
-  return Object.fromEntries(Object.entries(rates).map(([model, rate]) => [model, { ...rate } as T]));
+  return Object.fromEntries(
+    Object.entries(rates).map(([model, rate]) => [model, { ...rate } as T])
+  );
 }
 
 function cloneImageRates(rates: Record<string, GeminiImageRate>): Record<string, GeminiImageRate> {
@@ -192,7 +229,11 @@ function cloneImageRates(rates: Record<string, GeminiImageRate>): Record<string,
   );
 }
 
-function resolveRecordMapRate<T>(model: string | undefined, fallbackModel: string, rates: Record<string, T>): T {
+function resolveRecordMapRate<T>(
+  model: string | undefined,
+  fallbackModel: string,
+  rates: Record<string, T>
+): T {
   if (model && rates[model]) return rates[model];
   if (rates[fallbackModel]) return rates[fallbackModel];
   const first = Object.values(rates)[0];
@@ -202,6 +243,52 @@ function resolveRecordMapRate<T>(model: string | undefined, fallbackModel: strin
   return first;
 }
 
+const OPENAI_MODEL_RATE_ALIASES: Readonly<Record<string, string>> = {
+  'gpt-5.6': 'gpt-5.6-sol',
+};
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function resolveOpenAIModelRateKey(
+  model: string | undefined,
+  rates: Record<string, TokenRate>
+): string | null {
+  if (!model) return null;
+  if (rates[model]) return model;
+
+  const alias = OPENAI_MODEL_RATE_ALIASES[model];
+  if (alias && rates[alias]) return alias;
+
+  const datedAlias = model.match(/^(gpt-5\.6)-(\d{4}-\d{2}-\d{2})$/)?.[1];
+  if (datedAlias) {
+    const canonical = OPENAI_MODEL_RATE_ALIASES[datedAlias];
+    if (canonical && rates[canonical]) return canonical;
+  }
+
+  const datedCanonical = Object.keys(rates)
+    .sort((a, b) => b.length - a.length)
+    .find((rateModel) =>
+      new RegExp(`^${escapeRegExp(rateModel)}-\\d{4}-\\d{2}-\\d{2}$`).test(model)
+    );
+  return datedCanonical ?? null;
+}
+
+function resolveOpenAITextRate(
+  model: string | undefined,
+  fallbackModel: string,
+  rates: Record<string, TokenRate>
+): TokenRate {
+  const modelKey = resolveOpenAIModelRateKey(model, rates);
+  if (modelKey) return rates[modelKey];
+
+  const fallbackKey = resolveOpenAIModelRateKey(fallbackModel, rates);
+  if (fallbackKey) return rates[fallbackKey];
+
+  return resolveRecordMapRate(undefined, fallbackModel, rates);
+}
+
 function parseTokenRate(input: unknown, withCache: boolean): TokenRate | null {
   if (!input || typeof input !== 'object') return null;
   const raw = input as Record<string, unknown>;
@@ -209,12 +296,25 @@ function parseTokenRate(input: unknown, withCache: boolean): TokenRate | null {
   const outputPer1MTokensUsd = toNonNegativeNumber(raw.outputPer1MTokensUsd);
   if (inputPer1MTokensUsd === null || outputPer1MTokensUsd === null) return null;
   const cachedInputPer1MTokensUsd = withCache
-    ? toNonNegativeNumber(raw.cachedInputPer1MTokensUsd) ?? undefined
+    ? (toNonNegativeNumber(raw.cachedInputPer1MTokensUsd) ?? undefined)
     : undefined;
+  const cacheWritePer1MTokensUsd = withCache
+    ? (toNonNegativeNumber(raw.cacheWritePer1MTokensUsd) ?? undefined)
+    : undefined;
+  const longContextThresholdTokens =
+    toNonNegativeNumber(raw.longContextThresholdTokens) ?? undefined;
+  const longContextInputMultiplier =
+    toNonNegativeNumber(raw.longContextInputMultiplier) ?? undefined;
+  const longContextOutputMultiplier =
+    toNonNegativeNumber(raw.longContextOutputMultiplier) ?? undefined;
   return {
     inputPer1MTokensUsd,
     outputPer1MTokensUsd,
     ...(cachedInputPer1MTokensUsd !== undefined ? { cachedInputPer1MTokensUsd } : {}),
+    ...(cacheWritePer1MTokensUsd !== undefined ? { cacheWritePer1MTokensUsd } : {}),
+    ...(longContextThresholdTokens !== undefined ? { longContextThresholdTokens } : {}),
+    ...(longContextInputMultiplier !== undefined ? { longContextInputMultiplier } : {}),
+    ...(longContextOutputMultiplier !== undefined ? { longContextOutputMultiplier } : {}),
   };
 }
 
@@ -262,13 +362,21 @@ function fillMissingSizeRates(
 function parseGeminiImageRate(input: unknown): GeminiImageRate | null {
   if (!input || typeof input !== 'object') return null;
   const raw = input as Record<string, unknown>;
-  const billingMode = raw.billingMode === 'per_token' ? 'per_token' : raw.billingMode === 'per_image' ? 'per_image' : null;
+  const billingMode =
+    raw.billingMode === 'per_token'
+      ? 'per_token'
+      : raw.billingMode === 'per_image'
+        ? 'per_image'
+        : null;
   if (!billingMode) return null;
 
   const textInputPer1MTokensUsd = toNonNegativeNumber(raw.textInputPer1MTokensUsd) ?? undefined;
   const outputPer1MTokensUsd = toNonNegativeNumber(raw.outputPer1MTokensUsd) ?? undefined;
   const legacyInputPerImageUsd = toNonNegativeNumber(raw.legacyInputPerImageUsd) ?? undefined;
-  const outputPerImageUsdBySize = fillMissingSizeRates(parseSizeMap(raw.outputPerImageUsdBySize), undefined);
+  const outputPerImageUsdBySize = fillMissingSizeRates(
+    parseSizeMap(raw.outputPerImageUsdBySize),
+    undefined
+  );
   const fallbackOutputPerImageUsdBySize = parseSizeMap(raw.fallbackOutputPerImageUsdBySize);
 
   return {
@@ -281,10 +389,7 @@ function parseGeminiImageRate(input: unknown): GeminiImageRate | null {
   };
 }
 
-function getImageOutputPerImageUsd(
-  rate: GeminiImageRate,
-  sizeTier: ImageSizeTier
-): number {
+function getImageOutputPerImageUsd(rate: GeminiImageRate, sizeTier: ImageSizeTier): number {
   const exact = rate.outputPerImageUsdBySize?.[sizeTier];
   if (typeof exact === 'number') return exact;
 
@@ -334,9 +439,16 @@ export function normalizeCostRates(input?: unknown): CostRates {
         : base.openai.defaultModel;
   const openaiTextRatesByModel = cloneTokenRates(base.openai.textRatesByModel);
   if (raw.openai?.textRatesByModel && typeof raw.openai.textRatesByModel === 'object') {
-    for (const [model, rate] of Object.entries(raw.openai.textRatesByModel as Record<string, unknown>)) {
+    for (const [model, rate] of Object.entries(
+      raw.openai.textRatesByModel as Record<string, unknown>
+    )) {
       const parsed = parseTokenRate(rate, true);
-      if (parsed) openaiTextRatesByModel[model] = parsed;
+      if (parsed) {
+        openaiTextRatesByModel[model] = {
+          ...openaiTextRatesByModel[model],
+          ...parsed,
+        };
+      }
     }
   }
   const legacyOpenAiRate = parseTokenRate(
@@ -348,16 +460,22 @@ export function normalizeCostRates(input?: unknown): CostRates {
     true
   );
   if (legacyOpenAiRate) {
-    openaiTextRatesByModel[openaiDefaultModel] = legacyOpenAiRate;
+    openaiTextRatesByModel[openaiDefaultModel] = {
+      ...openaiTextRatesByModel[openaiDefaultModel],
+      ...legacyOpenAiRate,
+    };
   }
 
   const geminiDefaultTextModel =
-    typeof raw.gemini?.defaultTextModel === 'string' && raw.gemini.defaultTextModel.trim().length > 0
+    typeof raw.gemini?.defaultTextModel === 'string' &&
+    raw.gemini.defaultTextModel.trim().length > 0
       ? raw.gemini.defaultTextModel
       : base.gemini.defaultTextModel;
   const geminiTextRatesByModel = cloneTokenRates(base.gemini.textRatesByModel);
   if (raw.gemini?.textRatesByModel && typeof raw.gemini.textRatesByModel === 'object') {
-    for (const [model, rate] of Object.entries(raw.gemini.textRatesByModel as Record<string, unknown>)) {
+    for (const [model, rate] of Object.entries(
+      raw.gemini.textRatesByModel as Record<string, unknown>
+    )) {
       const parsed = parseGeminiTextRate(rate);
       if (parsed) geminiTextRatesByModel[model] = parsed;
     }
@@ -369,7 +487,9 @@ export function normalizeCostRates(input?: unknown): CostRates {
       : base.gemini.ttsModel;
   const geminiTtsRatesByModel = cloneTokenRates(base.gemini.ttsRatesByModel);
   if (raw.gemini?.ttsRatesByModel && typeof raw.gemini.ttsRatesByModel === 'object') {
-    for (const [model, rate] of Object.entries(raw.gemini.ttsRatesByModel as Record<string, unknown>)) {
+    for (const [model, rate] of Object.entries(
+      raw.gemini.ttsRatesByModel as Record<string, unknown>
+    )) {
       const parsed = parseTokenRate(rate, false);
       if (parsed) geminiTtsRatesByModel[model] = parsed;
     }
@@ -391,7 +511,9 @@ export function normalizeCostRates(input?: unknown): CostRates {
       : base.gemini.imageModel;
   const geminiImageRatesByModel = cloneImageRates(base.gemini.imageRatesByModel);
   if (raw.gemini?.imageRatesByModel && typeof raw.gemini.imageRatesByModel === 'object') {
-    for (const [model, rate] of Object.entries(raw.gemini.imageRatesByModel as Record<string, unknown>)) {
+    for (const [model, rate] of Object.entries(
+      raw.gemini.imageRatesByModel as Record<string, unknown>
+    )) {
       const parsed = parseGeminiImageRate(rate);
       if (parsed) geminiImageRatesByModel[model] = parsed;
     }
@@ -414,8 +536,11 @@ export function normalizeCostRates(input?: unknown): CostRates {
   }
 
   for (const model of IMAGE_MODELS) {
+    if (model === 'gpt-image-2') continue;
     if (!geminiImageRatesByModel[model]) {
-      geminiImageRatesByModel[model] = cloneImageRate(DEFAULT_GEMINI_IMAGE_RATES[DEFAULT_IMAGE_MODEL]);
+      geminiImageRatesByModel[model] = cloneImageRate(
+        DEFAULT_GEMINI_IMAGE_RATES[DEFAULT_IMAGE_MODEL]
+      );
     }
   }
 
@@ -450,16 +575,48 @@ export function normalizeCostRates(input?: unknown): CostRates {
 }
 
 export function estimateUsageCostUsd(record: UsageRecord, rates: CostRates): number {
+  if (record.provider === 'openai' && record.category === 'image') {
+    // Images API generation sends text only; no image-input charges apply.
+    // Standard pricing: text input $5/M, image output $30/M (2026-09-05).
+    if (record.model !== 'gpt-image-2') return 0;
+    return (Math.max(0, record.inputTokens ?? 0) * 5 + Math.max(0, record.outputTokens ?? 0) * 30) / 1_000_000;
+  }
   if (record.provider === 'openai') {
-    const rate = resolveRecordMapRate(record.model, rates.openai.defaultModel, rates.openai.textRatesByModel);
+    const rate = resolveOpenAITextRate(
+      record.model,
+      rates.openai.defaultModel,
+      rates.openai.textRatesByModel
+    );
     const totalInputTokens = Math.max(0, record.inputTokens ?? 0);
-    const cachedInputTokens = Math.max(0, Math.min(record.cachedInputTokens ?? 0, totalInputTokens));
-    const uncachedInputTokens = totalInputTokens - cachedInputTokens;
-    const input = (uncachedInputTokens * rate.inputPer1MTokensUsd) / 1_000_000;
+    const cachedInputTokens = Math.max(
+      0,
+      Math.min(record.cachedInputTokens ?? 0, totalInputTokens)
+    );
+    const cacheWriteTokens = Math.max(
+      0,
+      Math.min(record.cacheWriteTokens ?? 0, totalInputTokens - cachedInputTokens)
+    );
+    const uncachedInputTokens = totalInputTokens - cachedInputTokens - cacheWriteTokens;
+    const usesLongContextRate =
+      record.requestCount === 1 &&
+      typeof rate.longContextThresholdTokens === 'number' &&
+      totalInputTokens > rate.longContextThresholdTokens;
+    const inputMultiplier = usesLongContextRate ? (rate.longContextInputMultiplier ?? 1) : 1;
+    const outputMultiplier = usesLongContextRate ? (rate.longContextOutputMultiplier ?? 1) : 1;
+    const input = (uncachedInputTokens * rate.inputPer1MTokensUsd * inputMultiplier) / 1_000_000;
     const cachedInput =
-      (cachedInputTokens * (rate.cachedInputPer1MTokensUsd ?? rate.inputPer1MTokensUsd)) / 1_000_000;
-    const output = ((record.outputTokens ?? 0) * rate.outputPer1MTokensUsd) / 1_000_000;
-    return input + cachedInput + output;
+      (cachedInputTokens *
+        (rate.cachedInputPer1MTokensUsd ?? rate.inputPer1MTokensUsd) *
+        inputMultiplier) /
+      1_000_000;
+    const cacheWrite =
+      (cacheWriteTokens *
+        (rate.cacheWritePer1MTokensUsd ?? rate.inputPer1MTokensUsd) *
+        inputMultiplier) /
+      1_000_000;
+    const output =
+      ((record.outputTokens ?? 0) * rate.outputPer1MTokensUsd * outputMultiplier) / 1_000_000;
+    return input + cachedInput + cacheWrite + output;
   }
 
   if (record.provider !== 'gemini') {
@@ -488,14 +645,22 @@ export function estimateUsageCostUsd(record: UsageRecord, rates: CostRates): num
   }
 
   if (record.category === 'tts') {
-    const rate = resolveRecordMapRate(record.model, rates.gemini.ttsModel, rates.gemini.ttsRatesByModel);
+    const rate = resolveRecordMapRate(
+      record.model,
+      rates.gemini.ttsModel,
+      rates.gemini.ttsRatesByModel
+    );
     const input = ((record.inputTokens ?? 0) * rate.inputPer1MTokensUsd) / 1_000_000;
     const output = ((record.outputTokens ?? 0) * rate.outputPer1MTokensUsd) / 1_000_000;
     return input + output;
   }
 
   if (record.category === 'image') {
-    const rate = resolveRecordMapRate(record.model, rates.gemini.imageModel, rates.gemini.imageRatesByModel);
+    const rate = resolveRecordMapRate(
+      record.model,
+      rates.gemini.imageModel,
+      rates.gemini.imageRatesByModel
+    );
     const count = Math.max(0, record.imageCount ?? 0);
     const sizeTier = resolveImageSizeTier(record.imageSizeTier, record.imageResolution);
     const input =

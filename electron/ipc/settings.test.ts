@@ -105,22 +105,29 @@ describe('settings IPC handlers', () => {
     writeFileMock.mockResolvedValueOnce(undefined);
 
     const handler = getHandler('settings:set');
-    await handler({}, {
-      imageModel: 'gemini-3-pro-image-preview',
-      ttsEngine: 'google_tts',
-      openaiReasoningEffort: 'high',
-      geminiThinkingLevel: 'low',
-      unknown: true,
-    });
+    await handler(
+      {},
+      {
+        scriptTextModel: 'gpt-5.6-terra',
+        imagePromptTextModel: 'gpt-5.6-luna',
+        imageModel: 'gemini-3-pro-image-preview',
+        ttsEngine: 'google_tts',
+        openaiReasoningEffort: 'max',
+        geminiThinkingLevel: 'low',
+        unknown: true,
+      }
+    );
 
     expect(writeFileMock).toHaveBeenCalledTimes(1);
     const [settingsPath, content] = writeFileMock.mock.calls[0];
     expect(settingsPath).toBe('/tmp/newsvideo-test/settings.json');
 
     const saved = JSON.parse(String(content));
+    expect(saved.scriptTextModel).toBe('gpt-5.6-terra');
+    expect(saved.imagePromptTextModel).toBe('gpt-5.6-luna');
     expect(saved.imageModel).toBe('gemini-3-pro-image-preview');
     expect(saved.ttsEngine).toBe('gemini_tts');
-    expect(saved.openaiReasoningEffort).toBe('high');
+    expect(saved.openaiReasoningEffort).toBe('max');
     expect(saved.geminiThinkingLevel).toBe('low');
     expect(saved.unknown).toBeUndefined();
   });

@@ -34,7 +34,10 @@ type TokenUsage = {
   inputTokens?: number;
   outputTokens?: number;
   cachedInputTokens?: number;
+  cacheWriteTokens?: number;
+  reasoningTokens?: number;
   totalTokens?: number;
+  requestCount?: number;
   model?: string;
   provider?: 'openai' | 'gemini';
 };
@@ -241,6 +244,9 @@ interface UsageRecord {
   inputTokens?: number;
   outputTokens?: number;
   cachedInputTokens?: number;
+  cacheWriteTokens?: number;
+  reasoningTokens?: number;
+  requestCount?: number;
   imageCount?: number;
   imageResolution?: ImageResolution;
   imageSizeTier?: ImageSizeTier;
@@ -381,6 +387,10 @@ interface CostRates {
         inputPer1MTokensUsd: number;
         outputPer1MTokensUsd: number;
         cachedInputPer1MTokensUsd?: number;
+        cacheWritePer1MTokensUsd?: number;
+        longContextThresholdTokens?: number;
+        longContextInputMultiplier?: number;
+        longContextOutputMultiplier?: number;
       }
     >;
     model?: string;

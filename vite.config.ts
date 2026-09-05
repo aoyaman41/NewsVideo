@@ -103,7 +103,13 @@ export default defineConfig({
               formats: ['es'],
             },
             rollupOptions: {
-              external: ['electron', 'keytar', 'fluent-ffmpeg', 'openai', '@google/genai'],
+              external: [
+                'electron',
+                'keytar',
+                'fluent-ffmpeg',
+                /^openai(?:\/.*)?$/,
+                '@google/genai',
+              ],
             },
           },
         },

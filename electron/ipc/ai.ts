@@ -2,6 +2,8 @@ import { ipcMain, app, safeStorage } from 'electron';
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import OpenAI from 'openai';
+import { ContentFilterFinishReasonError, LengthFinishReasonError } from 'openai/core/error';
+import { zodResponseFormat } from 'openai/helpers/zod';
 import { GoogleGenAI, ThinkingLevel } from '@google/genai';
 import { z } from 'zod/v3';
 import {
@@ -65,7 +67,8 @@ async function readApiKey(service: string): Promise<string | null> {
   }
 }
 
-// 指数バックオフ + ジッター付きリトライ
+// Gemini 呼び出し用の指数バックオフ + ジッター付きリトライ。
+// OpenAI は SDK 内蔵のステータス判定・Retry-After 対応へ一本化する。
 async function withRetry<T>(
   fn: () => Promise<T>,
   maxRetries: number = 3,
@@ -96,7 +99,10 @@ type OpenAIUsageSummary = {
   inputTokens?: number;
   outputTokens?: number;
   cachedInputTokens?: number;
+  cacheWriteTokens?: number;
+  reasoningTokens?: number;
   totalTokens?: number;
+  requestCount?: number;
   model?: string;
 };
 
@@ -106,7 +112,11 @@ function mapOpenAIUsage(
         prompt_tokens?: number;
         completion_tokens?: number;
         total_tokens?: number;
-        prompt_tokens_details?: { cached_tokens?: number };
+        prompt_tokens_details?: {
+          cached_tokens?: number;
+          cache_write_tokens?: number;
+        };
+        completion_tokens_details?: { reasoning_tokens?: number };
       }
     | undefined,
   model?: string
@@ -117,7 +127,10 @@ function mapOpenAIUsage(
     inputTokens: usage?.prompt_tokens,
     outputTokens: usage?.completion_tokens,
     cachedInputTokens: usage?.prompt_tokens_details?.cached_tokens,
+    cacheWriteTokens: usage?.prompt_tokens_details?.cache_write_tokens,
+    reasoningTokens: usage?.completion_tokens_details?.reasoning_tokens,
     totalTokens: usage?.total_tokens,
+    requestCount: 1,
     model,
   };
 }
@@ -149,6 +162,7 @@ function mapGeminiUsage(
       usage?.completionTokens ??
       usage?.candidates_token_count,
     totalTokens: usage?.totalTokenCount ?? usage?.totalTokens ?? usage?.total_token_count,
+    requestCount: 1,
     model,
   };
 }
@@ -174,7 +188,10 @@ function aggregateUsageSummaries(
     inputTokens: sum((usage) => usage.inputTokens),
     outputTokens: sum((usage) => usage.outputTokens),
     cachedInputTokens: sum((usage) => usage.cachedInputTokens),
+    cacheWriteTokens: sum((usage) => usage.cacheWriteTokens),
+    reasoningTokens: sum((usage) => usage.reasoningTokens),
     totalTokens: sum((usage) => usage.totalTokens),
+    requestCount: sum((usage) => usage.requestCount),
   };
 }
 
@@ -222,9 +239,9 @@ async function generateGeminiTextContent(params: {
       ? ThinkingLevel.HIGH
       : params.thinkingLevel === 'medium'
         ? ThinkingLevel.MEDIUM
-      : params.thinkingLevel === 'low'
-        ? ThinkingLevel.LOW
-        : null;
+        : params.thinkingLevel === 'low'
+          ? ThinkingLevel.LOW
+          : null;
   const response = await withRetry(async () => {
     return ai.models.generateContent({
       model: params.model,
@@ -266,6 +283,27 @@ function resolveOpenAIReasoningEffort(
   return value === 'default' ? null : value;
 }
 
+async function withLocalizedStructuredOutputErrors<T>(fn: () => Promise<T>): Promise<T> {
+  try {
+    return await fn();
+  } catch (error) {
+    if (error instanceof LengthFinishReasonError) {
+      throw new Error('AIの応答が長さ上限で途中終了しました。入力を短くして再試行してください。', {
+        cause: error,
+      });
+    }
+    if (error instanceof ContentFilterFinishReasonError) {
+      throw new Error(
+        'AIの安全フィルターにより応答を完了できませんでした。入力内容を確認してください。',
+        {
+          cause: error,
+        }
+      );
+    }
+    throw error;
+  }
+}
+
 function buildOpenAITextGenerationOptions(
   model: OpenAITextCompletionModel,
   reasoningEffort: Exclude<OpenAIReasoningEffort, 'default'> | null,
@@ -292,7 +330,8 @@ async function readTextGenerationConfig(scope: TextGenerationScope): Promise<Tex
     const settingsPath = getSettingsPath();
     const content = await fs.readFile(settingsPath, 'utf-8');
     const settings = normalizeSettings(JSON.parse(content));
-    const selectedModel = scope === 'script' ? settings.scriptTextModel : settings.imagePromptTextModel;
+    const selectedModel =
+      scope === 'script' ? settings.scriptTextModel : settings.imagePromptTextModel;
     const model = isTextCompletionModel(selectedModel) ? selectedModel : fallback.model;
     const openaiReasoningEffort = isOpenAITextCompletionModel(model)
       ? getSupportedOpenAIReasoningEfforts(model).includes(
@@ -401,6 +440,25 @@ interface GeneratedPart {
   scriptModifiedByUser: boolean;
 }
 
+const ScriptGenerationPayloadSchema = z.object({
+  parts: z
+    .array(
+      z.object({
+        title: z.string().min(1),
+        summary: z.string(),
+        scriptText: z.string().min(1),
+        durationEstimateSec: z.number().positive(),
+      })
+    )
+    .min(1),
+});
+
+type ScriptGenerationPayload = z.infer<typeof ScriptGenerationPayloadSchema>;
+
+const ImagePromptCommentPayloadSchema = z.object({
+  prompt: z.string().min(1),
+});
+
 // スクリプト生成プロンプト
 function createScriptGenerationPrompt(article: Article, options: ScriptOptions): string {
   const toneDescription = {
@@ -455,7 +513,9 @@ function escapeRegExp(value: string): string {
 }
 
 function trimTrailingClosingLine(text: string, closingLine: string): string {
-  const pattern = new RegExp(`(?:\\s|\\u3000|\\n)*${escapeRegExp(closingLine)}[。！!？?\\s\\u3000]*$`);
+  const pattern = new RegExp(
+    `(?:\\s|\\u3000|\\n)*${escapeRegExp(closingLine)}[。！!？?\\s\\u3000]*$`
+  );
   return text.replace(pattern, '').trimEnd();
 }
 
@@ -499,42 +559,43 @@ ipcMain.handle(
       'あなたは情報動画のスクリプトライターです。与えられた記事を読みやすいナレーションスクリプトに変換します。';
     const scriptUserPrompt = createScriptGenerationPrompt(article, options);
 
-    let parsed: {
-      parts: Array<{
-        title: string;
-        summary: string;
-        scriptText: string;
-        durationEstimateSec: number;
-      }>;
-    };
+    let parsed: ScriptGenerationPayload;
     let usage: OpenAIUsageSummary | null = null;
 
     if (isOpenAITextCompletionModel(selectedModel)) {
       const apiKey = await readApiKey('openai');
       if (!apiKey) {
-        throw new Error('OpenAI APIキーが設定されていません。設定画面からAPIキーを入力してください。');
+        throw new Error(
+          'OpenAI APIキーが設定されていません。設定画面からAPIキーを入力してください。'
+        );
       }
 
       const openai = new OpenAI({ apiKey });
       const reasoningEffort = resolveOpenAIReasoningEffort(generationConfig.openaiReasoningEffort);
-      const response = await withRetry(async () => {
-        return openai.chat.completions.parse({
+      const response = await withLocalizedStructuredOutputErrors(() =>
+        openai.chat.completions.parse({
           model: selectedModel,
           messages: [
             { role: 'system', content: scriptSystemPrompt },
             { role: 'user', content: scriptUserPrompt },
           ],
-          response_format: { type: 'json_object' },
+          response_format: zodResponseFormat(
+            ScriptGenerationPayloadSchema,
+            'script_generation_payload'
+          ),
           ...buildOpenAITextGenerationOptions(selectedModel, reasoningEffort, 0.7),
-        });
-      });
+        })
+      );
 
-      const content = response.choices[0]?.message?.content;
-      if (!content) {
-        throw new Error('AIからの応答が空でした');
+      const choice = response.choices[0];
+      if (choice?.message.refusal) {
+        throw new Error(`AIが拒否しました: ${choice.message.refusal}`);
+      }
+      if (!choice?.message.parsed) {
+        throw new Error('AIから構造化された応答を取得できませんでした');
       }
 
-      parsed = parseJsonResponse(content);
+      parsed = choice.message.parsed;
       usage = mapOpenAIUsage(response.usage, response.model);
     } else {
       const apiModel = resolveGeminiApiModel(selectedModel);
@@ -987,9 +1048,9 @@ function normalizeLooseQuantFacts(value: unknown, limit: number): QuantFact[] {
       const directionRaw = normalizeString(getFirstDefined(record, ['direction', 'trend']));
       const direction = (
         directionRaw === 'increase' ||
-          directionRaw === 'decrease' ||
-          directionRaw === 'stable' ||
-          directionRaw === 'comparison'
+        directionRaw === 'decrease' ||
+        directionRaw === 'stable' ||
+        directionRaw === 'comparison'
           ? directionRaw
           : 'unknown'
       ) as QuantFact['direction'];
@@ -1099,7 +1160,12 @@ function coerceImagePromptExtraction(raw: unknown): ImagePromptExtraction {
     );
     const compositionNote = truncateTextByChars(
       normalizeString(
-        getFirstDefined(record, ['compositionNote', 'composition_note', 'layoutNote', 'layout_note'])
+        getFirstDefined(record, [
+          'compositionNote',
+          'composition_note',
+          'layoutNote',
+          'layout_note',
+        ])
       ),
       MAX_COMPOSITION_NOTE_CHARS
     );
@@ -1156,7 +1222,9 @@ function buildImagePromptText(
   const entities = normalizeStringArray((p as { entities?: unknown }).entities, 5).filter(
     (item) => sourceText.includes(item) && !containsForbiddenTerm(item)
   );
-  const locations = normalizeStringArray((p as { locations?: unknown }).locations, 3).filter((item) => sourceText.includes(item));
+  const locations = normalizeStringArray((p as { locations?: unknown }).locations, 3).filter(
+    (item) => sourceText.includes(item)
+  );
 
   const quantFactsRaw = normalizeQuantFacts((p as { quantFacts?: unknown }).quantFacts, 3);
   const quantFacts = quantFactsRaw.filter((fact) => {
@@ -1186,22 +1254,33 @@ function buildImagePromptText(
       return true;
     });
 
-  const hasData = quantFacts.length > 0 || visualSlots.some((slot) => DATA_ELEMENT_TYPES.has(slot.elementType));
+  const hasData =
+    quantFacts.length > 0 || visualSlots.some((slot) => DATA_ELEMENT_TYPES.has(slot.elementType));
   const hasLocation =
-    locations.length > 0 || visualSlots.some((slot) => LOCATION_ELEMENT_TYPES.has(slot.elementType));
+    locations.length > 0 ||
+    visualSlots.some((slot) => LOCATION_ELEMENT_TYPES.has(slot.elementType));
 
   const resolvedSlots: VisualSlot[] = visualSlots;
 
   const layout = getImageLayoutVariant(context.aspectRatio, hasData, hasLocation);
-  const heroSubject = normalizeExtractedText((p as { heroSubject?: unknown }).heroSubject, sourceText);
-  const heroSetting = normalizeExtractedText((p as { heroSetting?: unknown }).heroSetting, sourceText);
-  const compositionNote = normalizeCompositionNote((p as { compositionNote?: unknown }).compositionNote);
+  const heroSubject = normalizeExtractedText(
+    (p as { heroSubject?: unknown }).heroSubject,
+    sourceText
+  );
+  const heroSetting = normalizeExtractedText(
+    (p as { heroSetting?: unknown }).heroSetting,
+    sourceText
+  );
+  const compositionNote = normalizeCompositionNote(
+    (p as { compositionNote?: unknown }).compositionNote
+  );
   const layoutInstruction = compositionNote || layout;
 
   const mainVisualParts: string[] = [];
   if (heroSubject) mainVisualParts.push(heroSubject);
   if (heroSetting) mainVisualParts.push(heroSetting);
-  const mainVisual = mainVisualParts.length > 0 ? mainVisualParts.join(' / ') : topic || '抽象化した主題';
+  const mainVisual =
+    mainVisualParts.length > 0 ? mainVisualParts.join(' / ') : topic || '抽象化した主題';
 
   const slotInstructions = resolvedSlots.map((slot) => {
     const label = ELEMENT_TYPE_LABELS_JA[slot.elementType];
@@ -1252,7 +1331,10 @@ function buildImagePromptText(
   return truncateTextByChars(promptText, MAX_IMAGE_PROMPT_CHARS);
 }
 
-function createSinglePartExtractionPrompts(articleContext: string, partContext: string): {
+function createSinglePartExtractionPrompts(
+  articleContext: string,
+  partContext: string
+): {
   systemPrompt: string;
   userPrompt: string;
 } {
@@ -1389,23 +1471,34 @@ async function extractSinglePartPromptCandidate(params: {
   if (isOpenAITextCompletionModel(selectedModel)) {
     const apiKey = await readApiKey('openai');
     if (!apiKey) {
-      throw new Error('OpenAI APIキーが設定されていません。設定画面からAPIキーを入力してください。');
+      throw new Error(
+        'OpenAI APIキーが設定されていません。設定画面からAPIキーを入力してください。'
+      );
     }
 
     const openai = new OpenAI({ apiKey });
-    const reasoningEffort = resolveOpenAIReasoningEffort(params.generationConfig.openaiReasoningEffort);
-    const response = await withRetry(async () => {
-      return openai.chat.completions.create({
-        model: selectedModel,
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: userPrompt },
-        ],
-        ...buildOpenAITextGenerationOptions(selectedModel, reasoningEffort, 0.3),
-      });
+    const reasoningEffort = resolveOpenAIReasoningEffort(
+      params.generationConfig.openaiReasoningEffort
+    );
+    const response = await openai.chat.completions.create({
+      model: selectedModel,
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userPrompt },
+      ],
+      ...buildOpenAITextGenerationOptions(selectedModel, reasoningEffort, 0.3),
     });
 
-    const message = response.choices[0]?.message;
+    const choice = response.choices[0];
+    if (choice?.finish_reason === 'length') {
+      throw new Error('AIの応答が長さ上限で途中終了しました。入力を短くして再試行してください。');
+    }
+    if (choice?.finish_reason === 'content_filter') {
+      throw new Error(
+        'AIの安全フィルターにより応答を完了できませんでした。入力内容を確認してください。'
+      );
+    }
+    const message = choice?.message;
     if (!message) {
       throw new Error('AIからの応答が空でした');
     }
@@ -1513,7 +1606,10 @@ ipcMain.handle(
       async (
         part,
         index
-      ): Promise<{ candidate: Record<string, unknown> | undefined; usage: OpenAIUsageSummary | null }> => {
+      ): Promise<{
+        candidate: Record<string, unknown> | undefined;
+        usage: OpenAIUsageSummary | null;
+      }> => {
         const partContext = [
           `パート番号: ${index + 1}`,
           `タイトル: ${part.title || ''}`,
@@ -1544,7 +1640,13 @@ ipcMain.handle(
         createdAt: now,
       };
     });
-    const usage = aggregateUsageSummaries(extractionResults.map((result) => result.usage));
+    const aggregatedUsage = aggregateUsageSummaries(
+      extractionResults.map((result) => result.usage)
+    );
+    const usage =
+      aggregatedUsage && isOpenAITextCompletionModel(generationConfig.model)
+        ? { ...aggregatedUsage, model: generationConfig.model }
+        : aggregatedUsage;
 
     return {
       prompts,
@@ -1666,13 +1768,15 @@ JSONのみを出力してください。`;
     if (isOpenAITextCompletionModel(selectedModel)) {
       const apiKey = await readApiKey('openai');
       if (!apiKey) {
-        throw new Error('OpenAI APIキーが設定されていません。設定画面からAPIキーを入力してください。');
+        throw new Error(
+          'OpenAI APIキーが設定されていません。設定画面からAPIキーを入力してください。'
+        );
       }
 
       const openai = new OpenAI({ apiKey });
       const reasoningEffort = resolveOpenAIReasoningEffort(generationConfig.openaiReasoningEffort);
-      const response = await withRetry(async () => {
-        return openai.chat.completions.create({
+      if (isScriptTarget) {
+        const response = await openai.chat.completions.create({
           model: selectedModel,
           messages: [
             { role: 'system', content: systemPrompt },
@@ -1680,9 +1784,47 @@ JSONのみを出力してください。`;
           ],
           ...buildOpenAITextGenerationOptions(selectedModel, reasoningEffort, 0.7),
         });
-      });
-      text = response.choices[0]?.message?.content || '';
-      usage = mapOpenAIUsage(response.usage, response.model);
+        const choice = response.choices[0];
+        if (choice?.finish_reason === 'length') {
+          throw new Error(
+            'AIの応答が長さ上限で途中終了しました。入力を短くして再試行してください。'
+          );
+        }
+        if (choice?.finish_reason === 'content_filter') {
+          throw new Error(
+            'AIの安全フィルターにより応答を完了できませんでした。入力内容を確認してください。'
+          );
+        }
+        if (choice?.message.refusal) {
+          throw new Error(`AIが拒否しました: ${choice.message.refusal}`);
+        }
+        text = choice?.message.content || '';
+        usage = mapOpenAIUsage(response.usage, response.model);
+      } else {
+        const response = await withLocalizedStructuredOutputErrors(() =>
+          openai.chat.completions.parse({
+            model: selectedModel,
+            messages: [
+              { role: 'system', content: systemPrompt },
+              { role: 'user', content: userPrompt },
+            ],
+            response_format: zodResponseFormat(
+              ImagePromptCommentPayloadSchema,
+              'image_prompt_comment_payload'
+            ),
+            ...buildOpenAITextGenerationOptions(selectedModel, reasoningEffort, 0.7),
+          })
+        );
+        const choice = response.choices[0];
+        if (choice?.message.refusal) {
+          throw new Error(`AIが拒否しました: ${choice.message.refusal}`);
+        }
+        if (!choice?.message.parsed) {
+          throw new Error('AIから構造化された応答を取得できませんでした');
+        }
+        text = JSON.stringify(choice.message.parsed);
+        usage = mapOpenAIUsage(response.usage, response.model);
+      }
     } else {
       const apiModel = resolveGeminiApiModel(selectedModel);
       const geminiResult = await generateGeminiTextContent({

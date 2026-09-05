@@ -19,6 +19,7 @@ import {
 } from '../../shared/project/imageStylePresets';
 import { sanitizeImagePromptForRendering } from '../../shared/utils/imagePromptSanitizer';
 import { logger } from '../utils/logger';
+import { generateOpenAIImage } from '../utils/openaiImage';
 
 // シークレットファイルのパス
 const getSecretsPath = () => path.join(app.getPath('userData'), 'secrets.enc');
@@ -351,6 +352,33 @@ async function saveImageToFile(
   return filePath;
 }
 
+async function generateOpenAIAsset(prompt: ImagePrompt, projectId: string, imageResolution: ImageResolution): Promise<ImageAsset> {
+  const apiKey = await readApiKey('openai');
+  if (!apiKey) throw new Error('GPT Image 2にはOpenAI APIキーが必要です。設定画面から登録してください。');
+  const projectPath = await getProjectPath(projectId);
+  const result = await generateOpenAIImage(
+    apiKey,
+    [buildImageSystemInstruction(prompt), buildImagePromptText(prompt)].join('\n\n'),
+    prompt.aspectRatio,
+    imageResolution
+  );
+  const imageId = randomUUID();
+  const filePath = await saveImageToFile(result.base64Data, projectPath, imageId, 'image/png');
+  const stats = await fs.stat(filePath);
+  return {
+    id: imageId, filePath, sourceType: 'generated',
+    metadata: {
+      width: result.width, height: result.height, mimeType: 'image/png', fileSize: stats.size,
+      createdAt: new Date().toISOString(), promptId: prompt.id, tags: [],
+      generation: {
+        model: 'gpt-image-2', resolution: imageResolution, imageSizeTier: getImageSize(imageResolution),
+        aspectRatio: prompt.aspectRatio, inputTokens: result.inputTokens,
+        outputTokens: result.outputTokens, totalTokens: result.totalTokens,
+      },
+    },
+  };
+}
+
 // 単一画像生成ハンドラ
 ipcMain.handle(
   'image:generate',
@@ -359,6 +387,10 @@ ipcMain.handle(
     prompt: ImagePrompt,
     projectId: string
   ): Promise<ImageAsset> => {
+    const config = await readImageGenerationSettings();
+    if (config.imageModel === 'gpt-image-2') {
+      return generateOpenAIAsset(prompt, projectId, config.imageResolution);
+    }
     const apiKey = await readApiKey('google_ai');
 
     if (!apiKey) {
@@ -469,6 +501,19 @@ ipcMain.handle(
     prompts: ImagePrompt[],
     projectId: string
   ): Promise<ImageAsset[]> => {
+    const config = await readImageGenerationSettings();
+    if (config.imageModel === 'gpt-image-2') {
+      const results: ImageAsset[] = [];
+      const errors: string[] = [];
+      // Keep image requests sequential to avoid bursting the OpenAI image quota.
+      for (const prompt of prompts) {
+        try { results.push(await generateOpenAIAsset(prompt, projectId, config.imageResolution)); }
+        catch (error) { errors.push(error instanceof Error ? error.message : String(error)); }
+      }
+      if (errors.length && !results.length) throw new Error(`全ての画像生成に失敗しました: ${errors.join(', ')}`);
+      if (errors.length) logger.warn('[image:generateBatch] Partial failure', { successCount: results.length, errorCount: errors.length });
+      return results;
+    }
     const apiKey = await readApiKey('google_ai');
 
     if (!apiKey) {
