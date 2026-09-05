@@ -1,3 +1,4 @@
+import type { Project, ProjectMeta, Article, Part, ImageAsset, ImagePrompt, AudioAsset } from '../../shared/project/schema';
 import type {
   type GeminiThinkingLevel,
   type GeminiTtsModel,
@@ -8,12 +9,7 @@ import type {
   type TextCompletionModel,
 } from '../../shared/constants/models';
 import type { type TTSEngine } from '../../shared/settings/appSettings';
-import type {
-  type ClosingLineMode,
-  type PresentationProfilePreset,
-  type ScriptTone,
-  type SourceDisplayMode,
-} from '../../shared/project/presentationProfile';
+
 import type {
   type ImageAspectRatio,
   type ImageStylePreset,
@@ -55,6 +51,10 @@ interface ElectronAPI {
     create: (name: string) => Promise<ProjectMeta>;
   };
 
+  jobs: {
+    start: (id: string, options: { mode: 'automatic' | 'review'; targetPartCount: number; budgetUsd?: number; restart?: boolean }) => Promise<import('../../shared/project/jobs').GenerationJob>;
+    cancel: (id: string) => Promise<{ success: boolean }>;
+  };
   settings: {
     get: () => Promise<Settings>;
     set: (settings: Partial<Settings>) => Promise<{ success: boolean }>;
@@ -139,15 +139,6 @@ interface ElectronAPI {
   };
 }
 
-// プロジェクト関連の型
-interface ProjectMeta {
-  id: string;
-  name: string;
-  createdAt: string;
-  updatedAt: string;
-  path: string;
-}
-
 type WorkflowStage = 'article' | 'script' | 'image' | 'audio' | 'video';
 
 interface ProjectProgressSummary {
@@ -167,131 +158,6 @@ interface ProjectListItem extends ProjectMeta {
   summary?: ProjectProgressSummary;
 }
 
-interface Project extends ProjectMeta {
-  schemaVersion: string;
-  article: Article;
-  parts: Part[];
-  images: ImageAsset[];
-  prompts: ImagePrompt[];
-  audio: AudioAsset[];
-  usage: UsageRecord[];
-  presentationProfile: PresentationProfile;
-  thumbnail?: ImageAssetRef;
-  autoGenerationStatus?: AutoGenerationStatus;
-}
-
-interface PresentationProfile {
-  preset: PresentationProfilePreset;
-  tone: ScriptTone;
-  closingLineMode: ClosingLineMode;
-  closingLineText: string;
-  targetDurationPerPartSec: number;
-  imageStylePreset: ImageStylePreset;
-  aspectRatio: ImageAspectRatio;
-  styleReferenceImageIds: string[];
-  styleReferenceNote: string;
-  ttsNarrationStylePreset: TtsNarrationStylePreset;
-  ttsNarrationStyleNote: string;
-  closingCardEnabled: boolean;
-  closingCardHeadline: string;
-  closingCardCtaText: string;
-  sourceDisplayMode: SourceDisplayMode;
-  sourceDisplayText: string;
-}
-
-interface Article {
-  title: string;
-  source?: string;
-  bodyText: string;
-  importedImages: ImageAsset[];
-}
-
-interface Part {
-  id: string;
-  index: number;
-  title: string;
-  summary: string;
-  scriptText: string;
-  durationEstimateSec: number;
-  panelImages: ImageAssetRef[];
-  comments: Comment[];
-  audio?: AudioAsset;
-  createdAt: string;
-  updatedAt: string;
-  scriptGeneratedAt: string;
-  scriptModifiedByUser: boolean;
-}
-
-interface ImageAsset {
-  id: string;
-  filePath: string;
-  sourceType: 'generated' | 'imported';
-  metadata: {
-    width: number;
-    height: number;
-    mimeType: string;
-    fileSize: number;
-    createdAt: string;
-    promptId?: string;
-    tags: string[];
-    generation?: {
-      model: string;
-      resolution: ImageResolution;
-      imageSizeTier: ImageSizeTier;
-      aspectRatio: '16:9' | '1:1' | '9:16';
-      inputTokens?: number;
-      textInputTokens?: number;
-      imageInputTokens?: number;
-      outputTokens?: number;
-      totalTokens?: number;
-    };
-  };
-}
-
-interface UsageRecord {
-  id: string;
-  provider: 'openai' | 'gemini';
-  category: 'text' | 'image' | 'tts';
-  model: string;
-  operation: string;
-  inputTokens?: number;
-  textInputTokens?: number;
-  imageInputTokens?: number;
-  outputTokens?: number;
-  cachedInputTokens?: number;
-  cacheWriteTokens?: number;
-  reasoningTokens?: number;
-  requestCount?: number;
-  imageCount?: number;
-  imageResolution?: ImageResolution;
-  imageSizeTier?: ImageSizeTier;
-  imageAspectRatio?: '16:9' | '1:1' | '9:16';
-  createdAt: string;
-}
-
-interface AutoGenerationStatus {
-  running: boolean;
-  step?: string;
-  startedAt?: string;
-  updatedAt?: string;
-  finishedAt?: string;
-  cancelRequested?: boolean;
-  error?: string;
-  steps?: {
-    script?: boolean;
-    prompts?: boolean;
-    images?: boolean;
-    audio?: boolean;
-    video?: boolean;
-  };
-  lastVideoPath?: string;
-}
-
-interface ImageAssetRef {
-  imageId: string;
-  displayDurationSec?: number;
-}
-
 interface ImageBatchGenerationError {
   index: number;
   promptId: string;
@@ -305,63 +171,9 @@ interface ImageBatchGenerationResult {
   requestedCount: number;
 }
 
-interface ImagePrompt {
-  id: string;
-  partId: string;
-  stylePreset: ImageStylePreset;
-  prompt: string;
-  negativePrompt?: string;
-  aspectRatio: ImageAspectRatio;
-  visualCopy?: {
-    headline: string;
-    subhead?: string;
-    keyNumber?: string;
-    bullets: string[];
-  };
-  layoutPlan?: {
-    intent: string;
-    composition: string;
-    objects: Array<{
-      type: string;
-      role: string;
-      position: string;
-      content: string;
-      emphasis: string;
-    }>;
-  };
-  styleReferenceImageIds?: string[];
-  version: number;
-  createdAt: string;
-}
-
-interface AudioAsset {
-  id: string;
-  filePath: string;
-  durationSec: number;
-  ttsEngine: TTSEngine;
-  voiceId: string;
-  segments?: string[];
-  timepoints?: Array<{
-    markName: string;
-    timeSeconds: number;
-  }>;
-  settings: {
-    speakingRate: number;
-    pitch: number;
-    languageCode: string;
-  };
-  generatedAt: string;
-}
-
-interface Comment {
-  id: string;
-  text: string;
-  createdAt: string;
-  appliedAt?: string;
-}
-
 // 設定関連の型
 interface Settings {
+  generationConcurrency: number;
   ttsEngine: TTSEngine;
   ttsModel: GeminiTtsModel;
   ttsVoice: string;

@@ -1,3 +1,4 @@
+import { jobSchema } from './jobs';
 import { z } from 'zod';
 import {
   CLOSING_LINE_MODES,
@@ -133,6 +134,7 @@ export const usageRecordSchema = z.object({
   category: z.enum(['text', 'image', 'tts']),
   model: z.string(),
   operation: z.string(),
+  jobId: z.string().uuid().optional(),
   inputTokens: z.number().int().nonnegative().optional(),
   textInputTokens: z.number().int().nonnegative().optional(),
   imageInputTokens: z.number().int().nonnegative().optional(),
@@ -237,6 +239,8 @@ export type ProjectMeta = z.infer<typeof projectMetaSchema>;
 // プロジェクト（フル）
 export const projectSchema = projectMetaSchema.extend({
   schemaVersion: z.string(),
+  job: jobSchema.optional(),
+  generationConfig: z.record(z.string(), z.unknown()).optional(),
   revision: z.number().int().nonnegative().optional(),
   integrity: z.object({
     parts: z.record(z.string(), z.object({ script: z.string().optional(), prompt: z.string().optional(), image: z.string().optional(), audio: z.string().optional(), approvedAt: z.string().optional() })),

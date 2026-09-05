@@ -36,6 +36,7 @@ export const TTS_ENGINES = ['google_tts', 'gemini_tts', 'macos_tts'] as const;
 export type TTSEngine = (typeof TTS_ENGINES)[number];
 
 export type AppSettings = {
+  generationConcurrency: number;
   ttsEngine: TTSEngine;
   ttsModel: GeminiTtsModel;
   ttsVoice: string;
@@ -60,6 +61,7 @@ export type AppSettings = {
 };
 
 export const DEFAULT_SETTINGS: AppSettings = {
+  generationConcurrency: 2,
   ttsEngine: 'gemini_tts',
   ttsModel: DEFAULT_GEMINI_TTS_MODEL,
   ttsVoice: 'Charon',
@@ -84,6 +86,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
 
 export const settingsUpdateSchema = z
   .object({
+    generationConcurrency: z.number().int().min(1).max(4).optional(),
     ttsEngine: z.enum(TTS_ENGINES).optional(),
     ttsModel: z.enum(GEMINI_TTS_MODELS).optional(),
     ttsVoice: z.string().optional(),
@@ -146,6 +149,8 @@ function getCommonSettingsOpenAIReasoningEfforts(settings: {
 export function normalizeSettings(input: unknown): AppSettings {
   const raw = input && typeof input === 'object' ? (input as Record<string, unknown>) : {};
   const merged = { ...DEFAULT_SETTINGS, ...(raw as Partial<AppSettings>) };
+
+  merged.generationConcurrency = Number.isFinite(merged.generationConcurrency) ? Math.max(1, Math.min(4, Math.round(merged.generationConcurrency))) : 2;
 
   // 旧ボイス名の移行
   if (merged.ttsVoice === 'ja-JP-Chirp3-HD-Aoife') {

@@ -1,4 +1,7 @@
-import { ipcMain, app, safeStorage } from 'electron';
+import { retryTransient, limitedOpenAIFetch } from '../utils/generationPolicy';
+import { generationSettings } from '../utils/generationContext';
+import { registerOperation } from './operations';
+import { app, safeStorage } from 'electron';
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import OpenAI from 'openai';
@@ -66,33 +69,8 @@ async function readApiKey(service: string): Promise<string | null> {
     return null;
   }
 }
+const withRetry = retryTransient;
 
-// Gemini 呼び出し用の指数バックオフ + ジッター付きリトライ。
-// OpenAI は SDK 内蔵のステータス判定・Retry-After 対応へ一本化する。
-async function withRetry<T>(
-  fn: () => Promise<T>,
-  maxRetries: number = 3,
-  baseDelay: number = 1000
-): Promise<T> {
-  let lastError: Error | null = null;
-
-  for (let attempt = 0; attempt < maxRetries; attempt++) {
-    try {
-      return await fn();
-    } catch (error) {
-      lastError = error instanceof Error ? error : new Error(String(error));
-
-      // 最後の試行では待機しない
-      if (attempt < maxRetries - 1) {
-        // 指数バックオフ + ジッター
-        const delay = baseDelay * Math.pow(2, attempt) + Math.random() * 1000;
-        await new Promise((resolve) => setTimeout(resolve, delay));
-      }
-    }
-  }
-
-  throw lastError;
-}
 
 type OpenAIUsageSummary = {
   provider?: 'openai' | 'gemini';
@@ -328,7 +306,7 @@ async function readTextGenerationConfig(scope: TextGenerationScope): Promise<Tex
   };
   try {
     const settingsPath = getSettingsPath();
-    const content = await fs.readFile(settingsPath, 'utf-8');
+    const content = generationSettings.getStore() ? JSON.stringify(generationSettings.getStore()) : await fs.readFile(settingsPath, 'utf-8');
     const settings = normalizeSettings(JSON.parse(content));
     const selectedModel =
       scope === 'script' ? settings.scriptTextModel : settings.imagePromptTextModel;
@@ -546,7 +524,7 @@ function normalizeClosingLine(scriptText: string, closingLine: string | null): s
 }
 
 // スクリプト生成ハンドラ
-ipcMain.handle(
+registerOperation(
   'ai:generateScript',
   async (
     _,
@@ -570,7 +548,7 @@ ipcMain.handle(
         );
       }
 
-      const openai = new OpenAI({ apiKey });
+      const openai = new OpenAI({ apiKey, fetch: limitedOpenAIFetch });
       const reasoningEffort = resolveOpenAIReasoningEffort(generationConfig.openaiReasoningEffort);
       const response = await withLocalizedStructuredOutputErrors(() =>
         openai.chat.completions.parse({
@@ -1654,7 +1632,7 @@ async function extractSinglePartPromptCandidate(params: {
       );
     }
 
-    const openai = new OpenAI({ apiKey });
+    const openai = new OpenAI({ apiKey, fetch: limitedOpenAIFetch });
     const reasoningEffort = resolveOpenAIReasoningEffort(
       params.generationConfig.openaiReasoningEffort
     );
@@ -1750,7 +1728,7 @@ async function extractSinglePartPromptCandidate(params: {
 }
 
 // 画像プロンプト生成ハンドラ
-ipcMain.handle(
+registerOperation(
   'ai:generateImagePrompts',
   async (
     _,
@@ -1860,7 +1838,7 @@ ipcMain.handle(
 );
 
 // 単一ターゲットの画像プロンプト生成ハンドラ
-ipcMain.handle(
+registerOperation(
   'ai:generateImagePromptForTarget',
   async (
     _,
@@ -1939,7 +1917,7 @@ ipcMain.handle(
 );
 
 // コメント反映ハンドラ
-ipcMain.handle(
+registerOperation(
   'ai:applyComment',
   async (
     _,
@@ -1999,7 +1977,7 @@ JSONのみを出力してください。`;
         );
       }
 
-      const openai = new OpenAI({ apiKey });
+      const openai = new OpenAI({ apiKey, fetch: limitedOpenAIFetch });
       const reasoningEffort = resolveOpenAIReasoningEffort(generationConfig.openaiReasoningEffort);
       if (isScriptTarget) {
         const response = await openai.chat.completions.create({

@@ -1,4 +1,6 @@
-import { ipcMain, app, safeStorage } from 'electron';
+import { configureGenerationConcurrency } from '../utils/generationPolicy';
+import { registerOperation } from './operations';
+import { app, safeStorage } from 'electron';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import {
@@ -26,7 +28,9 @@ async function readSettings(): Promise<Settings> {
   try {
     const settingsPath = getSettingsPath();
     const content = await fs.readFile(settingsPath, 'utf-8');
-    return normalizeSettings(JSON.parse(content));
+    const settings = normalizeSettings(JSON.parse(content));
+    configureGenerationConcurrency(settings.generationConcurrency);
+    return settings;
   } catch {
     return normalizeSettings(DEFAULT_SETTINGS);
   }
@@ -54,28 +58,29 @@ async function readApiKey(service: ApiKeyService): Promise<string | null> {
 // ============================================
 
 // 設定取得
-ipcMain.handle('settings:get', async (): Promise<Settings> => {
+registerOperation('settings:get', async (): Promise<Settings> => {
   return readSettings();
 });
 
 // 設定保存
-ipcMain.handle('settings:set', async (_, settings: unknown) => {
+registerOperation('settings:set', async (_, settings: unknown) => {
   const settingsPath = getSettingsPath();
   const currentSettings = await readSettings();
   const validatedSettings = parseSettingsUpdate(settings);
   const newSettings = normalizeSettings({ ...currentSettings, ...validatedSettings });
+  configureGenerationConcurrency(newSettings.generationConcurrency);
 
   await fs.writeFile(settingsPath, JSON.stringify(newSettings, null, 2));
   return { success: true };
 });
 
 // APIキー取得（暗号化ストレージから）
-ipcMain.handle('settings:getApiKey', async (_, service: ApiKeyService): Promise<string | null> => {
+registerOperation('settings:getApiKey', async (_, service: ApiKeyService): Promise<string | null> => {
   return readApiKey(service);
 });
 
 // APIキー保存（暗号化ストレージへ）
-ipcMain.handle(
+registerOperation(
   'settings:setApiKey',
   async (_, service: ApiKeyService, apiKey: string): Promise<{ success: boolean }> => {
     if (!safeStorage.isEncryptionAvailable()) {
@@ -104,7 +109,7 @@ ipcMain.handle(
 );
 
 // 接続テスト
-ipcMain.handle(
+registerOperation(
   'settings:testConnection',
   async (
     _,

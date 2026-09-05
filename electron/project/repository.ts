@@ -186,6 +186,20 @@ export class ProjectRepository {
           '別の保存が先に完了しました。未保存の編集を保ったまま再読み込みして差分を確認してください。'
         );
       }
+      return this.persist(current, requested, directory);
+    });
+  }
+  async update(id: string, mutate: (project: Project) => void): Promise<Project> {
+    return this.serial(id, async () => {
+      const directory = await this.resolve(id);
+      const current = await this.readDirectory(directory);
+      const requested = structuredClone(current);
+      mutate(requested);
+      return this.persist(current, projectSchema.parse(requested), directory);
+    });
+  }
+
+  private async persist(current: Project, requested: Project, directory: string): Promise<Project> {
       const next = {
         ...requested,
         path: directory,
@@ -201,6 +215,6 @@ export class ProjectRepository {
       );
       await this.atomicWrite(path.join(directory, 'project.json'), JSON.stringify(next));
       return next;
-    });
   }
+
 }

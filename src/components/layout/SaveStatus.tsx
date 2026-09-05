@@ -25,10 +25,24 @@ export function SaveStatus() {
         <button
           className="rounded border px-2 py-1 font-semibold"
           onClick={() => {
-            if (id) void projectClient.flush(id).catch(() => {});
+            if (id)
+              void (
+                state.conflicts.length
+                  ? projectClient.resolveConflicts(id)
+                  : projectClient.flush(id)
+              ).catch(() => {});
           }}
         >
-          保存を再試行
+          {state.conflicts.length ? '競合箇所でこの編集を使って保存' : '保存を再試行'}
+        </button>
+      )}
+      {state.conflicts.length > 0 && (
+        <button
+          onClick={() => {
+            if (id) projectClient.useSaved(id);
+          }}
+        >
+          保存済みの内容へ戻す
         </button>
       )}
     </div>

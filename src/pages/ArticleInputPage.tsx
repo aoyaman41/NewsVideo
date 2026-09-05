@@ -1,4 +1,5 @@
-import { partFreshness, isVideoCurrent, videoInput } from '../../shared/project/integrity';
+import { JOB_STATUS_LABELS } from '../../shared/project/jobs';
+import { GenerationQuote } from '../components/article/GenerationQuote';
 import { projectClient, useProjectState } from '../stores/projectStore';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
@@ -7,14 +8,11 @@ import { ArticleInput, FileImport, ImageDropzone } from '../components/article';
 import { Badge, Card, ErrorDetailPanel, StatusChip, useToast } from '../components/ui';
 import type {
   ArticleInput as ArticleInputType,
-  AutoGenerationStatus,
   ImageAsset,
   PresentationProfile,
   Project,
 } from '../schemas';
 import {
-  createGeminiImageUsageRecordFromAssets,
-  createGeminiTtsUsageRecord,
   createOpenAIUsageRecord,
 } from '../utils/usage';
 import {
@@ -34,7 +32,6 @@ import {
   IMAGE_STYLE_PRESET_DESCRIPTIONS,
   IMAGE_STYLE_PRESET_LABELS,
 } from '../../shared/project/imageStylePresets';
-import { DEFAULT_GEMINI_TTS_MODEL, type GeminiTtsModel } from '../../shared/constants/models';
 import {
   TTS_NARRATION_STYLE_DESCRIPTIONS,
   TTS_NARRATION_STYLE_LABELS,
@@ -55,14 +52,13 @@ export function ArticleInputPage() {
   const [images, setImages] = useState<ImageAsset[]>([]);
   const [blobUrls, setBlobUrls] = useState<Map<string, string>>(new Map());
   const [isGenerating, setIsGenerating] = useState(false);
-  const [isAutoGenerating, setIsAutoGenerating] = useState(false);
-  const [autoStatus, setAutoStatus] = useState<string | null>(null);
+  const [generationMode, setGenerationMode] = useState<'automatic' | 'review'>('review');
+  const [budgetUsd, setBudgetUsd] = useState('5');
   const [error, setError] = useState<string | null>(null);
   const [targetPartCount, setTargetPartCount] = useState<number>(5);
   const [presentationProfile, setPresentationProfile] = useState<PresentationProfile>(
     getDefaultPresentationProfile()
   );
-  const autoCancelRef = useRef(false);
   const isMountedRef = useRef(true);
   const blobUrlsRef = useRef<Map<string, string>>(new Map());
   const savedPresentationProfileRef = useRef<string>(
@@ -78,20 +74,12 @@ export function ArticleInputPage() {
     [toast]
   );
 
-  const reportInfo = useCallback(
-    (message: string, title?: string) => {
-      if (!isMountedRef.current) return;
-      setError(null);
-      toast.info(message, title);
-    },
-    [toast]
-  );
-
   useEffect(() => {
     blobUrlsRef.current = blobUrls;
   }, [blobUrls]);
 
   useEffect(() => {
+    isMountedRef.current = true;
     return () => {
       isMountedRef.current = false;
       for (const url of blobUrlsRef.current.values()) {
@@ -131,13 +119,7 @@ export function ArticleInputPage() {
           return new Map();
         });
 
-        if (project.autoGenerationStatus?.running) {
-          setIsAutoGenerating(true);
-          setAutoStatus(project.autoGenerationStatus.step ?? '自動生成中...');
-        } else {
-          setIsAutoGenerating(false);
-          setAutoStatus(null);
-        }
+
       } catch (err) {
         console.error('Failed to load project:', err);
         reportError(
@@ -181,214 +163,6 @@ export function ArticleInputPage() {
 
     return () => window.clearTimeout(timeoutId);
   }, [presentationProfile, project, reportError, setProject]);
-
-  useEffect(() => {
-    if (!projectId) return;
-
-    let cancelled = false;
-    const tick = async () => {
-      try {
-        const latest = await projectClient.load(projectId);
-        if (cancelled) return;
-        setProject(latest);
-
-        if (latest.autoGenerationStatus?.running) {
-          setIsAutoGenerating(true);
-          setAutoStatus(latest.autoGenerationStatus.step ?? '自動生成中...');
-        } else {
-          setIsAutoGenerating(false);
-          setAutoStatus(null);
-        }
-      } catch {
-        // noop
-      }
-    };
-
-    void tick();
-    const interval = setInterval(() => {
-      void tick();
-    }, 3000);
-
-    return () => {
-      cancelled = true;
-      clearInterval(interval);
-    };
-  }, [projectId, setProject]);
-
-  const notifyCompletion = (message: string) => {
-    if (!('Notification' in window)) {
-      toast.success(message, '自動生成完了');
-      return;
-    }
-
-    if (Notification.permission === 'granted') {
-      new Notification('自動生成完了', { body: message });
-      toast.success(message, '自動生成完了');
-      return;
-    }
-
-    if (Notification.permission !== 'denied') {
-      Notification.requestPermission().then((permission) => {
-        if (permission === 'granted') {
-          new Notification('自動生成完了', { body: message });
-        } else {
-          toast.success(message, '自動生成完了');
-        }
-      });
-      return;
-    }
-
-    toast.success(message, '自動生成完了');
-  };
-
-  const setProjectSafe = (next: Project | null) => {
-    if (!isMountedRef.current) return;
-    setProject(next);
-  };
-
-  const setErrorSafe = (next: string | null) => {
-    if (!isMountedRef.current) return;
-    setError(next);
-  };
-
-  const setAutoStatusSafe = (next: string | null) => {
-    if (!isMountedRef.current) return;
-    setAutoStatus(next);
-  };
-
-  const setIsAutoGeneratingSafe = (next: boolean) => {
-    if (!isMountedRef.current) return;
-    setIsAutoGenerating(next);
-  };
-
-  const updateAutoStatus = async (
-    project: Project,
-    patch: (Partial<AutoGenerationStatus> & { running: boolean }) & {
-      clearLastVideoPath?: boolean;
-      lastVideoPath?: string;
-    }
-  ) => {
-    const now = new Date().toISOString();
-    let latestStatus = project.autoGenerationStatus;
-    if (projectId) {
-      try {
-        const latest = await projectClient.load(projectId);
-        latestStatus = latest.autoGenerationStatus ?? latestStatus;
-      } catch {
-        // ignore
-      }
-    }
-    const startedAt = patch.startedAt ?? latestStatus?.startedAt ?? now;
-    const cancelRequested = patch.cancelRequested ?? latestStatus?.cancelRequested ?? false;
-    const isNewRun = patch.running && Boolean(patch.startedAt);
-    const finishedAt =
-      patch.running === false
-        ? (patch.finishedAt ?? now)
-        : isNewRun
-          ? undefined
-          : (patch.finishedAt ?? latestStatus?.finishedAt);
-    const mergedSteps = {
-      ...(latestStatus?.steps ?? {}),
-      ...(patch.steps ?? {}),
-    };
-    const shouldClear = patch.clearLastVideoPath === true;
-    const hasLastVideoPath = Object.prototype.hasOwnProperty.call(patch, 'lastVideoPath');
-    const lastVideoPathRaw = shouldClear
-      ? undefined
-      : hasLastVideoPath
-        ? patch.lastVideoPath
-        : latestStatus?.lastVideoPath;
-    const lastVideoPath = lastVideoPathRaw || undefined;
-
-    project.autoGenerationStatus = {
-      running: patch.running,
-      step: patch.step ?? latestStatus?.step,
-      startedAt,
-      updatedAt: now,
-      finishedAt,
-      cancelRequested,
-      error: patch.error,
-      steps: Object.keys(mergedSteps).length > 0 ? mergedSteps : undefined,
-      lastVideoPath,
-    };
-    project.updatedAt = now;
-    await projectClient.save(project);
-    setProjectSafe(project);
-    if (patch.step) {
-      setAutoStatusSafe(patch.step);
-    }
-  };
-
-  const ensureNotCancelled = async () => {
-    if (autoCancelRef.current) {
-      throw new Error('キャンセルしました');
-    }
-    if (!projectId) return;
-    try {
-      const latest = await projectClient.load(projectId);
-      if (latest.autoGenerationStatus?.cancelRequested) {
-        throw new Error('キャンセルしました');
-      }
-    } catch (err) {
-      if (err instanceof Error && err.message.includes('キャンセル')) {
-        throw err;
-      }
-    }
-  };
-
-  const buildTtsOptions = (
-    settings: {
-      ttsEngine?: string;
-      ttsModel?: GeminiTtsModel;
-      ttsVoice?: string;
-      ttsSpeakingRate?: number;
-      ttsPitch?: number;
-    },
-    profile: PresentationProfile
-  ) => {
-    const voiceName = settings.ttsVoice || 'Charon';
-    const match = voiceName.match(/^([a-z]{2}-[A-Z]{2})/);
-    const languageCode = match?.[1] || 'ja-JP';
-
-    return {
-      ttsEngine: (settings.ttsEngine as 'google_tts' | 'gemini_tts' | 'macos_tts') || 'gemini_tts',
-      ttsModel: settings.ttsModel || DEFAULT_GEMINI_TTS_MODEL,
-      voiceName,
-      languageCode,
-      speakingRate: Number.isFinite(settings.ttsSpeakingRate) ? settings.ttsSpeakingRate! : 1.0,
-      pitch: Number.isFinite(settings.ttsPitch) ? settings.ttsPitch! : 0,
-      audioEncoding: 'MP3' as const,
-      narrationStylePreset: profile.ttsNarrationStylePreset,
-      narrationStyleNote: profile.ttsNarrationStyleNote,
-    };
-  };
-
-  const resolveVideoOptions = (
-    settings: {
-      videoResolution?: '1920x1080' | '1280x720' | '3840x2160';
-      videoFps?: number;
-      videoBitrate?: string;
-      audioBitrate?: string;
-      openingVideoPath?: string;
-      endingVideoPath?: string;
-    },
-    project: Project
-  ) => {
-    const safeName = project.name.replace(/[\\/:*?"<>|]/g, '_').slice(0, 80) || 'output';
-    const outputPath = `${project.path}/output/${safeName}.mp4`;
-
-    return {
-      outputPath,
-      renderOptions: {
-        resolution: settings.videoResolution ?? '1920x1080',
-        fps: settings.videoFps ?? 30,
-        videoBitrate: settings.videoBitrate ?? '8M',
-        audioBitrate: settings.audioBitrate ?? '192k',
-        includeOpening: Boolean(settings.openingVideoPath),
-        includeEnding: Boolean(settings.endingVideoPath),
-      },
-    };
-  };
 
   const applyPresentationPreset = (preset: PresentationProfilePreset) => {
     const presetDefaults = getDefaultPresentationProfile(preset);
@@ -456,542 +230,19 @@ export function ArticleInputPage() {
     }
   };
 
-  const handleAutoSubmit = async (data: ArticleInputType, mode: 'resume' | 'restart') => {
-    if (!projectId) return;
-
-    setIsAutoGeneratingSafe(true);
-    setAutoStatusSafe('記事を保存中...');
-    setErrorSafe(null);
-    autoCancelRef.current = false;
-
+  const handleAutoSubmit = async (data: ArticleInputType, restart = false) => {
+    if (!projectId || !project) return;
     try {
-      const project = await projectClient.load(projectId);
-      if (project.autoGenerationStatus?.running) {
-        setProjectSafe(project);
-        setAutoStatusSafe(project.autoGenerationStatus.step ?? '自動生成中...');
-        setIsAutoGeneratingSafe(true);
-        reportInfo('既に自動生成中です。進行状況をそのまま表示します。', '既に実行中です');
-        return;
-      }
-      const startedAt = new Date().toISOString();
-      if (mode === 'restart') {
-        project.parts = [];
-        project.prompts = [];
-        project.images = [];
-        project.audio = [];
-        project.updatedAt = startedAt;
-        await projectClient.save(project);
-        setProjectSafe(project);
-      }
-      project.article = {
-        title: data.title,
-        source: data.source,
-        bodyText: data.bodyText,
-        importedImages: images,
-      };
-      project.presentationProfile = presentationProfile;
-      await updateAutoStatus(project, {
-        running: true,
-        step: '記事を保存中...',
-        startedAt,
-        cancelRequested: false,
-        error: undefined,
-        finishedAt: undefined,
-        steps:
-          mode === 'restart'
-            ? { script: false, prompts: false, images: false, audio: false, video: false }
-            : undefined,
-        clearLastVideoPath: mode === 'restart',
-      });
-      await ensureNotCancelled();
-
-      const computeStepState = (p: Project) => {
-        const parts = p.parts ?? [];
-        const total = parts.length;
-        const script = total > 0 && parts.every((part) => partFreshness(p, part).script === 'current');
-        const partIdSet = new Set(parts.map((part) => part.id));
-        const promptsCount = p.prompts
-          ? new Set(p.prompts.filter((prompt) => partIdSet.has(prompt.partId)).map((p) => p.partId))
-              .size
-          : 0;
-        const prompts = script && promptsCount === total;
-        const images = script && parts.every((part) => partFreshness(p, part).image === 'current');
-        const audio = script && parts.every((part) => partFreshness(p, part).audio === 'current');
-        const video = isVideoCurrent(p);
-        return { script, prompts, images, audio, video };
-      };
-
-      let steps = computeStepState(project);
-      await updateAutoStatus(project, { running: true, steps });
-
-      if (!steps.script) {
-        await updateAutoStatus(project, { running: true, step: 'スクリプトを生成中...' });
-        const scriptResult = await window.electronAPI.ai.generateScript(project.article, {
-          tone: presentationProfile.tone,
-          targetPartCount,
-          targetDurationPerPartSec: presentationProfile.targetDurationPerPartSec,
-          closingLine: closingLinePreview,
-        });
-        await ensureNotCancelled();
-        const scriptUsage = createOpenAIUsageRecord('script_generate', scriptResult.usage);
-        project.parts = scriptResult.parts;
-        if (scriptUsage) {
-          project.usage = [...(project.usage ?? []), scriptUsage];
-        }
-        project.updatedAt = new Date().toISOString();
-        await projectClient.save(project);
-        setProjectSafe(project);
-        steps = computeStepState(project);
-        await updateAutoStatus(project, {
-          running: true,
-          step: 'スクリプト完了',
-          steps: { script: true },
-        });
-        await ensureNotCancelled();
-      }
-
-      const needsImagePipeline = !steps.prompts || !steps.images;
-      const needsAudioPipeline = !steps.audio;
-
-      type ImagePipelineResult = {
-        promptsAdded: Project['prompts'];
-        imagesAdded: ImageAsset[];
-        partImageById: Map<string, string>;
-        usageRecords: Project['usage'];
-        errors: string[];
-      };
-
-      type AudioPipelineResult = {
-        audioAdded: Project['audio'];
-        partAudioById: Map<string, Project['audio'][number]>;
-        usageRecords: Project['usage'];
-        errors: string[];
-      };
-
-      const runImagePipeline = async (baseProject: Project): Promise<ImagePipelineResult> => {
-        const usageRecords: Project['usage'] = [];
-        const errors: string[] = [];
-        const partById = new Map(baseProject.parts.map((part) => [part.id, part]));
-        const existingPrompts = baseProject.prompts.filter((prompt) => partById.has(prompt.partId));
-        const promptsByPart = new Set(existingPrompts.map((prompt) => prompt.partId));
-        const missingParts = baseProject.parts.filter((part) => !promptsByPart.has(part.id) || partFreshness(baseProject, part).prompt !== 'current');
-
-        let promptsAdded: Project['prompts'] = [];
-        if (missingParts.length > 0) {
-          const promptResult = await window.electronAPI.ai.generateImagePrompts(
-            missingParts,
-            baseProject.article,
-            {
-              stylePreset: baseProject.presentationProfile.imageStylePreset,
-              aspectRatio: baseProject.presentationProfile.aspectRatio,
-              styleReferenceImageIds: baseProject.presentationProfile.styleReferenceImageIds,
-              styleReferenceNote: baseProject.presentationProfile.styleReferenceNote,
-            }
-          );
-          await ensureNotCancelled();
-          promptsAdded = promptResult.prompts;
-          const promptUsage = createOpenAIUsageRecord('image_prompt_generate', promptResult.usage);
-          if (promptUsage) usageRecords.push(promptUsage);
-        }
-
-        const partImageById = new Map<string, string>();
-        let imagesAdded: ImageAsset[] = [];
-        if (!steps.images) {
-          const allPrompts = [...existingPrompts, ...promptsAdded];
-          const latestPromptByPart = new Map<string, (typeof allPrompts)[number]>();
-          for (const prompt of allPrompts) {
-            const current = latestPromptByPart.get(prompt.partId);
-            if (!current || prompt.createdAt >= current.createdAt) {
-              latestPromptByPart.set(prompt.partId, prompt);
-            }
-          }
-
-          const imagesByPrompt = new Map<string, ImageAsset>();
-          for (const image of baseProject.images) {
-            if (image.metadata.promptId && !imagesByPrompt.has(image.metadata.promptId)) {
-              imagesByPrompt.set(image.metadata.promptId, image);
-            }
-          }
-
-          const promptsToGenerate: Project['prompts'] = [];
-          for (const part of baseProject.parts) {
-            if (partFreshness(baseProject, part).image === 'current') continue;
-            const prompt = latestPromptByPart.get(part.id);
-            if (!prompt) continue;
-            const existingImage = imagesByPrompt.get(prompt.id);
-            if (existingImage) {
-              partImageById.set(part.id, existingImage.id);
-            } else {
-              promptsToGenerate.push(prompt);
-            }
-          }
-
-          if (promptsToGenerate.length > 0) {
-            if (!projectId) {
-              throw new Error('projectId が指定されていません');
-            }
-            try {
-              const batchResult = await window.electronAPI.image.generateBatch(
-                promptsToGenerate.map((prompt) => ({
-                  ...prompt,
-                  styleReferenceImageIds: baseProject.presentationProfile.styleReferenceImageIds,
-                })),
-                projectId
-              );
-              imagesAdded = batchResult.images;
-              errors.push(
-                ...batchResult.errors.map((error) => {
-                  const part = error.partId ? partById.get(error.partId) : undefined;
-                  const label = part ? `パート${part.index + 1}` : `項目${error.index + 1}`;
-                  return `${label}: ${error.error}`;
-                })
-              );
-              await ensureNotCancelled();
-            } catch (error) {
-              if (error instanceof Error && error.message.includes('キャンセル')) {
-                throw error;
-              }
-              errors.push(error instanceof Error ? error.message : String(error));
-            }
-          }
-
-          const imageUsage = createGeminiImageUsageRecordFromAssets(
-            imagesAdded,
-            'image_generate_batch'
-          );
-          if (imageUsage) usageRecords.push(imageUsage);
-
-          const promptById = new Map(promptsToGenerate.map((prompt) => [prompt.id, prompt]));
-          for (const imageAsset of imagesAdded) {
-            const promptId = imageAsset.metadata.promptId;
-            if (!promptId) continue;
-            const generatedPrompt = promptById.get(promptId);
-            if (!generatedPrompt) continue;
-            partImageById.set(generatedPrompt.partId, imageAsset.id);
-          }
-        }
-
-        return {
-          promptsAdded,
-          imagesAdded,
-          partImageById,
-          usageRecords,
-          errors,
-        };
-      };
-
-      const runAudioPipeline = async (baseProject: Project): Promise<AudioPipelineResult> => {
-        const settings = await window.electronAPI.settings.get();
-        await ensureNotCancelled();
-        const ttsOptions = buildTtsOptions(settings, baseProject.presentationProfile);
-        const usageRecords: Project['usage'] = [];
-        const partAudioById = new Map<string, Project['audio'][number]>();
-        const audioAdded: Project['audio'] = [];
-        const errors: string[] = [];
-        const targets = baseProject.parts.filter((part) => partFreshness(baseProject, part).audio !== 'current');
-        const AUDIO_GENERATION_CONCURRENCY = 5;
-
-        if (!projectId) {
-          throw new Error('projectId が指定されていません');
-        }
-
-        type AudioTaskResult =
-          | {
-              ok: true;
-              partId: string;
-              audio: Project['audio'][number];
-              usageRecord: Project['usage'][number] | null;
-            }
-          | {
-              ok: false;
-              error: string;
-            };
-
-        const taskResults: Array<AudioTaskResult | null> = Array(targets.length).fill(null);
-        const workerCount = Math.max(1, Math.min(AUDIO_GENERATION_CONCURRENCY, targets.length));
-        let cursor = 0;
-
-        await Promise.all(
-          Array.from({ length: workerCount }, async () => {
-            while (true) {
-              const taskIndex = cursor;
-              cursor += 1;
-              if (taskIndex >= targets.length) {
-                return;
-              }
-
-              const part = targets[taskIndex];
-              await ensureNotCancelled();
-              try {
-                const scriptText = part.scriptText?.trim() ?? '';
-                if (!scriptText) {
-                  throw new Error('スクリプトが空です');
-                }
-                const result = await window.electronAPI.tts.generate(
-                  scriptText,
-                  ttsOptions,
-                  projectId
-                );
-                await ensureNotCancelled();
-                const usageRecord = createGeminiTtsUsageRecord('tts_generate', result.usage);
-                taskResults[taskIndex] = {
-                  ok: true,
-                  partId: part.id,
-                  audio: result.audio,
-                  usageRecord,
-                };
-              } catch (error) {
-                taskResults[taskIndex] = {
-                  ok: false,
-                  error: `パート${part.index + 1}: ${
-                    error instanceof Error ? error.message : String(error)
-                  }`,
-                };
-              }
-            }
-          })
-        );
-
-        for (const result of taskResults) {
-          if (!result) continue;
-          if (!result.ok) {
-            errors.push(result.error);
-            continue;
-          }
-          if (result.usageRecord) usageRecords.push(result.usageRecord);
-          partAudioById.set(result.partId, result.audio);
-          audioAdded.push(result.audio);
-        }
-
-        return {
-          audioAdded,
-          partAudioById,
-          usageRecords,
-          errors,
-        };
-      };
-
-      if (needsImagePipeline || needsAudioPipeline) {
-        const runningStepLabel =
-          needsImagePipeline && needsAudioPipeline
-            ? '画像と音声を生成中...'
-            : needsImagePipeline
-              ? '画像を生成中...'
-              : '音声を生成中...';
-        await updateAutoStatus(project, { running: true, step: runningStepLabel });
-        await ensureNotCancelled();
-
-        const [imageSettled, audioSettled] = await Promise.allSettled([
-          needsImagePipeline ? runImagePipeline(project) : Promise.resolve(null),
-          needsAudioPipeline ? runAudioPipeline(project) : Promise.resolve(null),
-        ]);
-        await ensureNotCancelled();
-
-        const pipelineErrors: string[] = [];
-        const audioErrors: string[] = [];
-        const now = new Date().toISOString();
-
-        if (imageSettled.status === 'fulfilled' && imageSettled.value) {
-          const imageResult = imageSettled.value;
-          if (imageResult.promptsAdded.length > 0) {
-            project.prompts = [...project.prompts, ...imageResult.promptsAdded];
-          }
-          if (imageResult.imagesAdded.length > 0) {
-            project.images = [...project.images, ...imageResult.imagesAdded];
-          }
-          if (imageResult.usageRecords.length > 0) {
-            project.usage = [...project.usage, ...imageResult.usageRecords];
-          }
-          pipelineErrors.push(...imageResult.errors);
-          if (imageResult.partImageById.size > 0) {
-            project.parts = project.parts.map((part) => {
-              const imageId = imageResult.partImageById.get(part.id);
-              if (!imageId) return part;
-              if (partFreshness(project, part).image === 'current') return part;
-              return {
-                ...part,
-                panelImages: [{ imageId }],
-                updatedAt: now,
-              };
-            });
-          }
-        } else if (imageSettled.status === 'rejected') {
-          pipelineErrors.push(
-            `画像生成に失敗しました: ${
-              imageSettled.reason instanceof Error
-                ? imageSettled.reason.message
-                : String(imageSettled.reason)
-            }`
-          );
-        }
-
-        if (audioSettled.status === 'fulfilled' && audioSettled.value) {
-          const audioResult = audioSettled.value;
-          audioErrors.push(...audioResult.errors);
-          if (audioResult.audioAdded.length > 0) {
-            project.audio = [...project.audio, ...audioResult.audioAdded];
-          }
-          if (audioResult.usageRecords.length > 0) {
-            project.usage = [...project.usage, ...audioResult.usageRecords];
-          }
-          if (audioResult.partAudioById.size > 0) {
-            project.parts = project.parts.map((part) => {
-              const audio = audioResult.partAudioById.get(part.id);
-              if (!audio) return part;
-              return {
-                ...part,
-                audio,
-                updatedAt: now,
-              };
-            });
-          }
-        } else if (audioSettled.status === 'rejected') {
-          pipelineErrors.push(
-            `音声生成に失敗しました: ${
-              audioSettled.reason instanceof Error
-                ? audioSettled.reason.message
-                : String(audioSettled.reason)
-            }`
-          );
-        }
-
-        project.updatedAt = now;
-        await projectClient.save(project);
-        setProjectSafe(project);
-
-        steps = computeStepState(project);
-        const finishedStepLabel =
-          needsImagePipeline && needsAudioPipeline
-            ? '画像・音声生成完了'
-            : needsImagePipeline
-              ? '画像生成完了'
-              : '音声生成完了';
-        await updateAutoStatus(project, {
-          running: true,
-          step: finishedStepLabel,
-          steps: {
-            prompts: steps.prompts,
-            images: steps.images,
-            audio: steps.audio,
-          },
-        });
-        await ensureNotCancelled();
-
-        if (audioErrors.length > 0) {
-          const head = audioErrors.slice(0, 3).join(' / ');
-          const tail = audioErrors.length > 3 ? `（他${audioErrors.length - 3}件）` : '';
-          throw new Error(`音声生成の一部に失敗しました: ${head}${tail}`);
-        }
-
-        if (pipelineErrors.length > 0) {
-          throw new Error(pipelineErrors.join(' / '));
-        }
-      }
-
-      steps = computeStepState(project);
-      if (!steps.video) {
-        await updateAutoStatus(project, { running: true, step: '動画を書き出し中...' });
-        const settings = await window.electronAPI.settings.get();
-        const videoOptions = resolveVideoOptions(settings, project);
-        project.outputSettings = videoOptions.renderOptions;
-        await projectClient.save(project);
-        await ensureNotCancelled();
-        const renderResult = await window.electronAPI.video.render(
-          project,
-          videoOptions.renderOptions,
-          videoOptions.outputPath
-        );
-        project.integrity = { ...project.integrity!, video: videoInput(project) };
-        await updateAutoStatus(project, {
-          running: false,
-          step: '完了',
-          cancelRequested: false,
-          steps: { video: true },
-          lastVideoPath: renderResult.outputPath,
-        });
-        notifyCompletion(`動画の生成が完了しました: ${renderResult.outputPath}`);
-      } else {
-        await updateAutoStatus(project, { running: false, step: '完了', cancelRequested: false });
-        notifyCompletion('既に動画まで生成済みのため、再生成はスキップしました。');
-      }
-    } catch (err) {
-      const message = err instanceof Error ? err.message : '自動生成に失敗しました';
-      if (message.includes('キャンセル')) {
-        reportInfo('自動生成をキャンセルしました。', 'キャンセル');
-        if (projectId) {
-          try {
-            const latest = await projectClient.load(projectId);
-            await updateAutoStatus(latest, {
-              running: false,
-              step: 'キャンセル',
-              cancelRequested: false,
-            });
-          } catch {
-            // ignore
-          }
-        }
-      } else {
-        console.error('Auto generation failed:', err);
-        reportError(message, '自動生成に失敗しました');
-        if (projectId) {
-          try {
-            const latest = await projectClient.load(projectId);
-            await updateAutoStatus(latest, {
-              running: false,
-              step: 'エラー',
-              error: message,
-              cancelRequested: false,
-            });
-          } catch {
-            // ignore
-          }
-        }
-      }
-    } finally {
-      setIsAutoGeneratingSafe(false);
-      setAutoStatusSafe(null);
-      autoCancelRef.current = false;
-    }
+      const draft = { ...project, article: { ...project.article, ...data, importedImages: images }, presentationProfile };
+      await projectClient.save(draft);
+      await window.electronAPI.jobs.start(projectId, { mode: generationMode, targetPartCount, budgetUsd: budgetUsd.trim() ? Number(budgetUsd) : undefined, restart });
+    } catch (error) { reportError(error instanceof Error ? error.message : String(error)); }
   };
-
-  const handleAutoCancel = async () => {
-    if (!projectId) return;
-    autoCancelRef.current = true;
-    setAutoStatusSafe('キャンセル中...');
-    try {
-      const latest = await projectClient.load(projectId);
-      if (latest.autoGenerationStatus?.running) {
-        const now = new Date().toISOString();
-        latest.autoGenerationStatus = {
-          ...latest.autoGenerationStatus,
-          running: true,
-          step: 'キャンセル中...',
-          updatedAt: now,
-          cancelRequested: true,
-        };
-        latest.updatedAt = now;
-        await projectClient.save(latest);
-        setProjectSafe(latest);
-      }
-      await Promise.allSettled([
-        window.electronAPI.image.cancelBatch(projectId),
-        window.electronAPI.video.cancelRender(),
-      ]);
-    } catch {
-      // ignore
-    }
-  };
-
-  const handleAutoResume = async (data: ArticleInputType) => {
-    await handleAutoSubmit(data, 'resume');
-  };
-
-  const handleAutoRestart = async (data: ArticleInputType) => {
-    await handleAutoSubmit(data, 'restart');
-  };
-
-  const autoRunning = Boolean(isAutoGenerating || project?.autoGenerationStatus?.running);
-  const currentAutoStatus = autoStatus ?? project?.autoGenerationStatus?.step;
+  const handleAutoResume = (data: ArticleInputType) => handleAutoSubmit(data);
+  const handleAutoRestart = (data: ArticleInputType) => handleAutoSubmit(data, true);
+  const handleAutoCancel = () => { if (projectId) void window.electronAPI.jobs.cancel(projectId).catch((error) => reportError(String(error))); };
+  const autoRunning = project?.job?.status === 'running' || project?.job?.status === 'queued';
+  const currentAutoStatus = project?.job?.stage;
 
   const handleImportedText = (title: string, text: string) => {
     setProject((previous) => previous ? { ...previous, article: { ...previous.article, title: previous.article.title.trim() ? previous.article.title : title, bodyText: text } } : previous);
@@ -1249,6 +500,17 @@ export function ArticleInputPage() {
             </Card>
 
             <Card title="記事情報" subtitle="必須項目を入力してスクリプトを生成">
+              {project && <GenerationQuote project={project} partCount={targetPartCount} />}
+              <div className="mb-4 grid gap-3 sm:grid-cols-2">
+                <label className="text-sm">生成の進め方<select className="nv-input" value={generationMode} onChange={(event) => setGenerationMode(event.target.value as 'automatic' | 'review')}><option value="review">台本・素材を確認しながら</option><option value="automatic">すべて自動で進める</option></select></label>
+                <label className="text-sm">ジョブ予算（USD、空欄で制限なし）<input type="number" min="0" step="0.1" className="nv-input" value={budgetUsd} onChange={(event) => setBudgetUsd(event.target.value)} /></label>
+              </div>
+              {project?.job && <div className="mb-4 rounded border p-3 text-sm" role="status">
+                <p>{project.job.stage} / {JOB_STATUS_LABELS[project.job.status]} ・使用額 ${project.job.spentUsd.toFixed(4)}</p>
+                {project.job.unknownCharges > 0 && <p>料金未確定のリクエスト {project.job.unknownCharges}件。API側の利用明細で確認してください。</p>}
+                {project.job.error && <p className="text-red-700">{project.job.error.message}</p>}
+                <p>開始前に推定料金の余裕を含めて予算を確認します。実際の料金を厳密に上限へ抑えるものではありません。</p>
+              </div>}
               <ArticleInput
                 onChange={(data) => { setArticleData(data); setProject((previous) => previous ? { ...previous, article: { ...previous.article, ...data, importedImages: images } } : previous); }}
                 onSaveDraft={() => { if (projectId) void projectClient.flush(projectId).catch((error) => setError(String(error))); }}

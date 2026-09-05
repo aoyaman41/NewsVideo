@@ -31,6 +31,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
     create: (name: string) => ipcRenderer.invoke('project:create', name),
   },
 
+  jobs: {
+    start: (id: string, options: unknown) => ipcRenderer.invoke('jobs:start', id, options),
+    cancel: (id: string) => ipcRenderer.invoke('jobs:cancel', id),
+  },
+
   // 設定操作
   settings: {
     get: () => ipcRenderer.invoke('settings:get'),

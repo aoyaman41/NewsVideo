@@ -1,4 +1,7 @@
-import { ipcMain, app, safeStorage, nativeImage } from 'electron';
+import { retryTransient, limitedOpenAIFetch } from '../utils/generationPolicy';
+import { generationSettings } from '../utils/generationContext';
+import { registerOperation } from './operations';
+import { app, safeStorage, nativeImage } from 'electron';
 import { createReadStream } from 'node:fs';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
@@ -60,7 +63,7 @@ async function readImageGenerationSettings(): Promise<{
 
   try {
     const settingsPath = getSettingsPath();
-    const content = await fs.readFile(settingsPath, 'utf-8');
+    const content = generationSettings.getStore() ? JSON.stringify(generationSettings.getStore()) : await fs.readFile(settingsPath, 'utf-8');
     const parsed = JSON.parse(content) as { imageModel?: string; imageResolution?: string };
     if (isImageModel(parsed.imageModel)) {
       imageModel = parsed.imageModel;
@@ -77,32 +80,8 @@ async function readImageGenerationSettings(): Promise<{
     imageResolution,
   };
 }
+const withRetry = retryTransient;
 
-// 指数バックオフ + ジッター付きリトライ
-async function withRetry<T>(
-  fn: () => Promise<T>,
-  maxRetries: number = 3,
-  baseDelay: number = 1000
-): Promise<T> {
-  let lastError: Error | null = null;
-
-  for (let attempt = 0; attempt < maxRetries; attempt++) {
-    try {
-      return await fn();
-    } catch (error) {
-      lastError = error instanceof Error ? error : new Error(String(error));
-
-      // 最後の試行では待機しない
-      if (attempt < maxRetries - 1) {
-        // 指数バックオフ + ジッター
-        const delay = baseDelay * Math.pow(2, attempt) + Math.random() * 1000;
-        await new Promise((resolve) => setTimeout(resolve, delay));
-      }
-    }
-  }
-
-  throw lastError;
-}
 
 // 画像プロンプトの型
 interface ImagePrompt {
@@ -765,7 +744,7 @@ async function generateImageAsset(params: {
 }
 
 // 単一画像生成ハンドラ
-ipcMain.handle(
+registerOperation(
   'image:generate',
   async (_, prompt: ImagePrompt, projectId: string): Promise<ImageAsset> => {
     const { imageModel, imageResolution } = await readImageGenerationSettings();
@@ -801,14 +780,14 @@ ipcMain.handle(
       imageModel,
       imageResolution,
       googleGenAI: googleApiKey ? new GoogleGenAI({ apiKey: googleApiKey }) : undefined,
-      openai: openaiApiKey ? new OpenAI({ apiKey: openaiApiKey }) : undefined,
+      openai: openaiApiKey ? new OpenAI({ apiKey: openaiApiKey, fetch: limitedOpenAIFetch }) : undefined,
       styleReferenceImages,
     });
   }
 );
 
 // バッチ画像生成ハンドラ
-ipcMain.handle(
+registerOperation(
   'image:generateBatch',
   async (_, prompts: ImagePrompt[], projectId: string): Promise<ImageBatchGenerationResult> => {
     if (runningImageBatchProjects.has(projectId)) {
@@ -839,7 +818,7 @@ ipcMain.handle(
     }
 
     const projectPath = await getProjectPath(projectId);
-    const openai = openaiApiKey ? new OpenAI({ apiKey: openaiApiKey }) : undefined;
+    const openai = openaiApiKey ? new OpenAI({ apiKey: openaiApiKey, fetch: limitedOpenAIFetch }) : undefined;
     const genAI = googleApiKey ? new GoogleGenAI({ apiKey: googleApiKey }) : undefined;
     const runState: ImageBatchRunState = { cancelRequested: false };
 
@@ -976,7 +955,7 @@ ipcMain.handle(
   }
 );
 
-ipcMain.handle(
+registerOperation(
   'image:cancelBatch',
   async (_, projectId?: string): Promise<{ success: boolean }> => {
     if (typeof projectId === 'string' && projectId.trim().length > 0) {
@@ -993,7 +972,7 @@ ipcMain.handle(
 );
 
 // 画像削除ハンドラ
-ipcMain.handle('image:delete', async (_, filePath: string): Promise<{ success: boolean }> => {
+registerOperation('image:delete', async (_, filePath: string): Promise<{ success: boolean }> => {
   try {
     await fs.unlink(filePath);
     return { success: true };
@@ -1004,7 +983,7 @@ ipcMain.handle('image:delete', async (_, filePath: string): Promise<{ success: b
 });
 
 // 画像コピーハンドラ（インポート用）
-ipcMain.handle(
+registerOperation(
   'image:import',
   async (_, sourcePath: string, projectId: string): Promise<ImageAsset> => {
     // プロジェクトパスを取得
@@ -1055,7 +1034,7 @@ ipcMain.handle(
 );
 
 // Browser File objects no longer expose an absolute path in current Electron.
-ipcMain.handle('image:importData', async (_, bytes: ArrayBuffer, projectId: string): Promise<ImageAsset> => {
+registerOperation('image:importData', async (_, bytes: ArrayBuffer, projectId: string): Promise<ImageAsset> => {
   if (!(bytes instanceof ArrayBuffer) || bytes.byteLength === 0 || bytes.byteLength > 50 * 1024 * 1024) throw new Error('画像は50MB以内で指定してください。');
   const projectPath = await getProjectPath(projectId);
   const decoded = nativeImage.createFromBuffer(Buffer.from(bytes));

@@ -32,6 +32,8 @@ export function sourceInputs(project: Project, part: Part) {
     .filter((item) => item.partId === part.id)
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
   const script = inputFingerprint({
+    model: project.generationConfig?.scriptTextModel,
+    reasoning: project.generationConfig?.openaiReasoningEffort,
     article: {
       title: project.article.title,
       source: project.article.source,
@@ -45,6 +47,7 @@ export function sourceInputs(project: Project, part: Part) {
   const text = { title: part.title, summary: part.summary, scriptText: part.scriptText };
   const promptInput = inputFingerprint({
     text,
+    model: project.generationConfig?.imagePromptTextModel,
     aspectRatio: profile.aspectRatio,
     style: profile.imageStylePreset,
     references: profile.styleReferenceImageIds,
@@ -53,9 +56,10 @@ export function sourceInputs(project: Project, part: Part) {
   return {
     script,
     prompt: promptInput,
-    image: inputFingerprint({ promptInput, prompt }),
+    image: inputFingerprint({ promptInput, prompt, model: project.generationConfig?.imageModel, resolution: project.generationConfig?.imageResolution }),
     audio: inputFingerprint({
       text: part.scriptText,
+      engine: project.generationConfig?.ttsEngine, model: project.generationConfig?.ttsModel, voice: project.generationConfig?.ttsVoice, rate: project.generationConfig?.ttsSpeakingRate, pitch: project.generationConfig?.ttsPitch,
       style: profile.ttsNarrationStylePreset,
       note: profile.ttsNarrationStyleNote,
     }),

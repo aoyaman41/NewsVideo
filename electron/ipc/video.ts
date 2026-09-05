@@ -1,7 +1,9 @@
+import { generationSettings } from '../utils/generationContext';
+import { registerOperation } from './operations';
 import { projectSchema } from '../../shared/project/schema';
 import { partFreshness } from '../../shared/project/integrity';
 import { ProjectRepository } from '../project/repository';
-import { BrowserWindow, app, dialog, ipcMain } from 'electron';
+import { BrowserWindow, app, dialog } from 'electron';
 import * as fs from 'fs/promises';
 import * as os from 'os';
 import * as path from 'path';
@@ -189,7 +191,7 @@ function assertNotCanceled(job: VideoJob) {
 async function readSettings(): Promise<Settings> {
   try {
     const settingsPath = path.join(app.getPath('userData'), 'settings.json');
-    const content = await fs.readFile(settingsPath, 'utf-8');
+    const content = generationSettings.getStore() ? JSON.stringify(generationSettings.getStore()) : await fs.readFile(settingsPath, 'utf-8');
     const parsed = JSON.parse(content) as Settings;
     return {
       openingVideoPath: typeof parsed.openingVideoPath === 'string' ? parsed.openingVideoPath : undefined,
@@ -886,7 +888,7 @@ async function findProjectByPartId(partId: string): Promise<{ projectPath: strin
   throw new Error(`Part not found: ${partId}`);
 }
 
-ipcMain.handle(
+registerOperation(
   'video:cancelRender',
   async (): Promise<{ success: boolean }> => {
     if (!currentJob) return { success: true };
@@ -902,7 +904,7 @@ ipcMain.handle(
   }
 );
 
-ipcMain.handle(
+registerOperation(
   'video:preview',
   async (_, partId: string): Promise<{ previewPath: string }> => {
     if (currentJob) throw new Error('別の動画処理が実行中です');
@@ -965,7 +967,7 @@ ipcMain.handle(
   }
 );
 
-ipcMain.handle(
+registerOperation(
   'video:render',
   async (_, project: ProjectLike, options: RenderOptions, outputPath: string): Promise<{ outputPath: string }> => {
     if (currentJob) throw new Error('別の動画処理が実行中です');

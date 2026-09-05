@@ -49,6 +49,7 @@ interface VoiceInfo {
 }
 
 interface Settings {
+  generationConcurrency: number;
   ttsEngine: 'google_tts' | 'gemini_tts' | 'macos_tts';
   ttsModel: GeminiTtsModel;
   ttsVoice: string;
@@ -72,6 +73,7 @@ interface Settings {
 }
 
 const defaultSettings: Settings = {
+  generationConcurrency: 2,
   ttsEngine: 'gemini_tts',
   ttsModel: DEFAULT_GEMINI_TTS_MODEL,
   ttsVoice: 'Charon',
@@ -452,6 +454,11 @@ export function SettingsPage() {
 
           {activeTab === 'api' && (
             <Card title="APIキー設定" subtitle="各サービスの接続状態を確認しながら保存">
+              <label className="mb-4 block text-sm">サービスごとの同時リクエスト数
+                <select className="nv-input mt-1" value={settings.generationConcurrency} onChange={(event) => setSettings((previous) => ({ ...previous, generationConcurrency: Number(event.target.value) }))}>
+                  {[1, 2, 3, 4].map((count) => <option key={count} value={count}>{count}</option>)}
+                </select>
+              </label>
               <div className="space-y-4">
                 {(Object.keys(serviceLabels) as ApiKeyService[]).map((service) => (
                   <div

@@ -1,3 +1,4 @@
+import { mergeProjectDraft } from '../../shared/project/merge';
 import { deriveIntegrity } from '../../shared/project/integrity';
 import { useCallback, useSyncExternalStore } from 'react';
 import type { Project } from '../schemas';
@@ -8,8 +9,16 @@ type Entry = {
   saving: boolean;
   error: string | null;
   lastSavedAt: string | null;
+  conflicts: string[];
 };
-const empty: Entry = { project: null, saved: null, saving: false, error: null, lastSavedAt: null };
+const empty: Entry = {
+  project: null,
+  saved: null,
+  saving: false,
+  error: null,
+  lastSavedAt: null,
+  conflicts: [],
+};
 const entries = new Map<string, Entry>();
 const listeners = new Set<() => void>();
 const timers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -61,6 +70,7 @@ async function flush(id: string): Promise<void> {
     return flush(id);
   }
   const state = read(id);
+  if (state.conflicts.length) throw new Error('保存競合の解決が必要です。編集は保持されています。');
   if (!state.project || comparable(state.project) === comparable(state.saved)) return;
   const requested = state.project;
   entries.set(id, { ...state, saving: true, error: null });
@@ -85,9 +95,24 @@ async function flush(id: string): Promise<void> {
         saved: result.project,
         saving: false,
         error: null,
+        conflicts: [],
         lastSavedAt: result.savedAt,
       });
     } catch (error) {
+      if (String(error).includes('CONFLICT') && state.saved) {
+        const remote = await window.electronAPI.project.load(id);
+        const result = mergeProjectDraft(state.saved, read(id).project!, remote);
+        entries.set(id, {
+          ...read(id),
+          project: result.project,
+          saved: structuredClone(remote),
+          saving: false,
+          conflicts: result.conflicts,
+          error: result.conflicts.length ? `競合箇所: ${result.conflicts.join(', ')}` : null,
+        });
+        if (!result.conflicts.length) return;
+        throw error;
+      }
       entries.set(id, {
         ...read(id),
         saving: false,
@@ -136,9 +161,29 @@ export const projectClient = {
     update(project.id, project);
     await flush(project.id);
     const stored = read(project.id).project;
-    if (stored) Object.assign(project, { revision: stored.revision, integrity: stored.integrity, updatedAt: stored.updatedAt, schemaVersion: stored.schemaVersion });
+    if (stored)
+      Object.assign(project, {
+        revision: stored.revision,
+        integrity: stored.integrity,
+        updatedAt: stored.updatedAt,
+        schemaVersion: stored.schemaVersion,
+      });
   },
   flush,
+  async resolveConflicts(id: string) {
+    entries.set(id, { ...read(id), conflicts: [] });
+    await flush(id);
+  },
+  useSaved(id: string) {
+    const state = read(id);
+    entries.set(id, {
+      ...state,
+      project: structuredClone(state.saved),
+      error: null,
+      conflicts: [],
+    });
+    notify();
+  },
   async flushAll() {
     await Promise.all([...entries.keys()].map(flush));
   },

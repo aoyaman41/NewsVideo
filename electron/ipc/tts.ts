@@ -1,4 +1,6 @@
-import { app, ipcMain, safeStorage } from 'electron';
+import { retryTransient } from '../utils/generationPolicy';
+import { registerOperation } from './operations';
+import { app, safeStorage } from 'electron';
 import { randomUUID } from 'crypto';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
@@ -193,28 +195,8 @@ function buildSsmlWithMarks(segments: string[]): string {
     .join('');
   return `<speak>${body}</speak>`;
 }
+const withRetry = retryTransient;
 
-async function withRetry<T>(
-  fn: () => Promise<T>,
-  maxRetries: number = 3,
-  baseDelay: number = 1000
-): Promise<T> {
-  let lastError: Error | null = null;
-
-  for (let attempt = 0; attempt < maxRetries; attempt++) {
-    try {
-      return await fn();
-    } catch (error) {
-      lastError = error instanceof Error ? error : new Error(String(error));
-      if (attempt < maxRetries - 1) {
-        const delay = baseDelay * Math.pow(2, attempt) + Math.random() * 1000;
-        await new Promise((resolve) => setTimeout(resolve, delay));
-      }
-    }
-  }
-
-  throw lastError;
-}
 
 async function synthesizeGoogleTts(
   text: string,
@@ -544,7 +526,7 @@ async function listGeminiVoices(): Promise<VoiceInfo[]> {
   }));
 }
 
-ipcMain.handle(
+registerOperation(
   'tts:getVoices',
   async (_, engine?: TTSEngine): Promise<VoiceInfo[]> => {
     if (engine === 'macos_tts') return listMacosVoices();
@@ -557,7 +539,7 @@ ipcMain.handle(
   }
 );
 
-ipcMain.handle(
+registerOperation(
   'tts:generate',
   async (
     _,
@@ -580,7 +562,7 @@ ipcMain.handle(
   }
 );
 
-ipcMain.handle(
+registerOperation(
   'tts:generateBatch',
   async (
     _,
