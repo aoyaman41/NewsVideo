@@ -113,6 +113,9 @@ registerOperation('project:save', async (_, input: unknown) => {
 registerOperation('project:delete', async (_, input: unknown) => {
   const id = z.string().uuid().parse(input);
   const repo = getProjectRepository();
+  const project = await repo.load(id);
+  if (project.job && ['running', 'queued'].includes(project.job.status))
+    throw new Error('生成を停止してからごみ箱へ移動してください。');
   const directory = await repo.resolve(id);
   const trash = path.join(path.dirname(repo.root), 'trash');
   await fs.mkdir(trash, { recursive: true });

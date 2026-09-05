@@ -75,3 +75,17 @@ it('clones independent assets, saves clean templates, and restores trash', async
   const restored = await repo.load(project.id);
   expect(restored.integrity?.missingFiles).toEqual([]);
 });
+
+it('retains independent brand reference assets in clean templates', async () => {
+  const { repo, project, lifecycle } = await setup();
+  const image = project.article.importedImages[0];
+  await repo.update(project.id, (data) => {
+    data.presentationProfile.styleReferenceImageIds = [image.id];
+    data.presentationProfile.styleReferenceNote = 'ブランドの余白を維持';
+  });
+  const template = await lifecycle.clone(project.id, true);
+  expect(template.article.bodyText).toBe('');
+  expect(template.presentationProfile.styleReferenceImageIds).toEqual([image.id]);
+  expect(template.images[0].filePath).not.toBe(image.filePath);
+  expect(await fs.readFile(template.images[0].filePath, 'utf8')).toBe('fixture');
+});

@@ -40,7 +40,10 @@ export class ProjectLifecycle {
     const data = template
       ? {
           ...target,
-          presentationProfile: { ...source.presentationProfile, styleReferenceImageIds: [] },
+          presentationProfile: source.presentationProfile,
+          images: [...source.images, ...source.article.importedImages].filter((image) =>
+            source.presentationProfile.styleReferenceImageIds.includes(image.id)
+          ),
           outputSettings: source.outputSettings,
           generationConfig: source.generationConfig,
           template: true,
