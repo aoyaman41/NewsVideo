@@ -64,22 +64,27 @@ export function Sidebar() {
     return state.returnTo;
   }, [location.state]);
 
-  useEffect(() => { if (projectId) void projectClient.load(projectId).catch(() => {}); }, [projectId]);
+  useEffect(() => {
+    if (projectId) void projectClient.load(projectId).catch(() => {});
+  }, [projectId]);
 
   const shouldShowReturnToWork = location.pathname === '/settings' && Boolean(returnTo);
 
   return (
-    <aside className="flex h-full w-44 shrink-0 flex-col border-r border-[#0f2a4d] bg-[var(--nv-color-brand)] text-white">
-      <div className="titlebar-drag border-b border-white/10 px-4 pb-3 pt-9">
-        <p className="text-[11px] uppercase tracking-[0.16em] text-blue-200">NewsVideo</p>
+    <aside className="flex h-full w-16 md:w-44 shrink-0 flex-col border-r border-[#0f2a4d] bg-[var(--nv-color-brand)] text-white">
+      <div className="titlebar-drag hidden md:block border-b border-white/10 px-4 pb-3 pt-9">
+        <p className="text-xs uppercase tracking-[0.16em] text-blue-200">NewsVideo</p>
         <h1 className="mt-1 text-xl font-bold">Desk</h1>
       </div>
 
-      <nav className="flex-1 px-3 py-3">
+      <nav className="flex-1 px-1 md:px-3 pt-10 md:py-3">
         <ul className="space-y-1">
           {navItems.map((item) => (
             <li key={item.path}>
               <NavLink
+                aria-label={
+                  item.path === '/projects' && shouldShowReturnToWork ? '作業に戻る' : item.label
+                }
                 to={
                   item.path === '/projects' && shouldShowReturnToWork && returnTo
                     ? returnTo
@@ -110,7 +115,7 @@ export function Sidebar() {
                 ) : (
                   item.icon
                 )}
-                <span>
+                <span className="hidden md:inline">
                   {item.path === '/projects' && shouldShowReturnToWork ? '作業に戻る' : item.label}
                 </span>
               </NavLink>
@@ -118,10 +123,17 @@ export function Sidebar() {
           ))}
         </ul>
 
-        {projectId && <p className="mt-4 truncate px-1 text-sm text-blue-100" title={projectName}>{projectName}</p>}
+        {projectId && (
+          <p
+            className="hidden md:block mt-4 truncate px-1 text-sm text-blue-100"
+            title={projectName}
+          >
+            {projectName}
+          </p>
+        )}
       </nav>
 
-      <div className="border-t border-white/10 px-4 py-3">
+      <div className="hidden md:block border-t border-white/10 px-4 py-3">
         <p className="text-xs text-blue-200">v{pkg.version}</p>
       </div>
     </aside>

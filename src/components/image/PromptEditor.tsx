@@ -79,7 +79,7 @@ export function PromptEditor({
           <Badge tone="neutral">{IMAGE_STYLE_PRESET_LABELS[prompt.stylePreset]}</Badge>
           <Badge tone="info">{prompt.aspectRatio}</Badge>
         </div>
-        <div className="text-xs text-slate-500">
+        <div className="text-xs text-slate-600">
           {promptLineCount}行 / {promptCharCount}文字
         </div>
       </div>
@@ -103,7 +103,7 @@ export function PromptEditor({
           className="nv-input min-h-[260px] resize-y font-mono text-[13px] leading-6"
           placeholder="画像生成プロンプト（日本語）"
         />
-        <p className="mt-1 text-xs text-slate-500">
+        <p className="mt-1 text-xs text-slate-600">
           長文は「整形」で改行を入れると読みやすくなります。内容はそのまま保持されます。
         </p>
       </div>
@@ -114,7 +114,7 @@ export function PromptEditor({
             <label className="text-sm font-medium text-slate-700">
               ネガティブプロンプト（除外したい要素）
             </label>
-            <span className="text-xs text-slate-500">{negativeCharCount}文字</span>
+            <span className="text-xs text-slate-600">{negativeCharCount}文字</span>
           </div>
           <textarea
             value={editedNegativePrompt}

@@ -1,6 +1,6 @@
+import { useScrollMemory } from '../hooks/useScrollMemory';
 import { useSceneSelection, rememberedScene } from '../stores/sceneSelection';
 import { resolutionForAspect, type RenderOptions } from '../../shared/project/videoFormat';
-import { videoInput } from '../../shared/project/integrity';
 import { projectClient, useProjectState } from '../stores/projectStore';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
@@ -24,8 +24,6 @@ import {
   normalizePresentationProfile,
   resolvePresentationSourceLine,
 } from '../../shared/project/presentationProfile';
-
-
 
 type Settings = {
   videoResolution: RenderOptions['resolution'];
@@ -58,6 +56,7 @@ export function VideoManagePage() {
   const [project, setProject] = useProjectState(projectId);
   const [settings, setSettings] = useState<Settings | null>(null);
   const [selectedPartId, setSelectedPartId] = useSceneSelection(projectId);
+  const scrollRef = useScrollMemory(`${projectId}:VideoManagePage`);
 
   const [renderOptions, setRenderOptions] = useState<RenderOptions>({
     resolution: '1920x1080',
@@ -134,38 +133,43 @@ export function VideoManagePage() {
     lastVideoIdentityRef.current = null;
   }, []);
 
-  const resolveExistingVideoPath = useCallback(async (project: Project): Promise<ResolvedVideoAsset | null> => {
-    const lastPath = project.autoGenerationStatus?.lastVideoPath;
+  const resolveExistingVideoPath = useCallback(
+    async (project: Project): Promise<ResolvedVideoAsset | null> => {
+      const lastPath = project.autoGenerationStatus?.lastVideoPath;
 
-    try {
-      const outputDir = `${project.path}/output`;
-      const entries = await window.electronAPI.file.listFiles(outputDir);
-      const candidates = entries
-        .filter((entry) => entry.isFile && entry.name.toLowerCase().endsWith('.mp4'))
-        .sort((a, b) => b.mtimeMs - a.mtimeMs);
-      const lastMatch = lastPath ? candidates.find((entry) => entry.path === lastPath) ?? null : null;
-      if (lastMatch) {
-        return { path: lastMatch.path, mtimeMs: lastMatch.mtimeMs };
-      }
-      const latest = candidates[0] ?? null;
-      if (latest) {
-        return { path: latest.path, mtimeMs: latest.mtimeMs };
-      }
-    } catch {
-      // fallback below
-    }
-
-    if (lastPath) {
       try {
-        const exists = await window.electronAPI.file.exists(lastPath);
-        if (exists) return { path: lastPath, mtimeMs: null };
+        const outputDir = `${project.path}/output`;
+        const entries = await window.electronAPI.file.listFiles(outputDir);
+        const candidates = entries
+          .filter((entry) => entry.isFile && entry.name.toLowerCase().endsWith('.mp4'))
+          .sort((a, b) => b.mtimeMs - a.mtimeMs);
+        const lastMatch = lastPath
+          ? (candidates.find((entry) => entry.path === lastPath) ?? null)
+          : null;
+        if (lastMatch) {
+          return { path: lastMatch.path, mtimeMs: lastMatch.mtimeMs };
+        }
+        const latest = candidates[0] ?? null;
+        if (latest) {
+          return { path: latest.path, mtimeMs: latest.mtimeMs };
+        }
       } catch {
-        return { path: lastPath, mtimeMs: null };
+        // fallback below
       }
-    }
 
-    return null;
-  }, []);
+      if (lastPath) {
+        try {
+          const exists = await window.electronAPI.file.exists(lastPath);
+          if (exists) return { path: lastPath, mtimeMs: null };
+        } catch {
+          return { path: lastPath, mtimeMs: null };
+        }
+      }
+
+      return null;
+    },
+    []
+  );
 
   const missingAudioCount = useMemo(() => {
     if (!project) return 0;
@@ -266,7 +270,9 @@ export function VideoManagePage() {
           window.electronAPI.settings.get(),
         ]);
 
-        const normalizedPresentationProfile = normalizePresentationProfile(loadedProject.presentationProfile);
+        const normalizedPresentationProfile = normalizePresentationProfile(
+          loadedProject.presentationProfile
+        );
         const normalizedProject: Project = {
           ...loadedProject,
           presentationProfile: normalizedPresentationProfile,
@@ -291,19 +297,39 @@ export function VideoManagePage() {
         };
         setSettings(normalizedSettings);
 
-        setSelectedPartId(normalizedProject.parts[0] ? rememberedScene(projectId, normalizedProject.parts[0].id) : null);
+        setSelectedPartId(
+          normalizedProject.parts[0] ? rememberedScene(projectId, normalizedProject.parts) : null
+        );
 
         const defaults: RenderOptions = {
-          resolution: resolutionForAspect(normalizedSettings.videoResolution, normalizedProject.presentationProfile.aspectRatio),
+          videoPartLeadInSec: loadedSettings.videoPartLeadInSec ?? 0.3,
+          openingVideoPath: loadedSettings.openingVideoPath,
+          endingVideoPath: loadedSettings.endingVideoPath,
+          resolution: resolutionForAspect(
+            normalizedSettings.videoResolution,
+            normalizedProject.presentationProfile.aspectRatio
+          ),
           fps: normalizedSettings.videoFps,
           videoBitrate: normalizedSettings.videoBitrate,
           audioBitrate: normalizedSettings.audioBitrate,
           includeOpening: Boolean(normalizedSettings.openingVideoPath),
           includeEnding: Boolean(normalizedSettings.endingVideoPath),
         };
-        setRenderOptions(normalizedProject.outputSettings ? { ...defaults, ...normalizedProject.outputSettings, resolution: resolutionForAspect(normalizedProject.outputSettings.resolution, normalizedProject.presentationProfile.aspectRatio) } : defaults);
+        setRenderOptions(
+          normalizedProject.outputSettings
+            ? {
+                ...defaults,
+                ...normalizedProject.outputSettings,
+                resolution: resolutionForAspect(
+                  normalizedProject.outputSettings.resolution,
+                  normalizedProject.presentationProfile.aspectRatio
+                ),
+              }
+            : defaults
+        );
 
-        const safeName = normalizedProject.name.replace(/[\\/:*?"<>|]/g, '_').slice(0, 80) || 'output';
+        const safeName =
+          normalizedProject.name.replace(/[\\/:*?"<>|]/g, '_').slice(0, 80) || 'output';
         setOutputPath(`${normalizedProject.path}/output/${safeName}.mp4`);
 
         const existingVideoPath = await resolveExistingVideoPath(normalizedProject);
@@ -336,14 +362,25 @@ export function VideoManagePage() {
         }
       } catch (err) {
         console.error('Failed to load project/settings:', err);
-        reportError(err instanceof Error ? err.message : '読み込みに失敗しました', '読み込みに失敗しました');
+        reportError(
+          err instanceof Error ? err.message : '読み込みに失敗しました',
+          '読み込みに失敗しました'
+        );
       } finally {
         setIsLoading(false);
       }
     };
 
     load();
-  }, [applyResolvedVideoAsset, clearVideoAsset, projectId, reportError, resolveExistingVideoPath, setProject, setSelectedPartId]);
+  }, [
+    applyResolvedVideoAsset,
+    clearVideoAsset,
+    projectId,
+    reportError,
+    resolveExistingVideoPath,
+    setProject,
+    setSelectedPartId,
+  ]);
 
   useEffect(() => {
     if (!project) return;
@@ -397,7 +434,14 @@ export function VideoManagePage() {
       cancelled = true;
       clearInterval(interval);
     };
-  }, [applyResolvedVideoAsset, projectId, resolveExistingVideoPath, isRendering, isPreviewing, setProject]);
+  }, [
+    applyResolvedVideoAsset,
+    projectId,
+    resolveExistingVideoPath,
+    isRendering,
+    isPreviewing,
+    setProject,
+  ]);
 
   const handleSelectOutputDir = useCallback(async () => {
     if (!project) return;
@@ -445,40 +489,22 @@ export function VideoManagePage() {
       setShowProgress(true);
       setProgress({ stage: 'preparing', percent: 0, message: '準備中...' });
 
-      const effectiveOptions = { ...renderOptions, resolution: resolutionForAspect(renderOptions.resolution, presentationProfile.aspectRatio) };
+      const effectiveOptions = {
+        ...renderOptions,
+        resolution: resolutionForAspect(renderOptions.resolution, presentationProfile.aspectRatio),
+      };
       const renderProject: Project = {
         ...project,
         presentationProfile,
         outputSettings: effectiveOptions,
       };
       await projectClient.save(renderProject);
-      const res = await window.electronAPI.video.render(renderProject, effectiveOptions, outputPath.trim());
+      const res = await window.electronAPI.video.render(
+        renderProject,
+        effectiveOptions,
+        outputPath.trim()
+      );
       forceReloadVideoAsset(res.outputPath);
-      try {
-        const now = new Date().toISOString();
-        const current = renderProject.autoGenerationStatus;
-        const nextStatus: AutoGenerationStatus = {
-          running: current?.running ?? false,
-          step: current?.running ? current?.step : '完了',
-          startedAt: current?.startedAt,
-          updatedAt: now,
-          finishedAt: current?.running ? current?.finishedAt : now,
-          cancelRequested: current?.cancelRequested,
-          error: current?.error,
-          steps: { ...(current?.steps ?? {}), video: true },
-          lastVideoPath: res.outputPath,
-        };
-        const updatedProject: Project = {
-          ...renderProject,
-          integrity: { ...renderProject.integrity!, video: videoInput(renderProject) },
-          autoGenerationStatus: nextStatus,
-          updatedAt: now,
-        };
-        await projectClient.save(updatedProject);
-        setProject(updatedProject);
-      } catch (error) {
-        throw new Error(`動画は出力されましたが保存状態の更新に失敗しました: ${String(error)}`);
-      }
       setTimeout(() => {
         if (videoRef.current) videoRef.current.currentTime = 0;
       }, 0);
@@ -488,7 +514,15 @@ export function VideoManagePage() {
     } finally {
       setIsRendering(false);
     }
-  }, [forceReloadVideoAsset, outputPath, presentationProfile, project, renderOptions, reportError, setProject, toast]);
+  }, [
+    forceReloadVideoAsset,
+    outputPath,
+    presentationProfile,
+    project,
+    renderOptions,
+    reportError,
+    toast,
+  ]);
 
   const handleCancel = useCallback(async () => {
     try {
@@ -506,7 +540,7 @@ export function VideoManagePage() {
   if (isLoading) {
     return (
       <div className="flex flex-1 items-center justify-center">
-        <p className="text-slate-500">読み込み中...</p>
+        <p className="text-slate-600">読み込み中...</p>
       </div>
     );
   }
@@ -578,7 +612,10 @@ export function VideoManagePage() {
         </Card>
       </div>
 
-      <div className="grid min-h-0 flex-1 grid-cols-[280px_minmax(0,1fr)_380px] gap-4 overflow-hidden p-4">
+      <div
+        ref={scrollRef}
+        className="grid min-h-0 flex-1 grid-cols-1 xl:grid-cols-[220px_minmax(0,1fr)_320px] auto-rows-max xl:auto-rows-auto gap-4 overflow-auto p-4"
+      >
         <Card
           title="パート一覧"
           subtitle={`全 ${project.parts.length} パート`}
@@ -599,17 +636,17 @@ export function VideoManagePage() {
                     }`}
                   >
                     <div className="flex items-center gap-2">
-                      <span className="text-xs text-slate-400">{idx + 1}</span>
+                      <span className="text-xs text-slate-600">{idx + 1}</span>
                       <span className="truncate text-sm font-semibold text-slate-900">
                         {part.title}
                       </span>
                     </div>
-                    <div className="mt-1 flex items-center gap-1 text-[11px]">
+                    <div className="mt-1 flex items-center gap-1 text-xs">
                       <Badge tone={hasAudio ? 'success' : 'warning'}>
-                        {hasAudio ? '音声OK' : '音声NG'}
+                        {hasAudio ? '音声OK' : '音声未生成'}
                       </Badge>
                       <Badge tone={hasImages ? 'success' : 'warning'}>
-                        {hasImages ? `画像${part.panelImages.length}` : '画像NG'}
+                        {hasImages ? `画像${part.panelImages.length}` : '画像未割当'}
                       </Badge>
                     </div>
                   </button>
@@ -627,7 +664,10 @@ export function VideoManagePage() {
           className="overflow-auto"
         >
           <div className="space-y-3">
-            <div className="w-full overflow-hidden rounded-[12px] bg-black" style={{ aspectRatio: presentationProfile.aspectRatio.replace(':', ' / ') }}>
+            <div
+              className="w-full overflow-hidden rounded-[12px] bg-black"
+              style={{ aspectRatio: presentationProfile.aspectRatio.replace(':', ' / ') }}
+            >
               {videoSrc ? (
                 <video
                   key={videoSrc}
@@ -669,15 +709,12 @@ export function VideoManagePage() {
                 {mediaDebug}
               </div>
             )}
-            {videoPath && <div className="text-xs text-slate-500 break-all">{videoPath}</div>}
+            {videoPath && <div className="text-xs text-slate-600 break-all">{videoPath}</div>}
           </div>
         </Card>
 
         <div className="space-y-4 overflow-auto">
-          <Card
-            title="締めカード設定"
-            subtitle="この動画の締め画面を調整"
-          >
+          <Card title="締めカード設定" subtitle="この動画の締め画面を調整">
             <div className="space-y-4">
               <div className="rounded-[10px] border border-[var(--nv-color-border)] bg-slate-50 p-3 text-xs text-slate-600">
                 <p>
@@ -702,10 +739,14 @@ export function VideoManagePage() {
 
               <div className="grid gap-4">
                 <div>
-                  <label className="mb-1 block text-xs font-semibold text-slate-600">
+                  <label
+                    htmlFor="VideoManagePage-field-1"
+                    className="mb-1 block text-xs font-semibold text-slate-600"
+                  >
                     見出し
                   </label>
                   <input
+                    id="VideoManagePage-field-1"
                     type="text"
                     value={presentationProfile.closingCardHeadline}
                     onChange={(e) =>
@@ -721,10 +762,14 @@ export function VideoManagePage() {
                 </div>
 
                 <div>
-                  <label className="mb-1 block text-xs font-semibold text-slate-600">
+                  <label
+                    htmlFor="VideoManagePage-field-2"
+                    className="mb-1 block text-xs font-semibold text-slate-600"
+                  >
                     CTA
                   </label>
                   <input
+                    id="VideoManagePage-field-2"
                     type="text"
                     value={presentationProfile.closingCardCtaText}
                     onChange={(e) =>
@@ -740,10 +785,14 @@ export function VideoManagePage() {
                 </div>
 
                 <div>
-                  <label className="mb-1 block text-xs font-semibold text-slate-600">
+                  <label
+                    htmlFor="VideoManagePage-field-3"
+                    className="mb-1 block text-xs font-semibold text-slate-600"
+                  >
                     出典表示
                   </label>
                   <select
+                    id="VideoManagePage-field-3"
                     value={presentationProfile.sourceDisplayMode}
                     onChange={(e) =>
                       setPresentationProfile((prev) => ({
@@ -764,10 +813,14 @@ export function VideoManagePage() {
 
                 {presentationProfile.sourceDisplayMode === 'custom' && (
                   <div>
-                    <label className="mb-1 block text-xs font-semibold text-slate-600">
+                    <label
+                      htmlFor="VideoManagePage-field-4"
+                      className="mb-1 block text-xs font-semibold text-slate-600"
+                    >
                       カスタム出典表記
                     </label>
                     <input
+                      id="VideoManagePage-field-4"
                       type="text"
                       value={presentationProfile.sourceDisplayText}
                       onChange={(e) =>
@@ -789,8 +842,12 @@ export function VideoManagePage() {
                   <Badge tone={presentationProfile.closingCardEnabled ? 'success' : 'neutral'}>
                     {presentationProfile.closingCardEnabled ? '締めカードあり' : '締めカードなし'}
                   </Badge>
-                  <Badge tone="info">{SOURCE_DISPLAY_MODE_LABELS[presentationProfile.sourceDisplayMode]}</Badge>
-                  {renderOptions.includeEnding && <Badge tone="neutral">後段に ending 動画を連結</Badge>}
+                  <Badge tone="info">
+                    {SOURCE_DISPLAY_MODE_LABELS[presentationProfile.sourceDisplayMode]}
+                  </Badge>
+                  {renderOptions.includeEnding && (
+                    <Badge tone="neutral">後段に ending 動画を連結</Badge>
+                  )}
                 </div>
                 <div className="space-y-2 text-xs text-slate-600">
                   <div>
@@ -807,7 +864,9 @@ export function VideoManagePage() {
                   </div>
                   <div>
                     <div className="font-semibold text-slate-700">出典プレビュー</div>
-                    <div className="mt-1 text-sm text-slate-900">{closingSourcePreview ?? 'なし'}</div>
+                    <div className="mt-1 text-sm text-slate-900">
+                      {closingSourcePreview ?? 'なし'}
+                    </div>
                   </div>
                 </div>
               </div>
@@ -836,7 +895,12 @@ export function VideoManagePage() {
                 <div className="grid gap-2 sm:grid-cols-2 text-xs text-slate-600">
                   <div>
                     <div className="font-semibold text-slate-700">解像度</div>
-                    <div className="mt-1 text-sm text-slate-900">{resolutionForAspect(renderOptions.resolution, presentationProfile.aspectRatio)}</div>
+                    <div className="mt-1 text-sm text-slate-900">
+                      {resolutionForAspect(
+                        renderOptions.resolution,
+                        presentationProfile.aspectRatio
+                      )}
+                    </div>
                   </div>
                   <div>
                     <div className="font-semibold text-slate-700">フレームレート</div>
@@ -851,7 +915,7 @@ export function VideoManagePage() {
                     <div className="mt-1 text-sm text-slate-900">{renderOptions.audioBitrate}</div>
                   </div>
                 </div>
-                <p className="mt-3 text-xs text-slate-500">
+                <p className="mt-3 text-xs text-slate-600">
                   このプロジェクトに保存した品質です。新規制作の既定値は設定画面で変更できます。
                 </p>
               </div>
@@ -862,7 +926,11 @@ export function VideoManagePage() {
                     type="checkbox"
                     checked={renderOptions.includeOpening}
                     onChange={(e) =>
-                      (() => { const next = { ...renderOptions, includeOpening: e.target.checked }; setRenderOptions(next); setProject({ ...project, outputSettings: next }); })()
+                      (() => {
+                        const next = { ...renderOptions, includeOpening: e.target.checked };
+                        setRenderOptions(next);
+                        setProject({ ...project, outputSettings: next });
+                      })()
                     }
                     disabled={!settings.openingVideoPath || isRendering || isPreviewing}
                   />
@@ -873,7 +941,11 @@ export function VideoManagePage() {
                     type="checkbox"
                     checked={renderOptions.includeEnding}
                     onChange={(e) =>
-                      (() => { const next = { ...renderOptions, includeEnding: e.target.checked }; setRenderOptions(next); setProject({ ...project, outputSettings: next }); })()
+                      (() => {
+                        const next = { ...renderOptions, includeEnding: e.target.checked };
+                        setRenderOptions(next);
+                        setProject({ ...project, outputSettings: next });
+                      })()
                     }
                     disabled={!settings.endingVideoPath || isRendering || isPreviewing}
                   />
@@ -886,7 +958,7 @@ export function VideoManagePage() {
                   現在の保存先
                 </label>
                 <div className="space-y-2">
-                  <div className="rounded-[8px] border border-[var(--nv-color-border)] bg-slate-50 px-3 py-2 font-mono text-[11px] leading-5 text-slate-600 break-all">
+                  <div className="rounded-[8px] border border-[var(--nv-color-border)] bg-slate-50 px-3 py-2 font-mono text-xs leading-5 text-slate-600 break-all">
                     {outputPath.trim() || '未設定'}
                   </div>
                   <div className="flex flex-wrap justify-end gap-2">
@@ -908,7 +980,7 @@ export function VideoManagePage() {
                     </Button>
                   </div>
                 </div>
-                <p className="mt-2 text-xs text-slate-500">
+                <p className="mt-2 text-xs text-slate-600">
                   出力ファイル名はプロジェクト名から自動で付与されます。
                 </p>
               </div>
@@ -953,7 +1025,7 @@ export function VideoManagePage() {
               {progress.message || progress.stage || '処理中'}
             </div>
             <ProgressBar value={Math.min(100, Math.max(0, progress.percent ?? 0))} max={100} />
-            <div className="mt-2 flex items-center justify-between text-xs text-slate-500">
+            <div className="mt-2 flex items-center justify-between text-xs text-slate-600">
               <div>{typeof progress.percent === 'number' ? `${progress.percent}%` : ''}</div>
               {typeof progress.current === 'number' && typeof progress.total === 'number' && (
                 <div>

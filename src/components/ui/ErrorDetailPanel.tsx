@@ -28,7 +28,7 @@ export function ErrorDetailPanel({
           <button
             type="button"
             onClick={onDismiss}
-            className="rounded-[8px] px-2 py-1 text-slate-400 transition-colors hover:bg-white hover:text-slate-600"
+            className="rounded-[8px] px-2 py-1 text-slate-600 transition-colors hover:bg-white hover:text-slate-600"
             aria-label="詳細を閉じる"
           >
             ×

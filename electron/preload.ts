@@ -17,10 +17,16 @@ contextBridge.exposeInMainWorld('electronAPI', {
   project: {
     captions: (request: unknown) => ipcRenderer.invoke('project:captions', request),
     manage: (request: unknown) => ipcRenderer.invoke('project:manage', request),
-    onFlushRequested: (callback: () => void) => { ipcRenderer.on('project:flush', callback); return () => ipcRenderer.removeListener('project:flush', callback); },
+    onFlushRequested: (callback: () => void) => {
+      ipcRenderer.on('project:flush', callback);
+      return () => ipcRenderer.removeListener('project:flush', callback);
+    },
     finishFlush: (success: boolean) => ipcRenderer.send('project:flushed', success),
     onChanged: (callback: (event: { id: string; revision?: number }) => void) => {
-      const listener = (_event: Electron.IpcRendererEvent, data: { id: string; revision?: number }) => callback(data);
+      const listener = (
+        _event: Electron.IpcRendererEvent,
+        data: { id: string; revision?: number }
+      ) => callback(data);
       ipcRenderer.on('project:changed', listener);
       return () => ipcRenderer.removeListener('project:changed', listener);
     },
@@ -35,6 +41,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
 
   jobs: {
+    recoverAsset: (request: unknown) => ipcRenderer.invoke('jobs:recoverAsset', request),
     start: (id: string, options: unknown) => ipcRenderer.invoke('jobs:start', id, options),
     cancel: (id: string) => ipcRenderer.invoke('jobs:cancel', id),
   },
@@ -68,7 +75,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // 画像生成
   image: {
-    importData: (bytes: ArrayBuffer, projectId: string) => ipcRenderer.invoke('image:importData', bytes, projectId),
+    importData: (bytes: ArrayBuffer, projectId: string) =>
+      ipcRenderer.invoke('image:importData', bytes, projectId),
     generate: (prompt: unknown, projectId: string) =>
       ipcRenderer.invoke('image:generate', prompt, projectId),
     generateBatch: (prompts: unknown[], projectId: string) =>

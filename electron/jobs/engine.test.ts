@@ -179,3 +179,34 @@ it('recognizes interrupted jobs after a process restart without automatically re
   expect((await repository.load(id)).job?.status).toBe('interrupted');
   expect(invoke).toHaveBeenCalledTimes(1);
 });
+
+it('retains previous paid outputs when a new generation replaces a completed job', async () => {
+  await engine.start(id, { mode: 'automatic', targetPartCount: 1 });
+  await engine.wait(id);
+  const previous = (await repository.load(id)).job!;
+  await engine.start(id, { mode: 'review', targetPartCount: 1, restart: true });
+  await engine.wait(id);
+  const saved = await repository.load(id);
+  expect(saved.job!.id).not.toBe(previous.id);
+  expect(saved.jobHistory).toEqual([previous]);
+  expect(saved.jobHistory![0].outputs).toHaveLength(5);
+});
+
+it('preserves paid output and newer edits when inputs change during an image request', async () => {
+  const original = invoke.getMockImplementation()!;
+  invoke.mockImplementation(async (name: string, ...args: unknown[]) => {
+    const result = await original(name, ...args);
+    if (name === 'image:generate')
+      await repository.update(id, (project) => {
+        project.parts[0].scriptText = 'New editorial text';
+      });
+    return result;
+  });
+  await engine.start(id, { mode: 'automatic', targetPartCount: 1 });
+  await engine.wait(id);
+  const saved = await repository.load(id);
+  expect(saved.parts[0].scriptText).toBe('New editorial text');
+  expect(saved.job!.status).toBe('failed');
+  expect(saved.job!.outputs.some((output) => output.step.startsWith('image:'))).toBe(true);
+  expect(saved.usage).toHaveLength(3);
+});

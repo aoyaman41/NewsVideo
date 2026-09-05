@@ -1,3 +1,4 @@
+import { ttsRequestSchema } from '../../shared/project/generationRequests';
 import { generationSettings } from '../utils/generationContext';
 import { invokeOperation } from './operations';
 import { measurePcmWav } from '../../shared/project/audioQuality';
@@ -195,13 +196,10 @@ function escapeSsmlText(text: string): string {
 }
 
 function buildSsmlWithMarks(segments: string[]): string {
-  const body = segments
-    .map((seg, i) => `<mark name="m${i}"/>${escapeSsmlText(seg)}`)
-    .join('');
+  const body = segments.map((seg, i) => `<mark name="m${i}"/>${escapeSsmlText(seg)}`).join('');
   return `<speak>${body}</speak>`;
 }
 const withRetry = retryTransient;
-
 
 async function synthesizeGoogleTts(
   text: string,
@@ -210,7 +208,9 @@ async function synthesizeGoogleTts(
 ): Promise<AudioAsset> {
   const apiKey = await readApiKey('google_tts');
   if (!apiKey) {
-    throw new Error('Google TTS APIキーが設定されていません。設定画面からAPIキーを入力してください。');
+    throw new Error(
+      'Google TTS APIキーが設定されていません。設定画面からAPIキーを入力してください。'
+    );
   }
 
   const segments = splitScriptIntoSegments(text);
@@ -469,7 +469,10 @@ async function listGoogleVoices(): Promise<VoiceInfo[]> {
 
 async function listMacosVoices(): Promise<VoiceInfo[]> {
   const { stdout } = await execFileAsync('say', ['-v', '?']);
-  const lines = stdout.split('\n').map((l) => l.trim()).filter(Boolean);
+  const lines = stdout
+    .split('\n')
+    .map((l) => l.trim())
+    .filter(Boolean);
 
   const voices: VoiceInfo[] = [];
 
@@ -531,18 +534,15 @@ async function listGeminiVoices(): Promise<VoiceInfo[]> {
   }));
 }
 
-registerOperation(
-  'tts:getVoices',
-  async (_, engine?: TTSEngine): Promise<VoiceInfo[]> => {
-    if (engine === 'macos_tts') return listMacosVoices();
-    if (engine === 'gemini_tts') return listGeminiVoices();
-    if (engine === 'google_tts') return listGoogleVoices();
-    // デフォルトはGoogle（キーが無ければmacOS）
-    const google = await listGoogleVoices();
-    if (google.length > 0) return google;
-    return listMacosVoices();
-  }
-);
+registerOperation('tts:getVoices', async (_, engine?: TTSEngine): Promise<VoiceInfo[]> => {
+  if (engine === 'macos_tts') return listMacosVoices();
+  if (engine === 'gemini_tts') return listGeminiVoices();
+  if (engine === 'google_tts') return listGoogleVoices();
+  // デフォルトはGoogle（キーが無ければmacOS）
+  const google = await listGoogleVoices();
+  if (google.length > 0) return google;
+  return listMacosVoices();
+});
 
 registerOperation(
   'tts:generate',
@@ -552,9 +552,12 @@ registerOperation(
     options: TTSOptions,
     projectId: string
   ): Promise<{ audio: AudioAsset; usage: TokenUsage | null }> => {
+    ({ text, options } = ttsRequestSchema.parse({ text, options }));
     if (!projectId) throw new Error('projectId が指定されていません');
     const projectPath = await getProjectPath(projectId);
-    const dictionary = normalizeSettings(generationSettings.getStore() ?? await invokeOperation('settings:get')).readingDictionary;
+    const dictionary = normalizeSettings(
+      generationSettings.getStore() ?? (await invokeOperation('settings:get'))
+    ).readingDictionary;
     text = applyReadings(text, dictionary);
 
     if (options.ttsEngine === 'macos_tts') {
@@ -585,14 +588,20 @@ registerOperation(
       .filter((item) => item.text.trim().length > 0)
       .map((item, index) => ({ ...item, index }));
 
-    const out: Array<{ audio: AudioAsset; usage: TokenUsage | null } | null> =
-      Array(targets.length).fill(null);
+    const out: Array<{ audio: AudioAsset; usage: TokenUsage | null } | null> = Array(
+      targets.length
+    ).fill(null);
     const errors: { index: number; error: string }[] = [];
 
     await Promise.all(
       targets.map(async (item) => {
         try {
-          const result = await invokeOperation<{ audio: AudioAsset; usage: TokenUsage | null }>('tts:generate', item.text, options, projectId);
+          const result = await invokeOperation<{ audio: AudioAsset; usage: TokenUsage | null }>(
+            'tts:generate',
+            item.text,
+            options,
+            projectId
+          );
           out[item.index] = result;
         } catch (error) {
           errors.push({

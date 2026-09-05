@@ -135,16 +135,41 @@ export function ScriptEditor({
       >
         <form className="space-y-3" onChange={() => onSave(part.id, getValues())}>
           <div>
-            <label htmlFor="scene-title" className="mb-1 block text-xs font-semibold text-slate-600">
+            <label
+              htmlFor="scene-title"
+              className="mb-1 block text-xs font-semibold text-slate-600"
+            >
               パートタイトル
             </label>
-            <input id="scene-title" aria-invalid={!!errors.title} aria-describedby={errors.title ? "scene-title-error" : undefined} type="text" {...register('title')} className="nv-input" />
-            {errors.title && <p id="scene-title-error" className="mt-1 text-xs text-red-600">{errors.title.message}</p>}
+            <input
+              id="scene-title"
+              aria-invalid={!!errors.title}
+              aria-describedby={errors.title ? 'scene-title-error' : undefined}
+              type="text"
+              {...register('title')}
+              className="nv-input"
+            />
+            {errors.title && (
+              <p id="scene-title-error" className="mt-1 text-xs text-red-600">
+                {errors.title.message}
+              </p>
+            )}
           </div>
 
           <div>
-            <label htmlFor="scene-summary" className="mb-1 block text-xs font-semibold text-slate-600">要約</label>
-            <textarea id="scene-summary" aria-invalid={!!errors.summary} {...register('summary')} rows={2} className="nv-input resize-y" />
+            <label
+              htmlFor="scene-summary"
+              className="mb-1 block text-xs font-semibold text-slate-600"
+            >
+              要約
+            </label>
+            <textarea
+              id="scene-summary"
+              aria-invalid={!!errors.summary}
+              {...register('summary')}
+              rows={2}
+              className="nv-input resize-y"
+            />
             {errors.summary && (
               <p className="mt-1 text-xs text-red-600">{errors.summary.message}</p>
             )}
@@ -152,19 +177,25 @@ export function ScriptEditor({
 
           <div>
             <div className="mb-1 flex items-center justify-between">
-              <label htmlFor="scene-script" className="block text-xs font-semibold text-slate-600">ナレーション原稿</label>
-              <span className="text-xs text-slate-500">
+              <label htmlFor="scene-script" className="block text-xs font-semibold text-slate-600">
+                ナレーション原稿
+              </label>
+              <span className="text-xs text-slate-600">
                 {estimateCharCount(watchedScript)}文字 / 約{estimateDuration(watchedScript)}秒
               </span>
             </div>
             <textarea
-              id="scene-script" aria-invalid={!!errors.scriptText} aria-describedby={errors.scriptText ? 'scene-script-error' : undefined}
+              id="scene-script"
+              aria-invalid={!!errors.scriptText}
+              aria-describedby={errors.scriptText ? 'scene-script-error' : undefined}
               {...register('scriptText')}
-              rows={12}
+              rows={8}
               className="nv-input resize-y font-mono text-sm"
             />
             {errors.scriptText && (
-              <p id="scene-script-error" className="mt-1 text-xs text-red-600">{errors.scriptText.message}</p>
+              <p id="scene-script-error" className="mt-1 text-xs text-red-600">
+                {errors.scriptText.message}
+              </p>
             )}
           </div>
         </form>
@@ -201,7 +232,7 @@ export function ScriptEditor({
         <Card title="再生成差分" subtitle="直近のAI修正（前後比較）" className="min-h-0">
           <div className="grid gap-2 md:grid-cols-2">
             <div className="min-h-24 rounded-[8px] border border-[var(--nv-color-border)] bg-slate-50 p-2 text-xs text-slate-700">
-              <div className="mb-1 font-semibold text-slate-500">Before</div>
+              <div className="mb-1 font-semibold text-slate-600">Before</div>
               <div className="max-h-40 overflow-auto whitespace-pre-wrap">{diffPreview.before}</div>
             </div>
             <div className="min-h-24 rounded-[8px] border border-emerald-200 bg-emerald-50 p-2 text-xs text-emerald-800">
@@ -212,7 +243,7 @@ export function ScriptEditor({
         </Card>
       )}
 
-      <div className="px-1 text-[11px] text-slate-400">
+      <div className="px-1 text-xs text-slate-600">
         生成日時: {new Date(part.scriptGeneratedAt).toLocaleString('ja-JP')} / 更新日時:{' '}
         {new Date(part.updatedAt).toLocaleString('ja-JP')}
       </div>

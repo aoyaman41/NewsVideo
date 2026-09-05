@@ -118,7 +118,10 @@ async function getDevSourcePath(): Promise<string> {
 
 async function ensureNativeBinaryBuilt(binaryPath: string): Promise<void> {
   const sourcePath = await getDevSourcePath();
-  const [sourceStat, binaryStat] = await Promise.allSettled([fs.stat(sourcePath), fs.stat(binaryPath)]);
+  const [sourceStat, binaryStat] = await Promise.allSettled([
+    fs.stat(sourcePath),
+    fs.stat(binaryPath),
+  ]);
   const needsBuild =
     binaryStat.status === 'rejected' ||
     (sourceStat.status === 'fulfilled' &&
@@ -304,7 +307,15 @@ export async function renderClosingCardVideoNative(
 
 export async function probeDurationNative(binaryPath: string, inputPath: string) {
   let duration = 0;
-  await runNativeTool(binaryPath, 'probe', { inputPath }, { canceled: false, processes: new Set() }, (record) => { if (record.duration) duration = Number(record.duration); });
+  await runNativeTool(
+    binaryPath,
+    'probe',
+    { inputPath },
+    { canceled: false, processes: new Set() },
+    (record) => {
+      if (record.duration) duration = Number(record.duration);
+    }
+  );
   if (!Number.isFinite(duration) || duration <= 0) throw new Error('動画の長さを読み込めません。');
   return duration;
 }

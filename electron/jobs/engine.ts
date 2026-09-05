@@ -142,6 +142,7 @@ export class GenerationJobEngine {
             estimatedRemainingUsd: 0,
             unknownCharges: 0,
           };
+      if (previous && !resume) project.jobHistory = [...(project.jobHistory ?? []), previous];
       project.job = job;
       project.generationConfig = {
         ...settings,
@@ -398,7 +399,13 @@ export class GenerationJobEngine {
       await this.review(id, '素材と公開内容の確認');
       project = await this.checkpoint(id, '動画');
       project.outputSettings = {
-        resolution: resolutionForAspect(settings.videoResolution, project.presentationProfile.aspectRatio),
+        videoPartLeadInSec: settings.videoPartLeadInSec,
+        openingVideoPath: settings.openingVideoPath,
+        endingVideoPath: settings.endingVideoPath,
+        resolution: resolutionForAspect(
+          settings.videoResolution,
+          project.presentationProfile.aspectRatio
+        ),
         fps: settings.videoFps,
         videoBitrate: settings.videoBitrate,
         audioBitrate: settings.audioBitrate,

@@ -253,14 +253,38 @@ export const projectSchema = projectMetaSchema.extend({
   archived: z.boolean().optional(),
   template: z.boolean().optional(),
   job: jobSchema.optional(),
+  jobHistory: z.array(jobSchema).optional(),
   generationConfig: z.record(z.string(), z.unknown()).optional(),
   revision: z.number().int().nonnegative().optional(),
-  integrity: z.object({
-    parts: z.record(z.string(), z.object({ script: z.string().optional(), prompt: z.string().optional(), image: z.string().optional(), audio: z.string().optional(), approvedAt: z.string().optional() })),
-    video: z.string().optional(),
-    missingFiles: z.array(z.string()),
-  }).optional(),
-  outputSettings: z.object({ resolution: z.string(), fps: z.number(), videoBitrate: z.string(), audioBitrate: z.string(), includeOpening: z.boolean(), includeEnding: z.boolean() }).optional(),
+  integrity: z
+    .object({
+      parts: z.record(
+        z.string(),
+        z.object({
+          script: z.string().optional(),
+          prompt: z.string().optional(),
+          image: z.string().optional(),
+          audio: z.string().optional(),
+          approvedAt: z.string().optional(),
+        })
+      ),
+      video: z.string().optional(),
+      missingFiles: z.array(z.string()),
+    })
+    .optional(),
+  outputSettings: z
+    .object({
+      videoPartLeadInSec: z.number().min(0).max(5).optional(),
+      openingVideoPath: z.string().optional(),
+      endingVideoPath: z.string().optional(),
+      resolution: z.string(),
+      fps: z.number(),
+      videoBitrate: z.string(),
+      audioBitrate: z.string(),
+      includeOpening: z.boolean(),
+      includeEnding: z.boolean(),
+    })
+    .optional(),
   article: articleSchema.extend({ title: z.string(), bodyText: z.string() }),
   parts: z.array(partSchema.extend({ title: z.string(), scriptText: z.string() })),
   images: z.array(imageAssetSchema),

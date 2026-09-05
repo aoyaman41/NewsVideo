@@ -1,0 +1,6 @@
+run,purpose,article_characters,aspect_ratio,model,first_preview_sec,first_output_sec,manual_edit_sec,estimated_cost_usd,unknown_charges,failure_kind,resume_attempted,resume_succeeded,false_completion,lost_input,notes
+1,news,,16:9,,,,,,,,,,,,
+2,short,,9:16,,,,,,,,,,,,
+3,explain,,16:9,,,,,,,,,,,,
+4,short,,9:16,,,,,,,,,,,,
+5,news,,1:1,,,,,,,,,,,,

@@ -409,7 +409,7 @@ export function SettingsPage() {
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
       <Header
         title="設定"
-        subtitle="新しい制作に使う既定値。変更は自動保存されます"
+        subtitle="次の生成に使う既定値。既存素材も変更内容に応じて更新対象になります"
         statusLabel={settingsStatus.label}
         statusTone={settingsStatus.tone}
         actions={
@@ -452,13 +452,54 @@ export function SettingsPage() {
             ))}
           </div>
 
-          <details className="rounded-lg border bg-white p-3"><summary className="cursor-pointer text-sm font-semibold">サポートと診断</summary><div className="mt-2 space-y-2 text-sm"><p>保存形式・アプリの版・生成状態・件数をJSONに書き出します。記事本文、画像、APIキー、ファイルパスは含めず、自動送信もしません。</p><Button size="sm" variant="secondary" onClick={async () => { try { const file = await window.electronAPI.diagnostics.export(); if (file) toast.success(`診断を書き出しました: ${file}`); } catch (error) { toast.error(String(error)); } }}>診断ファイルを保存</Button><p>不具合報告には、再現手順と期待した結果、実際の結果を添えてください。公開する前に診断内容をご確認ください。</p></div></details>
+          <p className="text-sm text-slate-600">
+            変更は自動保存されます。実行中・再開する自動生成は開始時の設定を使用します。動画の品質はプロジェクトに保存した設定を優先します。
+          </p>
+          <details className="rounded-lg border bg-white p-3">
+            <summary className="cursor-pointer text-sm font-semibold">サポートと診断</summary>
+            <div className="mt-2 space-y-2 text-sm">
+              <p>
+                保存形式・アプリの版・生成状態・件数をJSONに書き出します。記事本文、画像、APIキー、ファイルパスは含めず、自動送信もしません。
+              </p>
+              <Button
+                size="sm"
+                variant="secondary"
+                onClick={async () => {
+                  try {
+                    const file = await window.electronAPI.diagnostics.export();
+                    if (file) toast.success(`診断を書き出しました: ${file}`);
+                  } catch (error) {
+                    toast.error(String(error));
+                  }
+                }}
+              >
+                診断ファイルを保存
+              </Button>
+              <p>
+                不具合報告には、再現手順と期待した結果、実際の結果を添えてください。公開する前に診断内容をご確認ください。
+              </p>
+            </div>
+          </details>
 
           {activeTab === 'api' && (
             <Card title="APIキー設定" subtitle="各サービスの接続状態を確認しながら保存">
-              <label className="mb-4 block text-sm">サービスごとの同時リクエスト数
-                <select className="nv-input mt-1" value={settings.generationConcurrency} onChange={(event) => setSettings((previous) => ({ ...previous, generationConcurrency: Number(event.target.value) }))}>
-                  {[1, 2, 3, 4].map((count) => <option key={count} value={count}>{count}</option>)}
+              <label className="mb-4 block text-sm">
+                サービスごとの同時リクエスト数
+                <select
+                  className="nv-input mt-1"
+                  value={settings.generationConcurrency}
+                  onChange={(event) =>
+                    setSettings((previous) => ({
+                      ...previous,
+                      generationConcurrency: Number(event.target.value),
+                    }))
+                  }
+                >
+                  {[1, 2, 3, 4].map((count) => (
+                    <option key={count} value={count}>
+                      {count}
+                    </option>
+                  ))}
                 </select>
               </label>
               <div className="space-y-4">
@@ -471,7 +512,7 @@ export function SettingsPage() {
                       <h3 className="text-sm font-semibold text-slate-900">
                         {serviceLabels[service].name}
                       </h3>
-                      <p className="mt-1 text-xs text-slate-500">
+                      <p className="mt-1 text-xs text-slate-600">
                         {serviceLabels[service].description}
                       </p>
                       <a
@@ -487,6 +528,7 @@ export function SettingsPage() {
                     <div className="flex flex-wrap gap-2">
                       <input
                         type="password"
+                        aria-label={`${serviceLabels[service].name} APIキー`}
                         value={apiKeys[service]}
                         onChange={(e) =>
                           setApiKeys((prev) => ({ ...prev, [service]: e.target.value }))
@@ -537,8 +579,14 @@ export function SettingsPage() {
             <Card title="デフォルト動画設定" subtitle="新規プロジェクトの初期値">
               <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
                 <div>
-                  <label className="mb-1 block text-xs font-semibold text-slate-600">解像度</label>
+                  <label
+                    htmlFor="SettingsPage-field-1"
+                    className="mb-1 block text-xs font-semibold text-slate-600"
+                  >
+                    解像度
+                  </label>
                   <select
+                    id="SettingsPage-field-1"
                     value={settings.videoResolution}
                     onChange={(e) =>
                       setSettings((prev) => ({
@@ -554,10 +602,14 @@ export function SettingsPage() {
                   </select>
                 </div>
                 <div>
-                  <label className="mb-1 block text-xs font-semibold text-slate-600">
+                  <label
+                    htmlFor="SettingsPage-field-2"
+                    className="mb-1 block text-xs font-semibold text-slate-600"
+                  >
                     フレームレート
                   </label>
                   <select
+                    id="SettingsPage-field-2"
                     value={settings.videoFps}
                     onChange={(e) =>
                       setSettings((prev) => ({ ...prev, videoFps: Number(e.target.value) }))
@@ -570,10 +622,14 @@ export function SettingsPage() {
                   </select>
                 </div>
                 <div>
-                  <label className="mb-1 block text-xs font-semibold text-slate-600">
+                  <label
+                    htmlFor="SettingsPage-field-3"
+                    className="mb-1 block text-xs font-semibold text-slate-600"
+                  >
                     動画ビットレート
                   </label>
                   <input
+                    id="SettingsPage-field-3"
                     type="text"
                     value={settings.videoBitrate}
                     onChange={(e) =>
@@ -584,10 +640,14 @@ export function SettingsPage() {
                   />
                 </div>
                 <div>
-                  <label className="mb-1 block text-xs font-semibold text-slate-600">
+                  <label
+                    htmlFor="SettingsPage-field-4"
+                    className="mb-1 block text-xs font-semibold text-slate-600"
+                  >
                     音声ビットレート
                   </label>
                   <input
+                    id="SettingsPage-field-4"
                     type="text"
                     value={settings.audioBitrate}
                     onChange={(e) =>
@@ -598,10 +658,14 @@ export function SettingsPage() {
                   />
                 </div>
                 <div>
-                  <label className="mb-1 block text-xs font-semibold text-slate-600">
+                  <label
+                    htmlFor="SettingsPage-field-5"
+                    className="mb-1 block text-xs font-semibold text-slate-600"
+                  >
                     読み上げ開始遅延（秒）
                   </label>
                   <input
+                    id="SettingsPage-field-5"
                     type="number"
                     min="0"
                     max="2"
@@ -619,10 +683,14 @@ export function SettingsPage() {
                   />
                 </div>
                 <div>
-                  <label className="mb-1 block text-xs font-semibold text-slate-600">
+                  <label
+                    htmlFor="SettingsPage-field-6"
+                    className="mb-1 block text-xs font-semibold text-slate-600"
+                  >
                     アスペクト比
                   </label>
                   <select
+                    id="SettingsPage-field-6"
                     value={settings.defaultAspectRatio}
                     onChange={(e) =>
                       setSettings((prev) => ({
@@ -700,10 +768,14 @@ export function SettingsPage() {
               <Card title="スクリプト生成AI" subtitle="ナレーション原稿を作るモデル設定">
                 <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
                   <div>
-                    <label className="mb-1 block text-xs font-semibold text-slate-600">
+                    <label
+                      htmlFor="SettingsPage-field-7"
+                      className="mb-1 block text-xs font-semibold text-slate-600"
+                    >
                       スクリプト生成モデル
                     </label>
                     <select
+                      id="SettingsPage-field-7"
                       value={settings.scriptTextModel}
                       onChange={(e) =>
                         setSettings((prev) => ({
@@ -719,21 +791,25 @@ export function SettingsPage() {
                         </option>
                       ))}
                     </select>
-                    <p className="mt-1 text-xs text-slate-500">
+                    <p className="mt-1 text-xs text-slate-600">
                       モデルID: {settings.scriptTextModel}
                     </p>
                     {getTextCompletionModelDescription(settings.scriptTextModel) && (
-                      <p className="mt-1 text-xs text-slate-500">
+                      <p className="mt-1 text-xs text-slate-600">
                         {getTextCompletionModelDescription(settings.scriptTextModel)}
                       </p>
                     )}
                   </div>
                   {isOpenAITextCompletionModel(settings.scriptTextModel) ? (
                     <div>
-                      <label className="mb-1 block text-xs font-semibold text-slate-600">
+                      <label
+                        htmlFor="SettingsPage-field-8"
+                        className="mb-1 block text-xs font-semibold text-slate-600"
+                      >
                         推論強度
                       </label>
                       <select
+                        id="SettingsPage-field-8"
                         value={settings.openaiReasoningEffort}
                         onChange={(e) =>
                           setSettings((prev) => ({
@@ -750,16 +826,20 @@ export function SettingsPage() {
                           </option>
                         ))}
                       </select>
-                      <p className="mt-1 text-xs text-slate-500">
+                      <p className="mt-1 text-xs text-slate-600">
                         現在選択中のOpenAIモデルで共通して使える値だけを表示しています。
                       </p>
                     </div>
                   ) : (
                     <div>
-                      <label className="mb-1 block text-xs font-semibold text-slate-600">
+                      <label
+                        htmlFor="SettingsPage-field-9"
+                        className="mb-1 block text-xs font-semibold text-slate-600"
+                      >
                         思考レベル
                       </label>
                       <select
+                        id="SettingsPage-field-9"
                         value={settings.geminiThinkingLevel}
                         onChange={(e) =>
                           setSettings((prev) => ({
@@ -775,7 +855,7 @@ export function SettingsPage() {
                           </option>
                         ))}
                       </select>
-                      <p className="mt-1 text-xs text-slate-500">
+                      <p className="mt-1 text-xs text-slate-600">
                         選択中の {getTextCompletionModelLabel(settings.scriptTextModel)}{' '}
                         で使える値だけを表示しています。
                       </p>
@@ -787,10 +867,14 @@ export function SettingsPage() {
               <Card title="デフォルト音声設定" subtitle="engine / model / voice の既定値">
                 <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
                   <div>
-                    <label className="mb-1 block text-xs font-semibold text-slate-600">
+                    <label
+                      htmlFor="SettingsPage-field-10"
+                      className="mb-1 block text-xs font-semibold text-slate-600"
+                    >
                       音声生成モデル
                     </label>
                     <select
+                      id="SettingsPage-field-10"
                       value={settings.ttsModel}
                       onChange={(e) =>
                         setSettings((prev) => ({
@@ -806,7 +890,7 @@ export function SettingsPage() {
                         </option>
                       ))}
                     </select>
-                    <p className="mt-1 text-xs text-slate-500">モデルID: {settings.ttsModel}</p>
+                    <p className="mt-1 text-xs text-slate-600">モデルID: {settings.ttsModel}</p>
                   </div>
                   <div>
                     <label className="mb-1 block text-xs font-semibold text-slate-600">
@@ -814,6 +898,7 @@ export function SettingsPage() {
                     </label>
                     {ttsVoices.length > 0 ? (
                       <select
+                        aria-label="ボイス"
                         value={settings.ttsVoice}
                         onChange={(e) =>
                           setSettings((prev) => ({ ...prev, ttsVoice: e.target.value }))
@@ -830,6 +915,7 @@ export function SettingsPage() {
                     ) : (
                       <input
                         type="text"
+                        aria-label="ボイス"
                         value={settings.ttsVoice}
                         onChange={(e) =>
                           setSettings((prev) => ({ ...prev, ttsVoice: e.target.value }))
@@ -838,7 +924,7 @@ export function SettingsPage() {
                         placeholder={isLoadingTtsVoices ? '読み込み中...' : 'Charon'}
                       />
                     )}
-                    <p className="mt-1 text-xs text-slate-500">
+                    <p className="mt-1 text-xs text-slate-600">
                       音声生成ページではここで設定した既定ボイスを使用します。
                     </p>
                   </div>
@@ -848,7 +934,7 @@ export function SettingsPage() {
                       <Badge tone="info">Gemini TTS</Badge>
                       <span className="text-sm font-semibold text-slate-900">gemini_tts</span>
                     </div>
-                    <p className="mt-2 text-xs text-slate-500">
+                    <p className="mt-2 text-xs text-slate-600">
                       現在のアプリは Gemini TTS を既定の音声エンジンとして使用します。話し方の
                       preset はプロジェクト設定側で切り替えます。
                     </p>
@@ -858,7 +944,7 @@ export function SettingsPage() {
                     <div className="mt-2 text-sm font-semibold text-slate-900">
                       {settings.ttsSpeakingRate.toFixed(1)}x
                     </div>
-                    <p className="mt-2 text-xs text-slate-500">
+                    <p className="mt-2 text-xs text-slate-600">
                       Gemini TTS では話速の個別調整 UI
                       をまだ提供していないため、この値を表示のみとしています。
                     </p>
@@ -873,10 +959,14 @@ export function SettingsPage() {
               <Card title="画像プロンプト生成AI" subtitle="画像用の指示文を作るモデル設定">
                 <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
                   <div>
-                    <label className="mb-1 block text-xs font-semibold text-slate-600">
+                    <label
+                      htmlFor="SettingsPage-field-11"
+                      className="mb-1 block text-xs font-semibold text-slate-600"
+                    >
                       画像プロンプト生成モデル
                     </label>
                     <select
+                      id="SettingsPage-field-11"
                       value={settings.imagePromptTextModel}
                       onChange={(e) =>
                         setSettings((prev) => ({
@@ -892,21 +982,25 @@ export function SettingsPage() {
                         </option>
                       ))}
                     </select>
-                    <p className="mt-1 text-xs text-slate-500">
+                    <p className="mt-1 text-xs text-slate-600">
                       モデルID: {settings.imagePromptTextModel}
                     </p>
                     {getTextCompletionModelDescription(settings.imagePromptTextModel) && (
-                      <p className="mt-1 text-xs text-slate-500">
+                      <p className="mt-1 text-xs text-slate-600">
                         {getTextCompletionModelDescription(settings.imagePromptTextModel)}
                       </p>
                     )}
                   </div>
                   {isOpenAITextCompletionModel(settings.imagePromptTextModel) ? (
                     <div>
-                      <label className="mb-1 block text-xs font-semibold text-slate-600">
+                      <label
+                        htmlFor="SettingsPage-field-12"
+                        className="mb-1 block text-xs font-semibold text-slate-600"
+                      >
                         推論強度
                       </label>
                       <select
+                        id="SettingsPage-field-12"
                         value={settings.openaiReasoningEffort}
                         onChange={(e) =>
                           setSettings((prev) => ({
@@ -923,16 +1017,20 @@ export function SettingsPage() {
                           </option>
                         ))}
                       </select>
-                      <p className="mt-1 text-xs text-slate-500">
+                      <p className="mt-1 text-xs text-slate-600">
                         現在選択中のOpenAIモデルで共通して使える値だけを表示しています。
                       </p>
                     </div>
                   ) : (
                     <div>
-                      <label className="mb-1 block text-xs font-semibold text-slate-600">
+                      <label
+                        htmlFor="SettingsPage-field-13"
+                        className="mb-1 block text-xs font-semibold text-slate-600"
+                      >
                         思考レベル
                       </label>
                       <select
+                        id="SettingsPage-field-13"
                         value={settings.geminiThinkingLevel}
                         onChange={(e) =>
                           setSettings((prev) => ({
@@ -948,7 +1046,7 @@ export function SettingsPage() {
                           </option>
                         ))}
                       </select>
-                      <p className="mt-1 text-xs text-slate-500">
+                      <p className="mt-1 text-xs text-slate-600">
                         選択中の {getTextCompletionModelLabel(settings.imagePromptTextModel)}{' '}
                         で使える値だけを表示しています。
                       </p>
@@ -960,10 +1058,14 @@ export function SettingsPage() {
               <Card title="デフォルト画像設定" subtitle="画像生成モデルと解像度の選択">
                 <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
                   <div>
-                    <label className="mb-1 block text-xs font-semibold text-slate-600">
+                    <label
+                      htmlFor="SettingsPage-field-14"
+                      className="mb-1 block text-xs font-semibold text-slate-600"
+                    >
                       画像生成モデル
                     </label>
                     <select
+                      id="SettingsPage-field-14"
                       value={settings.imageModel}
                       onChange={(e) =>
                         setSettings((prev) => ({
@@ -979,19 +1081,23 @@ export function SettingsPage() {
                         </option>
                       ))}
                     </select>
-                    <p className="mt-1 text-xs text-slate-500">モデルID: {settings.imageModel}</p>
+                    <p className="mt-1 text-xs text-slate-600">モデルID: {settings.imageModel}</p>
                     {settings.imageModel === 'gpt-image-2' && (
-                      <p className="mt-1 text-xs text-slate-500">
+                      <p className="mt-1 text-xs text-slate-600">
                         OpenAI APIキーを使用します。横長・縦長のFull
                         HD相当は1792×1008、正方形の4K相当は2880×2880です。2Kを超える画素数の出力は実験的対応です。
                       </p>
                     )}
                   </div>
                   <div>
-                    <label className="mb-1 block text-xs font-semibold text-slate-600">
+                    <label
+                      htmlFor="SettingsPage-field-15"
+                      className="mb-1 block text-xs font-semibold text-slate-600"
+                    >
                       画像生成解像度
                     </label>
                     <select
+                      id="SettingsPage-field-15"
                       value={settings.imageResolution}
                       onChange={(e) =>
                         setSettings((prev) => ({
@@ -1007,7 +1113,7 @@ export function SettingsPage() {
                         </option>
                       ))}
                     </select>
-                    <p className="mt-1 text-xs text-slate-500">
+                    <p className="mt-1 text-xs text-slate-600">
                       GPT Image 2
                       では指定解像度を優先し、API制約に応じて近いサイズへ自動調整します。
                     </p>

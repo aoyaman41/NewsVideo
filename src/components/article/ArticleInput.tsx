@@ -51,7 +51,11 @@ export function ArticleInput({
   }, [defaultValues?.bodyText, defaultValues?.source, defaultValues?.title, reset]);
 
   return (
-    <form onChange={() => onChange?.(getValues())} onSubmit={handleSubmit(onSubmit)} className="space-y-4">
+    <form
+      onChange={() => onChange?.(getValues())}
+      onSubmit={handleSubmit(onSubmit)}
+      className="space-y-4"
+    >
       <div>
         <label htmlFor="title" className="mb-1 block text-sm font-medium text-slate-700">
           記事タイトル <span className="text-red-500">*</span>
@@ -95,7 +99,11 @@ export function ArticleInput({
       </div>
 
       <div className="flex flex-wrap justify-end gap-2">
-        {onSaveDraft && <Button type="button" variant="secondary" onClick={onSaveDraft}>下書きを保存</Button>}
+        {onSaveDraft && (
+          <Button type="button" variant="secondary" onClick={onSaveDraft}>
+            下書きを保存
+          </Button>
+        )}
         {onAutoSubmit && (
           <Button
             type="button"

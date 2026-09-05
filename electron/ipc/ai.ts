@@ -1,3 +1,4 @@
+import { scriptRequestSchema } from '../../shared/project/generationRequests';
 import { retryTransient, limitedOpenAIFetch } from '../utils/generationPolicy';
 import { generationSettings } from '../utils/generationContext';
 import { registerOperation } from './operations';
@@ -70,7 +71,6 @@ async function readApiKey(service: string): Promise<string | null> {
   }
 }
 const withRetry = retryTransient;
-
 
 type OpenAIUsageSummary = {
   provider?: 'openai' | 'gemini';
@@ -306,7 +306,9 @@ async function readTextGenerationConfig(scope: TextGenerationScope): Promise<Tex
   };
   try {
     const settingsPath = getSettingsPath();
-    const content = generationSettings.getStore() ? JSON.stringify(generationSettings.getStore()) : await fs.readFile(settingsPath, 'utf-8');
+    const content = generationSettings.getStore()
+      ? JSON.stringify(generationSettings.getStore())
+      : await fs.readFile(settingsPath, 'utf-8');
     const settings = normalizeSettings(JSON.parse(content));
     const selectedModel =
       scope === 'script' ? settings.scriptTextModel : settings.imagePromptTextModel;
@@ -531,6 +533,7 @@ registerOperation(
     article: Article,
     options: ScriptOptions = {}
   ): Promise<{ parts: GeneratedPart[]; usage: OpenAIUsageSummary | null }> => {
+    ({ article, options } = scriptRequestSchema.parse({ article, options }));
     const generationConfig = await readTextGenerationConfig('script');
     const selectedModel = generationConfig.model;
     const scriptSystemPrompt =

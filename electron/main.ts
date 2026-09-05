@@ -125,14 +125,52 @@ function createWindow(): void {
     show: false,
   });
 
-  const rendererOrigin = rendererUrlOverride || process.env.VITE_DEV_SERVER_URL || 'http://localhost:5173';
-  mainWindow.webContents.session.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
+  if (isDev)
+    mainWindow.webContents.on('console-message', (details) => {
+      if (details.level === 'error') console.error('[renderer]', details.message);
+    });
+  mainWindow.webContents.on('render-process-gone', (_event, details) =>
+    console.error('[renderer-exit]', details.reason)
+  );
+  mainWindow.webContents.on('did-fail-load', (_event, code, description) =>
+    console.error('[renderer-load]', code, description)
+  );
+  const rendererOrigin =
+    rendererUrlOverride || process.env.VITE_DEV_SERVER_URL || 'http://localhost:5173';
+  if (isDev)
+    mainWindow.webContents.on('preload-error', (_event, _path, error) =>
+      console.error('[preload]', error.message)
+    );
+  mainWindow.webContents.session.setPermissionRequestHandler((_contents, _permission, callback) =>
+    callback(false)
+  );
   mainWindow.webContents.session.setPermissionCheckHandler(() => false);
-  mainWindow.webContents.session.webRequest.onHeadersReceived((details, callback) => callback({ responseHeaders: { ...details.responseHeaders, 'Content-Security-Policy': [contentSecurityPolicy(isDev ? rendererOrigin : undefined) + "; frame-ancestors 'none'"] } }));
-  const openExternal = (url: string) => { try { if (['https:', 'http:'].includes(new URL(url).protocol)) void shell.openExternal(url); } catch { /* Ignore malformed external links. */ } };
-  mainWindow.webContents.setWindowOpenHandler(({ url }) => { openExternal(url); return { action: 'deny' }; });
+  mainWindow.webContents.session.webRequest.onHeadersReceived((details, callback) =>
+    callback({
+      responseHeaders: {
+        ...details.responseHeaders,
+        'Content-Security-Policy': [
+          contentSecurityPolicy(isDev ? rendererOrigin : undefined) + "; frame-ancestors 'none'",
+        ],
+      },
+    })
+  );
+  const openExternal = (url: string) => {
+    try {
+      if (['https:', 'http:'].includes(new URL(url).protocol)) void shell.openExternal(url);
+    } catch {
+      /* Ignore malformed external links. */
+    }
+  };
+  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    openExternal(url);
+    return { action: 'deny' };
+  });
   mainWindow.webContents.on('will-navigate', (event, url) => {
-    if (!isTrustedRenderer(url, app.isPackaged, app.getAppPath(), rendererOrigin)) { event.preventDefault(); openExternal(url); }
+    if (!isTrustedRenderer(url, app.isPackaged, app.getAppPath(), rendererOrigin)) {
+      event.preventDefault();
+      openExternal(url);
+    }
   });
 
   const revealWindow = () => {
@@ -166,13 +204,19 @@ function createWindow(): void {
   const flushed = (event: Electron.IpcMainEvent, success: boolean) => {
     if (event.sender !== mainWindow?.webContents || !flushPending) return;
     flushPending = false;
-    if (success) { closeReady = true; mainWindow?.close(); }
+    if (success) {
+      closeReady = true;
+      mainWindow?.close();
+    }
   };
   ipcMain.on('project:flushed', flushed);
   mainWindow.on('close', (event) => {
     if (closeReady || mainWindow?.webContents.isDestroyed()) return;
     event.preventDefault();
-    if (!flushPending) { flushPending = true; mainWindow?.webContents.send('project:flush'); }
+    if (!flushPending) {
+      flushPending = true;
+      mainWindow?.webContents.send('project:flush');
+    }
   });
   mainWindow.on('closed', () => {
     ipcMain.removeListener('project:flushed', flushed);
@@ -185,10 +229,14 @@ app.whenReady().then(() => {
   // カスタムプロトコルハンドラを登録
   protocol.handle('local-file', async (request) => {
     try {
-      if (!['GET', 'HEAD', 'OPTIONS'].includes(request.method)) return new Response('Method not allowed', { status: 405 });
+      if (!['GET', 'HEAD', 'OPTIONS'].includes(request.method))
+        return new Response('Method not allowed', { status: 405 });
       const origin = request.headers.get('origin');
-      const devOrigin = new URL(rendererUrlOverride || process.env.VITE_DEV_SERVER_URL || 'http://localhost:5173').origin;
-      if (origin && origin !== 'null' && (!isDev || origin !== devOrigin)) return new Response('Forbidden', { status: 403 });
+      const devOrigin = new URL(
+        rendererUrlOverride || process.env.VITE_DEV_SERVER_URL || 'http://localhost:5173'
+      ).origin;
+      if (origin && origin !== 'null' && (!isDev || origin !== devOrigin))
+        return new Response('Forbidden', { status: 403 });
       const filePath = await fileAccess().media(parseLocalFileRequestUrl(request.url));
       const stat = await fsPromises.stat(filePath);
       if (!stat.isFile()) {

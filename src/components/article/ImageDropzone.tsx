@@ -15,9 +15,22 @@ interface ImageDropzoneProps {
 
 // 推奨タグリスト（ニュース動画向け）
 const SUGGESTED_TAGS = [
-  '人物', '風景', '建物', 'グラフ', '図解', 'ロゴ',
-  '記者会見', 'インタビュー', '街頭', 'オフィス', '工場',
-  'イベント', 'スポーツ', '政治', '経済', 'テクノロジー',
+  '人物',
+  '風景',
+  '建物',
+  'グラフ',
+  '図解',
+  'ロゴ',
+  '記者会見',
+  'インタビュー',
+  '街頭',
+  'オフィス',
+  '工場',
+  'イベント',
+  'スポーツ',
+  '政治',
+  '経済',
+  'テクノロジー',
 ];
 
 export function ImageDropzone({
@@ -51,7 +64,10 @@ export function ImageDropzone({
           });
 
           if (!projectId) throw new Error('保存先プロジェクトがありません。');
-          const imageAsset = await window.electronAPI.image.importData(await file.arrayBuffer(), projectId);
+          const imageAsset = await window.electronAPI.image.importData(
+            await file.arrayBuffer(),
+            projectId
+          );
 
           newImages.push(imageAsset);
           newBlobUrls.set(imageAsset.id, blobUrl);
@@ -77,14 +93,16 @@ export function ImageDropzone({
 
   return (
     <div className="space-y-4">
-      {importError && <p role="alert" className="text-sm text-red-700">{importError}</p>}
+      {importError && (
+        <p role="alert" className="text-sm text-red-700">
+          {importError}
+        </p>
+      )}
       {/* ドロップゾーン */}
       <div
         {...getRootProps()}
         className={`border-2 border-dashed rounded-lg p-8 text-center cursor-pointer transition-colors ${
-          isDragActive
-            ? 'border-blue-500 bg-blue-50'
-            : 'border-gray-300 hover:border-gray-400'
+          isDragActive ? 'border-blue-500 bg-blue-50' : 'border-gray-300 hover:border-gray-400'
         }`}
       >
         <input {...getInputProps()} />

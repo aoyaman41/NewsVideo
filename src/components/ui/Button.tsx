@@ -38,7 +38,7 @@ export function Button({
     <button
       type={type ?? 'button'}
       className={cx(
-        'titlebar-no-drag inline-flex items-center justify-center gap-2 font-semibold transition-colors',
+        'titlebar-no-drag inline-flex shrink-0 whitespace-nowrap items-center justify-center gap-2 font-semibold transition-colors',
         'duration-[var(--nv-duration-fast)] nv-focus-ring disabled:opacity-50 disabled:cursor-not-allowed',
         variantClasses[variant],
         sizeClasses[size],

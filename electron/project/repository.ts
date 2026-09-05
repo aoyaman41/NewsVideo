@@ -201,26 +201,25 @@ export class ProjectRepository {
   }
 
   private async persist(current: Project, requested: Project, directory: string): Promise<Project> {
-      const next = {
-        ...requested,
-        path: directory,
-        schemaVersion: 'v2.0',
-        revision: (current.revision ?? 0) + 1,
-        updatedAt: new Date().toISOString(),
-      };
-      next.integrity = deriveIntegrity(current, next);
-      next.metrics = metricsSchema.parse(next.metrics ?? {});
-      if (next.autoGenerationStatus?.lastVideoPath && next.integrity?.video) next.metrics.firstOutputAt ??= new Date().toISOString();
-      if (next.job?.id !== current.job?.id && current.job) next.metrics.restarts++;
-      if (next.job?.status === 'cancelled' && current.job?.status !== 'cancelled') next.metrics.stops++;
-      if (next.job?.status === 'failed') next.metrics.lastFailureKind = next.job.error?.kind;
-      // Materialize legacy data as a complete backup before changing the commit point.
-      await this.atomicWrite(
-        path.join(directory, 'project.previous.json'),
-        JSON.stringify({ ...current, schemaVersion: 'v2.0' })
-      );
-      await this.atomicWrite(path.join(directory, 'project.json'), JSON.stringify(next));
-      return next;
+    const next = {
+      ...requested,
+      path: directory,
+      schemaVersion: 'v2.0',
+      revision: (current.revision ?? 0) + 1,
+      updatedAt: new Date().toISOString(),
+    };
+    next.integrity = deriveIntegrity(current, next);
+    next.metrics = metricsSchema.parse(next.metrics ?? {});
+    if (next.job?.id !== current.job?.id && current.job) next.metrics.restarts++;
+    if (next.job?.status === 'cancelled' && current.job?.status !== 'cancelled')
+      next.metrics.stops++;
+    if (next.job?.status === 'failed') next.metrics.lastFailureKind = next.job.error?.kind;
+    // Materialize legacy data as a complete backup before changing the commit point.
+    await this.atomicWrite(
+      path.join(directory, 'project.previous.json'),
+      JSON.stringify({ ...current, schemaVersion: 'v2.0' })
+    );
+    await this.atomicWrite(path.join(directory, 'project.json'), JSON.stringify(next));
+    return next;
   }
-
 }

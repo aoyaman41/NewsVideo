@@ -18,6 +18,9 @@ export const renderOptionsSchema = z.object({
   fps: z.number().int().min(12).max(60),
   videoBitrate: z.string().regex(/^\d+(?:\.\d+)?[kKmM]$/),
   audioBitrate: z.string().regex(/^\d+[kKmM]$/),
+  videoPartLeadInSec: z.number().min(0).max(5).optional(),
+  openingVideoPath: z.string().optional(),
+  endingVideoPath: z.string().optional(),
   includeOpening: z.boolean(),
   includeEnding: z.boolean(),
 });

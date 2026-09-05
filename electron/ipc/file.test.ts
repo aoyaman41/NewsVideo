@@ -1,4 +1,10 @@
-vi.mock('../utils/fileAccess', () => ({ fileAccess: () => ({ assert: async (value: string) => value, media: async (value: string) => value, grant: vi.fn() }) }));
+vi.mock('../utils/fileAccess', () => ({
+  fileAccess: () => ({
+    assert: async (value: string) => value,
+    media: async (value: string) => value,
+    grant: vi.fn(),
+  }),
+}));
 import path from 'node:path';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -98,7 +104,9 @@ describe('file IPC handlers', () => {
 
   it('rejects calls from an untrusted renderer', () => {
     const handler = getHandler('file:selectFile');
-    expect(() => handler({ senderFrame: { url: 'https://evil.test', parent: null } })).toThrow('許可');
+    expect(() => handler({ senderFrame: { url: 'https://evil.test', parent: null } })).toThrow(
+      '許可'
+    );
     expect(writeFileMock).not.toHaveBeenCalled();
   });
 
@@ -117,7 +125,10 @@ describe('file IPC handlers', () => {
     statMock.mockRejectedValueOnce(new Error('stat failed'));
 
     const handler = getHandler('file:listFiles');
-    const result = (await handler({ senderFrame: { url: 'http://localhost:5173', parent: null } }, '/tmp/project')) as Array<{
+    const result = (await handler(
+      { senderFrame: { url: 'http://localhost:5173', parent: null } },
+      '/tmp/project'
+    )) as Array<{
       path: string;
       name: string;
       isFile: boolean;
@@ -147,7 +158,10 @@ describe('file IPC handlers', () => {
     openPathMock.mockResolvedValueOnce('');
 
     const handler = getHandler('file:revealInFinder');
-    const result = await handler({ senderFrame: { url: 'http://localhost:5173', parent: null } }, '/tmp/project/output/video.mp4');
+    const result = await handler(
+      { senderFrame: { url: 'http://localhost:5173', parent: null } },
+      '/tmp/project/output/video.mp4'
+    );
 
     expect(openPathMock).toHaveBeenCalledWith(path.join('/tmp/project/output'));
     expect(result).toEqual({ success: true });

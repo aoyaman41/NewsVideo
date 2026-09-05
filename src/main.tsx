@@ -4,8 +4,12 @@ import App from './App';
 import { initializeProjectEvents, projectClient } from './stores/projectStore';
 initializeProjectEvents();
 window.electronAPI.project.onFlushRequested(async () => {
-  try { await projectClient.flushAll(); window.electronAPI.project.finishFlush(true); }
-  catch { window.electronAPI.project.finishFlush(false); }
+  try {
+    await projectClient.flushAll();
+    window.electronAPI.project.finishFlush(true);
+  } catch {
+    window.electronAPI.project.finishFlush(false);
+  }
 });
 import './index.css';
 

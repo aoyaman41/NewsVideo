@@ -1,6 +1,6 @@
 import { configureGenerationConcurrency } from '../utils/generationPolicy';
 import { registerOperation } from './operations';
-import { app, safeStorage } from 'electron';
+import { app, safeStorage, BrowserWindow } from 'electron';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import {
@@ -71,6 +71,45 @@ registerOperation('settings:set', async (_, settings: unknown) => {
   configureGenerationConcurrency(newSettings.generationConcurrency);
 
   await fs.writeFile(settingsPath, JSON.stringify(newSettings, null, 2));
+  const generationKeys = [
+    'readingDictionary',
+    'scriptTextModel',
+    'imagePromptTextModel',
+    'openaiReasoningEffort',
+    'geminiThinkingLevel',
+    'imageModel',
+    'imageResolution',
+    'ttsEngine',
+    'ttsModel',
+    'ttsVoice',
+    'ttsSpeakingRate',
+    'ttsPitch',
+  ] as const;
+  const changedGenerationKeys = generationKeys.filter(
+    (key) => JSON.stringify(currentSettings[key]) !== JSON.stringify(newSettings[key])
+  );
+  if (changedGenerationKeys.length) {
+    const { getProjectRepository } = await import('./project');
+    const repo = getProjectRepository();
+    for (const directory of await repo.directories()) {
+      try {
+        const project = await repo.readDirectory(directory);
+        if (project.job && ['running', 'queued'].includes(project.job.status)) continue;
+        const saved = await repo.update(project.id, (data) => {
+          data.generationConfig = {
+            ...data.generationConfig,
+            ...Object.fromEntries(changedGenerationKeys.map((key) => [key, newSettings[key]])),
+          };
+        });
+        for (const window of BrowserWindow.getAllWindows())
+          window.webContents.send('project:changed', { id: saved.id, revision: saved.revision });
+      } catch (error) {
+        logger.warn('Generation setting invalidation failed', {
+          code: (error as NodeJS.ErrnoException).code,
+        });
+      }
+    }
+  }
   return { success: true };
 });
 
@@ -84,7 +123,12 @@ registerOperation('settings:hasApiKey', async (_, service: ApiKeyService): Promi
 registerOperation(
   'settings:setApiKey',
   async (_, service: ApiKeyService, apiKey: string): Promise<{ success: boolean }> => {
-    if (!['openai', 'google_ai'].includes(service) || typeof apiKey !== 'string' || apiKey.length > 4096) throw new Error('APIキーの入力が不正です。');
+    if (
+      !['openai', 'google_ai'].includes(service) ||
+      typeof apiKey !== 'string' ||
+      apiKey.length > 4096
+    )
+      throw new Error('APIキーの入力が不正です。');
     if (!safeStorage.isEncryptionAvailable()) {
       throw new Error('Encryption is not available');
     }
@@ -118,7 +162,11 @@ registerOperation(
     service: ApiKeyService,
     inputApiKey?: string
   ): Promise<{ success: boolean; message: string; latencyMs?: number }> => {
-    if (!['openai', 'google_ai'].includes(service) || (inputApiKey !== undefined && typeof inputApiKey !== 'string')) throw new Error('未対応のサービスです。');
+    if (
+      !['openai', 'google_ai'].includes(service) ||
+      (inputApiKey !== undefined && typeof inputApiKey !== 'string')
+    )
+      throw new Error('未対応のサービスです。');
     const startTime = Date.now();
 
     try {
@@ -145,9 +193,7 @@ registerOperation(
           break;
 
         case 'google_tts':
-          response = await fetch(
-            `https://texttospeech.googleapis.com/v1/voices?key=${apiKey}`
-          );
+          response = await fetch(`https://texttospeech.googleapis.com/v1/voices?key=${apiKey}`);
           break;
 
         default:

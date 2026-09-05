@@ -24,7 +24,7 @@ export function Header({
             <h2 className="truncate text-lg font-semibold text-slate-900">{title}</h2>
             {statusLabel && <StatusChip tone={statusTone} label={statusLabel} />}
           </div>
-          {subtitle && <p className="mt-1 truncate text-sm text-slate-500">{subtitle}</p>}
+          {subtitle && <p className="mt-1 truncate text-sm text-slate-600">{subtitle}</p>}
         </div>
         {actions && <div className="titlebar-no-drag flex items-center gap-2">{actions}</div>}
       </div>

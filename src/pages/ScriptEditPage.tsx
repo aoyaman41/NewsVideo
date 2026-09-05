@@ -1,3 +1,4 @@
+import { useScrollMemory } from '../hooks/useScrollMemory';
 import { FinishingEditor } from '../components/script/FinishingEditor';
 import { SceneStudio } from '../components/script/SceneStudio';
 import { EvidenceReview } from '../components/script/EvidenceReview';
@@ -10,7 +11,7 @@ import { useNavigate } from 'react-router-dom';
 import { useParams } from 'react-router-dom';
 import { Header, WorkflowNav } from '../components/layout';
 import { PartList, ScriptEditor } from '../components/script';
-import { Badge, Button, Card, EmptyState, ErrorDetailPanel, StatusChip, useToast } from '../components/ui';
+import { Button, EmptyState, ErrorDetailPanel, useToast } from '../components/ui';
 import type { PartEdit } from '../schemas';
 import { createNewPart } from '../schemas';
 import { createOpenAIUsageRecord } from '../utils/usage';
@@ -22,6 +23,7 @@ export function ScriptEditPage() {
 
   const [project, setProject] = useProjectState(projectId);
   const [selectedPartId, setSelectedPartId] = useSceneSelection(projectId);
+  const scrollRef = useScrollMemory(`${projectId}:script:${selectedPartId}`);
   const [isLoading, setIsLoading] = useState(true);
   const [isProcessing, setIsProcessing] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -47,7 +49,7 @@ export function ScriptEditPage() {
         const loaded = await projectClient.load(projectId);
         setProject(loaded);
         if (loaded.parts.length > 0) {
-          setSelectedPartId(rememberedScene(projectId, loaded.parts[0].id));
+          setSelectedPartId(rememberedScene(projectId, loaded.parts));
         }
       } catch (err) {
         console.error('Failed to load project:', err);
@@ -61,7 +63,12 @@ export function ScriptEditPage() {
   }, [projectId, reportError, setProject, setSelectedPartId]);
 
   const saveStatus = useProjectSaveStatus(projectId);
-  const autoSaveState = { isDirty: saveStatus.dirty, isSaving: saveStatus.saving, lastSavedAt: saveStatus.lastSavedAt ? new Date(saveStatus.lastSavedAt) : null, saveNow: saveStatus.retry };
+  const autoSaveState = {
+    isDirty: saveStatus.dirty,
+    isSaving: saveStatus.saving,
+    lastSavedAt: saveStatus.lastSavedAt ? new Date(saveStatus.lastSavedAt) : null,
+    saveNow: saveStatus.retry,
+  };
 
   const handleAddPart = useCallback(async () => {
     if (!project) return;
@@ -225,7 +232,7 @@ export function ScriptEditPage() {
   if (isLoading) {
     return (
       <div className="flex flex-1 items-center justify-center">
-        <p className="text-slate-500">読み込み中...</p>
+        <p className="text-slate-600">読み込み中...</p>
       </div>
     );
   }
@@ -254,8 +261,8 @@ export function ScriptEditPage() {
         </div>
       )}
 
-      <div className="grid min-h-0 flex-1 gap-3 overflow-auto p-4 lg:grid-cols-[200px_minmax(0,1fr)] 2xl:grid-cols-[220px_minmax(0,1fr)_260px]">
-        <div className="max-h-64 lg:max-h-none overflow-auto rounded-[12px] border border-[var(--nv-color-border)] bg-white">
+      <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-hidden p-4 lg:flex-row">
+        <div className="max-h-48 shrink-0 lg:max-h-none lg:w-52 overflow-auto rounded-[12px] border border-[var(--nv-color-border)] bg-white">
           <PartList
             parts={project.parts}
             selectedPartId={selectedPartId}
@@ -266,55 +273,48 @@ export function ScriptEditPage() {
           />
         </div>
 
-        <div className="min-w-0 flex-1 overflow-auto rounded-[12px] border border-[var(--nv-color-border)] bg-[var(--nv-color-canvas)]">
+        <div
+          ref={scrollRef}
+          className="min-h-0 min-w-0 flex-1 overflow-auto rounded-[12px] border border-[var(--nv-color-border)] bg-[var(--nv-color-canvas)]"
+        >
           {selectedPart ? (
             <>
-            <SceneStudio key={`studio-${selectedPart.id}`} project={project} part={selectedPart} onChange={setProject} />
-            <ScriptEditor
-              key={selectedPart.id}
-              part={selectedPart}
-              onSave={handleSavePart}
-              onRegenerateWithComment={handleRegenerateWithComment}
-              isProcessing={isProcessing}
-              lastCommentAppliedAt={lastCommentAppliedAt}
-              autoSaveStatus={autoSaveState}
-              autoSaveDelayMs={1200}
-              diffPreview={lastDiffByPart[selectedPart.id] ?? null}
-            />
-            <FinishingEditor key={`finish-${selectedPart.id}`} project={project} part={selectedPart} onChange={setProject} />
-            <EvidenceReview project={project} part={selectedPart} onChange={setProject} />
+              <div className="grid items-start gap-2 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
+                <SceneStudio
+                  key={`studio-${selectedPart.id}`}
+                  project={project}
+                  part={selectedPart}
+                  onChange={setProject}
+                />
+                <ScriptEditor
+                  key={selectedPart.id}
+                  part={selectedPart}
+                  onSave={handleSavePart}
+                  onRegenerateWithComment={handleRegenerateWithComment}
+                  isProcessing={isProcessing}
+                  lastCommentAppliedAt={lastCommentAppliedAt}
+                  autoSaveStatus={autoSaveState}
+                  autoSaveDelayMs={1200}
+                  diffPreview={lastDiffByPart[selectedPart.id] ?? null}
+                />
+              </div>
+              <AssetReview project={project} part={selectedPart} onChange={setProject} />
+              <FinishingEditor
+                key={`finish-${selectedPart.id}`}
+                project={project}
+                part={selectedPart}
+                onChange={setProject}
+              />
+              <EvidenceReview project={project} part={selectedPart} onChange={setProject} />
+              <details className="p-3">
+                <summary className="cursor-pointer text-sm">素材の由来と利用条件</summary>
+                <AssetRights project={project} part={selectedPart} onChange={setProject} />
+              </details>
             </>
           ) : (
             <div className="p-4">
               <EmptyState title="パートを選択してください" />
             </div>
-          )}
-        </div>
-
-        <div className="space-y-3 lg:col-start-2 2xl:col-start-auto">
-          {selectedPart && <AssetRights project={project} part={selectedPart} onChange={setProject} />}
-          {selectedPart && <AssetReview project={project} part={selectedPart} onChange={setProject} />}
-          {selectedPart && (
-            <Card title="選択中パート" subtitle={`No.${selectedPart.index + 1}`}>
-              <div className="space-y-2 text-xs text-slate-600">
-                <div className="flex items-center justify-between">
-                  <span>タイトル</span>
-                  <Badge tone="info" className="max-w-[140px] truncate">
-                    {selectedPart.title}
-                  </Badge>
-                </div>
-                <div className="flex items-center justify-between">
-                  <span>推定時間</span>
-                  <StatusChip
-                    tone="neutral"
-                    label={`${Math.round(selectedPart.durationEstimateSec)}秒`}
-                  />
-                </div>
-                <p className="rounded-[8px] border border-[var(--nv-color-border)] bg-slate-50 p-2 text-[11px] text-slate-500">
-                  {selectedPart.summary || '要約が未設定です'}
-                </p>
-              </div>
-            </Card>
           )}
         </div>
       </div>

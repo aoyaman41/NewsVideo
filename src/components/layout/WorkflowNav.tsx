@@ -24,7 +24,7 @@ type Step = {
 
 const steps: Step[] = [
   { key: 'article', label: '記事', to: (id) => `/projects/${id}/article` },
-  { key: 'script', label: 'スクリプト', to: (id) => `/projects/${id}/script` },
+  { key: 'script', label: 'シーンと台本', to: (id) => `/projects/${id}/script` },
   { key: 'image', label: '画像', to: (id) => `/projects/${id}/image` },
   { key: 'audio', label: '音声', to: (id) => `/projects/${id}/audio` },
   { key: 'video', label: '動画', to: (id) => `/projects/${id}/video` },
@@ -49,7 +49,9 @@ function computeStepStatuses(
   }
 
   const hasArticle = hasText(project.article?.title) && hasText(project.article?.bodyText);
-  const hasScript = summary.partCount > 0 && project.parts.every((part) => partFreshness(project, part).script === 'current');
+  const hasScript =
+    summary.partCount > 0 &&
+    project.parts.every((part) => partFreshness(project, part).script === 'current');
   const hasImage = hasScript && summary.missingPrompts === 0 && summary.missingImages === 0;
   const hasAudio = hasScript && summary.missingAudio === 0;
   const hasVideo = summary.hasVideoOutput;
@@ -130,7 +132,9 @@ export function WorkflowNav({
     };
   }, []);
 
-  useEffect(() => { if (projectId) void projectClient.load(projectId).catch(() => {}); }, [projectId]);
+  useEffect(() => {
+    if (projectId) void projectClient.load(projectId).catch(() => {});
+  }, [projectId]);
 
   return (
     <nav
@@ -138,8 +142,23 @@ export function WorkflowNav({
       className="titlebar-no-drag border-b border-[var(--nv-color-border)] bg-white px-5 py-2"
     >
       <div className="flex flex-wrap items-center justify-between gap-2 text-sm text-slate-600">
-        <span>{summary?.hasVideoOutput ? '現在の入力で完成' : summary ? `次: ${nextActionLabel(summary)}` : '制作の工程'}</span>
-        {displayProject && <span>累計の推定費用 {formatUsd(totalCost)}{usageRecords.some((record) => record.inputTokens === undefined && record.outputTokens === undefined) ? '＋料金未確定あり' : ''}</span>}
+        <span>
+          {summary?.hasVideoOutput
+            ? '現在の入力で完成'
+            : summary
+              ? `次: ${nextActionLabel(summary)}`
+              : '制作の工程'}
+        </span>
+        {displayProject && (
+          <span>
+            累計の推定費用 {formatUsd(totalCost)}
+            {usageRecords.some(
+              (record) => record.inputTokens === undefined && record.outputTokens === undefined
+            )
+              ? '＋料金未確定あり'
+              : ''}
+          </span>
+        )}
       </div>
 
       <ol className="mt-2 flex items-center gap-2 overflow-x-auto pb-1">

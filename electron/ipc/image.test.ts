@@ -11,7 +11,10 @@ vi.mock('electron', () => ({
       mocks.handlers.set(name, handler),
   },
   app: {
-    isPackaged: false, getAppPath: () => '/app', getPath: () => '/tmp/test' },
+    isPackaged: false,
+    getAppPath: () => '/app',
+    getPath: () => '/tmp/test',
+  },
   safeStorage: {
     isEncryptionAvailable: () => true,
     decryptString: () => JSON.stringify(mocks.secrets),
@@ -57,7 +60,11 @@ const prompt = {
 };
 
 it('routes individual image generation through OpenAI without a Google key', async () => {
-  const asset = await mocks.handlers.get('image:generate')!({ senderFrame: { url: 'http://localhost:5173', parent: null } }, prompt, 'project');
+  const asset = await mocks.handlers.get('image:generate')!(
+    { senderFrame: { url: 'http://localhost:5173', parent: null } },
+    prompt,
+    'project'
+  );
   expect(mocks.generate).toHaveBeenCalledWith(
     expect.objectContaining({ model: 'gpt-image-2', size: '2560x1440' })
   );
@@ -79,8 +86,12 @@ it('keeps successful batch assets when one request fails', async () => {
 
 it('reports the OpenAI key requirement before generating', async () => {
   mocks.secrets = {};
-  await expect(mocks.handlers.get('image:generate')!({ senderFrame: { url: 'http://localhost:5173', parent: null } }, prompt, 'project')).rejects.toThrow(
-    'OpenAI APIキー'
-  );
+  await expect(
+    mocks.handlers.get('image:generate')!(
+      { senderFrame: { url: 'http://localhost:5173', parent: null } },
+      prompt,
+      'project'
+    )
+  ).rejects.toThrow('OpenAI APIキー');
   expect(mocks.generate).not.toHaveBeenCalled();
 });

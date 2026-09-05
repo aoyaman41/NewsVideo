@@ -154,8 +154,14 @@ export function normalizeSettings(input: unknown): AppSettings {
   const raw = input && typeof input === 'object' ? (input as Record<string, unknown>) : {};
   const merged = { ...DEFAULT_SETTINGS, ...(raw as Partial<AppSettings>) };
 
-  merged.readingDictionary = z.array(readingEntrySchema).max(500).catch([]).parse(merged.readingDictionary);
-  merged.generationConcurrency = Number.isFinite(merged.generationConcurrency) ? Math.max(1, Math.min(4, Math.round(merged.generationConcurrency))) : 2;
+  merged.readingDictionary = z
+    .array(readingEntrySchema)
+    .max(500)
+    .catch([])
+    .parse(merged.readingDictionary);
+  merged.generationConcurrency = Number.isFinite(merged.generationConcurrency)
+    ? Math.max(1, Math.min(4, Math.round(merged.generationConcurrency)))
+    : 2;
 
   // 旧ボイス名の移行
   if (merged.ttsVoice === 'ja-JP-Chirp3-HD-Aoife') {

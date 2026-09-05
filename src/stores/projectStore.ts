@@ -217,7 +217,11 @@ export function initializeProjectEvents() {
     try {
       const project = await window.electronAPI.project.load(id);
       const latest = read(id);
-      if ((project.revision ?? 0) >= (latest.project?.revision ?? 0) && comparable(latest.project) === comparable(latest.saved) && !pending.has(id)) {
+      if (
+        (project.revision ?? 0) >= (latest.project?.revision ?? 0) &&
+        comparable(latest.project) === comparable(latest.saved) &&
+        !pending.has(id)
+      ) {
         entries.set(id, {
           ...latest,
           project,

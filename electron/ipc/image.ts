@@ -1,3 +1,4 @@
+import { imageRequestSchema } from '../../shared/project/generationRequests';
 import { fileAccess } from '../utils/fileAccess';
 import { retryTransient, limitedOpenAIFetch } from '../utils/generationPolicy';
 import { generationSettings } from '../utils/generationContext';
@@ -64,7 +65,9 @@ async function readImageGenerationSettings(): Promise<{
 
   try {
     const settingsPath = getSettingsPath();
-    const content = generationSettings.getStore() ? JSON.stringify(generationSettings.getStore()) : await fs.readFile(settingsPath, 'utf-8');
+    const content = generationSettings.getStore()
+      ? JSON.stringify(generationSettings.getStore())
+      : await fs.readFile(settingsPath, 'utf-8');
     const parsed = JSON.parse(content) as { imageModel?: string; imageResolution?: string };
     if (isImageModel(parsed.imageModel)) {
       imageModel = parsed.imageModel;
@@ -82,7 +85,6 @@ async function readImageGenerationSettings(): Promise<{
   };
 }
 const withRetry = retryTransient;
-
 
 // 画像プロンプトの型
 interface ImagePrompt {
@@ -374,7 +376,9 @@ async function resolveStyleReferenceImages(
     : [];
   if (ids.length === 0) return [];
 
-  const { images: generatedImages, article } = await new ProjectRepository(getProjectsPath()).readDirectory(projectPath);
+  const { images: generatedImages, article } = await new ProjectRepository(
+    getProjectsPath()
+  ).readDirectory(projectPath);
 
   const byId = new Map<string, ImageAsset>();
   for (const image of generatedImages) byId.set(image.id, image);
@@ -750,6 +754,7 @@ async function generateImageAsset(params: {
 registerOperation(
   'image:generate',
   async (_, prompt: ImagePrompt, projectId: string): Promise<ImageAsset> => {
+    prompt = imageRequestSchema.parse(prompt);
     const { imageModel, imageResolution } = await readImageGenerationSettings();
     const provider = getImageModelProvider(imageModel);
     const openaiApiKey = provider === 'openai' ? await readApiKey('openai') : null;
@@ -783,7 +788,9 @@ registerOperation(
       imageModel,
       imageResolution,
       googleGenAI: googleApiKey ? new GoogleGenAI({ apiKey: googleApiKey }) : undefined,
-      openai: openaiApiKey ? new OpenAI({ apiKey: openaiApiKey, fetch: limitedOpenAIFetch }) : undefined,
+      openai: openaiApiKey
+        ? new OpenAI({ apiKey: openaiApiKey, fetch: limitedOpenAIFetch })
+        : undefined,
       styleReferenceImages,
     });
   }
@@ -793,6 +800,7 @@ registerOperation(
 registerOperation(
   'image:generateBatch',
   async (_, prompts: ImagePrompt[], projectId: string): Promise<ImageBatchGenerationResult> => {
+    prompts = imageRequestSchema.array().max(100).parse(prompts);
     if (runningImageBatchProjects.has(projectId)) {
       throw new Error('このプロジェクトの画像一括生成は既に実行中です。完了を待ってください。');
     }
@@ -821,7 +829,9 @@ registerOperation(
     }
 
     const projectPath = await getProjectPath(projectId);
-    const openai = openaiApiKey ? new OpenAI({ apiKey: openaiApiKey, fetch: limitedOpenAIFetch }) : undefined;
+    const openai = openaiApiKey
+      ? new OpenAI({ apiKey: openaiApiKey, fetch: limitedOpenAIFetch })
+      : undefined;
     const genAI = googleApiKey ? new GoogleGenAI({ apiKey: googleApiKey }) : undefined;
     const runState: ImageBatchRunState = { cancelRequested: false };
 
@@ -977,7 +987,8 @@ registerOperation(
 // 画像削除ハンドラ
 registerOperation('image:delete', async (_, filePath: string): Promise<{ success: boolean }> => {
   filePath = await fileAccess().media(filePath, true);
-  if (!/\.(png|jpe?g|gif|webp|avif)$/i.test(filePath)) throw new Error('画像ファイルを指定してください。');
+  if (!/\.(png|jpe?g|gif|webp|avif)$/i.test(filePath))
+    throw new Error('画像ファイルを指定してください。');
   try {
     await fs.unlink(filePath);
     return { success: true };
@@ -1040,17 +1051,38 @@ registerOperation(
 );
 
 // Browser File objects no longer expose an absolute path in current Electron.
-registerOperation('image:importData', async (_, bytes: ArrayBuffer, projectId: string): Promise<ImageAsset> => {
-  if (!(bytes instanceof ArrayBuffer) || bytes.byteLength === 0 || bytes.byteLength > 50 * 1024 * 1024) throw new Error('画像は50MB以内で指定してください。');
-  const projectPath = await getProjectPath(projectId);
-  const decoded = nativeImage.createFromBuffer(Buffer.from(bytes));
-  if (decoded.isEmpty()) throw new Error('対応していない画像形式です。PNGまたはJPEG画像を選択してください。');
-  const dimensions = decoded.getSize();
-  if (dimensions.width * dimensions.height > 40_000_000) throw new Error('画像の画素数が大きすぎます。');
-  const id = randomUUID();
-  const data = decoded.toPNG();
-  const filePath = path.join(projectPath, 'images', 'imported', `${id}.png`);
-  await fs.mkdir(path.dirname(filePath), { recursive: true });
-  await fs.writeFile(filePath, data);
-  return { id, filePath, sourceType: 'imported', metadata: { ...dimensions, mimeType: 'image/png', fileSize: data.byteLength, createdAt: new Date().toISOString(), tags: [] } };
-});
+registerOperation(
+  'image:importData',
+  async (_, bytes: ArrayBuffer, projectId: string): Promise<ImageAsset> => {
+    if (
+      !(bytes instanceof ArrayBuffer) ||
+      bytes.byteLength === 0 ||
+      bytes.byteLength > 50 * 1024 * 1024
+    )
+      throw new Error('画像は50MB以内で指定してください。');
+    const projectPath = await getProjectPath(projectId);
+    const decoded = nativeImage.createFromBuffer(Buffer.from(bytes));
+    if (decoded.isEmpty())
+      throw new Error('対応していない画像形式です。PNGまたはJPEG画像を選択してください。');
+    const dimensions = decoded.getSize();
+    if (dimensions.width * dimensions.height > 40_000_000)
+      throw new Error('画像の画素数が大きすぎます。');
+    const id = randomUUID();
+    const data = decoded.toPNG();
+    const filePath = path.join(projectPath, 'images', 'imported', `${id}.png`);
+    await fs.mkdir(path.dirname(filePath), { recursive: true });
+    await fs.writeFile(filePath, data);
+    return {
+      id,
+      filePath,
+      sourceType: 'imported',
+      metadata: {
+        ...dimensions,
+        mimeType: 'image/png',
+        fileSize: data.byteLength,
+        createdAt: new Date().toISOString(),
+        tags: [],
+      },
+    };
+  }
+);

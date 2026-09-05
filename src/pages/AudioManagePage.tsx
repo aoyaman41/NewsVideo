@@ -1,3 +1,4 @@
+import { useScrollMemory } from '../hooks/useScrollMemory';
 import { useSceneSelection, rememberedScene } from '../stores/sceneSelection';
 import { partFreshness } from '../../shared/project/integrity';
 import { projectClient, useProjectState } from '../stores/projectStore';
@@ -27,10 +28,7 @@ import {
   TTS_NARRATION_STYLE_DESCRIPTIONS,
   TTS_NARRATION_STYLE_LABELS,
 } from '../../shared/project/ttsNarrationStyles';
-import {
-  parseMarkIndex,
-  splitScriptIntoSegments,
-} from '../../shared/utils/ttsSegmentation';
+import { parseMarkIndex, splitScriptIntoSegments } from '../../shared/utils/ttsSegmentation';
 
 type TTSEngine = 'google_tts' | 'gemini_tts' | 'macos_tts';
 
@@ -77,6 +75,7 @@ export function AudioManagePage() {
   const [project, setProject] = useProjectState(projectId);
   const [settings, setSettings] = useState<Settings>(defaultSettings);
   const [selectedPartId, setSelectedPartId] = useSceneSelection(projectId);
+  const scrollRef = useScrollMemory(`${projectId}:AudioManagePage`);
   const projectRef = useRef<Project | null>(null);
 
   const [isLoading, setIsLoading] = useState(true);
@@ -128,11 +127,14 @@ export function AudioManagePage() {
         });
 
         if (loadedProject.parts.length > 0) {
-          setSelectedPartId(rememberedScene(projectId, loadedProject.parts[0].id));
+          setSelectedPartId(rememberedScene(projectId, loadedProject.parts));
         }
       } catch (err) {
         console.error('Failed to load project/settings:', err);
-        reportError(err instanceof Error ? err.message : '読み込みに失敗しました', '読み込みに失敗しました');
+        reportError(
+          err instanceof Error ? err.message : '読み込みに失敗しました',
+          '読み込みに失敗しました'
+        );
       } finally {
         setIsLoading(false);
       }
@@ -170,11 +172,14 @@ export function AudioManagePage() {
     };
   }, [project?.presentationProfile, settings]);
 
-  const saveProject = useCallback(async (updated: Project) => {
-    await projectClient.save(updated);
-    projectRef.current = updated;
-    setProject(updated);
-  }, [setProject]);
+  const saveProject = useCallback(
+    async (updated: Project) => {
+      await projectClient.save(updated);
+      projectRef.current = updated;
+      setProject(updated);
+    },
+    [setProject]
+  );
 
   const applyAudioToPart = useCallback(
     async (partId: string, audio: AudioAsset, usageRecord?: UsageRecord | null) => {
@@ -263,7 +268,9 @@ export function AudioManagePage() {
     if (project.parts.length === 0) return;
 
     const targets = generateOnlyMissing
-      ? project.parts.filter((p) => partFreshness(project, p).audio !== 'current' && p.scriptText.trim())
+      ? project.parts.filter(
+          (p) => partFreshness(project, p).audio !== 'current' && p.scriptText.trim()
+        )
       : project.parts.filter((p) => p.scriptText.trim());
 
     if (targets.length === 0) {
@@ -288,12 +295,12 @@ export function AudioManagePage() {
 
           try {
             const result = await window.electronAPI.tts.generate(
-              part.scriptText,
+              part.narrationText || part.scriptText,
               ttsOptions,
               projectId
             );
             const usageRecord = createGeminiTtsUsageRecord('tts_generate', result.usage);
-            // 保存は競合しやすいので直列化（ただし生成自体は無制限に並列）
+            // 保存は競合しやすいので直列化（API実行の同時数はMainで制限）
             saveChain = saveChain.then(() => applyAudioToPart(part.id, result.audio, usageRecord));
           } catch (err) {
             const message = err instanceof Error ? err.message : String(err);
@@ -432,7 +439,7 @@ export function AudioManagePage() {
   if (isLoading) {
     return (
       <div className="flex flex-1 items-center justify-center">
-        <p className="text-slate-500">読み込み中...</p>
+        <p className="text-slate-600">読み込み中...</p>
       </div>
     );
   }
@@ -504,16 +511,19 @@ export function AudioManagePage() {
                 label={`進捗 ${batchProgress.current}/${batchProgress.total}`}
               />
             ) : (
-              <p className="text-xs text-slate-500">生成待機中</p>
+              <p className="text-xs text-slate-600">生成待機中</p>
             )}
-            <p className="text-xs text-slate-500">
-              音声ページでは読み上げ生成と確認に集中します。全体進捗は上部の Workflow を見れば十分です。
+            <p className="text-xs text-slate-600">
+              原稿を直したシーンも「未生成のみ」の対象になります。
             </p>
           </div>
         </Card>
       </div>
 
-      <div className="grid min-h-0 flex-1 grid-cols-[280px_minmax(0,1fr)_360px] gap-4 overflow-hidden p-4">
+      <div
+        ref={scrollRef}
+        className="grid min-h-0 flex-1 grid-cols-1 xl:grid-cols-[220px_minmax(0,1fr)_320px] auto-rows-max xl:auto-rows-auto gap-4 overflow-auto p-4"
+      >
         <Card
           title="パート一覧"
           subtitle={`未生成 ${missingAudioCount}`}
@@ -531,14 +541,18 @@ export function AudioManagePage() {
                   }`}
                 >
                   <div className="flex items-center gap-2">
-                    <span className="text-xs text-slate-400">{index + 1}</span>
+                    <span className="text-xs text-slate-600">{index + 1}</span>
                     <span className="truncate text-sm font-semibold text-slate-900">
                       {part.title}
                     </span>
                   </div>
-                  <div className="mt-1 flex items-center gap-1 text-[11px]">
+                  <div className="mt-1 flex items-center gap-1 text-xs">
                     <Badge tone={part.audio ? 'success' : 'warning'}>
-                      {partFreshness(project, part).audio === 'current' ? '最新' : part.audio ? '更新が必要' : '未生成'}
+                      {partFreshness(project, part).audio === 'current'
+                        ? '最新'
+                        : part.audio
+                          ? '更新が必要'
+                          : '未生成'}
                     </Badge>
                     {part.audio && (
                       <Badge tone="neutral">{formatTtsEngineLabel(part.audio.ttsEngine)}</Badge>
@@ -551,67 +565,82 @@ export function AudioManagePage() {
         </Card>
 
         <div className="space-y-4 overflow-auto">
-          <Card
-            title="既定の音声設定"
-            subtitle="変更は設定画面で行います"
-            actions={
-              <Button
-                variant="secondary"
-                size="sm"
-                onClick={() =>
-                  navigate('/settings', {
-                    state: { returnTo: projectId ? `/projects/${projectId}/audio` : '/projects' },
-                  })
-                }
-              >
-                設定を開く
-              </Button>
-            }
-          >
-            <div className="grid grid-cols-1 gap-3">
-              <div className="rounded-[10px] border border-[var(--nv-color-border)] bg-slate-50 p-3">
-                <div className="flex flex-wrap items-center gap-2">
-                  <Badge tone="info">Gemini TTS</Badge>
-                  <span className="text-sm font-semibold text-slate-900">
-                    {getGeminiTtsModelLabel(settings.ttsModel)}
-                  </span>
-                </div>
-                <div className="mt-2 text-xs text-slate-500">モデルID: {settings.ttsModel}</div>
-                <p className="mt-2 text-xs text-slate-500">
-                  現在のアプリではこのエンジンを使用します。話速とピッチの UI 調整は未対応です。
-                </p>
-              </div>
-              <div className="rounded-[10px] border border-[var(--nv-color-border)] bg-slate-50 p-3 text-xs text-slate-600">
-                <div className="text-xs font-semibold text-slate-700">既定ボイス</div>
-                <div className="mt-2 text-sm font-semibold text-slate-900">{settings.ttsVoice}</div>
-                <div className="mt-2">既定話速: {settings.ttsSpeakingRate.toFixed(1)}x</div>
-                <div className="mt-1 text-slate-500">
-                  このページでは既定値を参照して音声生成を実行します。
-                </div>
-              </div>
-              {project && (
-                <div className="rounded-[10px] border border-[var(--nv-color-border)] bg-slate-50 p-3 text-xs text-slate-600">
-                  <div className="text-xs font-semibold text-slate-700">話し方</div>
-                  <div className="mt-2 flex flex-wrap items-center gap-2">
-                    <Badge tone="neutral">
-                      {TTS_NARRATION_STYLE_LABELS[project.presentationProfile.ttsNarrationStylePreset]}
-                    </Badge>
+          <details className="rounded border bg-white p-3 text-sm">
+            <summary className="cursor-pointer">
+              今回使う声: {settings.ttsVoice} · 設定を確認
+            </summary>
+            <Card
+              title="既定の音声設定"
+              subtitle="変更は設定画面で行います"
+              actions={
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={() =>
+                    navigate('/settings', {
+                      state: { returnTo: projectId ? `/projects/${projectId}/audio` : '/projects' },
+                    })
+                  }
+                >
+                  設定を開く
+                </Button>
+              }
+            >
+              <div className="grid grid-cols-1 gap-3">
+                <div className="rounded-[10px] border border-[var(--nv-color-border)] bg-slate-50 p-3">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Badge tone="info">Gemini TTS</Badge>
                     <span className="text-sm font-semibold text-slate-900">
-                      {TTS_NARRATION_STYLE_DESCRIPTIONS[project.presentationProfile.ttsNarrationStylePreset]}
+                      {getGeminiTtsModelLabel(settings.ttsModel)}
                     </span>
                   </div>
-                  {project.presentationProfile.ttsNarrationStyleNote && (
-                    <div className="mt-2 text-slate-700">
-                      補足: {project.presentationProfile.ttsNarrationStyleNote}
-                    </div>
-                  )}
-                  <div className="mt-2 text-slate-500">
-                    話し方はプロジェクト単位の設定です。engine と voice は設定画面、スタイルは記事画面の生成設定で切り替えます。
+                  <div className="mt-2 text-xs text-slate-600">モデルID: {settings.ttsModel}</div>
+                  <p className="mt-2 text-xs text-slate-600">
+                    現在のアプリではこのエンジンを使用します。話速とピッチの UI 調整は未対応です。
+                  </p>
+                </div>
+                <div className="rounded-[10px] border border-[var(--nv-color-border)] bg-slate-50 p-3 text-xs text-slate-600">
+                  <div className="text-xs font-semibold text-slate-700">既定ボイス</div>
+                  <div className="mt-2 text-sm font-semibold text-slate-900">
+                    {settings.ttsVoice}
+                  </div>
+                  <div className="mt-2">既定話速: {settings.ttsSpeakingRate.toFixed(1)}x</div>
+                  <div className="mt-1 text-slate-600">
+                    このページでは既定値を参照して音声生成を実行します。
                   </div>
                 </div>
-              )}
-            </div>
-          </Card>
+                {project && (
+                  <div className="rounded-[10px] border border-[var(--nv-color-border)] bg-slate-50 p-3 text-xs text-slate-600">
+                    <div className="text-xs font-semibold text-slate-700">話し方</div>
+                    <div className="mt-2 flex flex-wrap items-center gap-2">
+                      <Badge tone="neutral">
+                        {
+                          TTS_NARRATION_STYLE_LABELS[
+                            project.presentationProfile.ttsNarrationStylePreset
+                          ]
+                        }
+                      </Badge>
+                      <span className="text-sm font-semibold text-slate-900">
+                        {
+                          TTS_NARRATION_STYLE_DESCRIPTIONS[
+                            project.presentationProfile.ttsNarrationStylePreset
+                          ]
+                        }
+                      </span>
+                    </div>
+                    {project.presentationProfile.ttsNarrationStyleNote && (
+                      <div className="mt-2 text-slate-700">
+                        補足: {project.presentationProfile.ttsNarrationStyleNote}
+                      </div>
+                    )}
+                    <div className="mt-2 text-slate-600">
+                      声は設定画面、話し方は記事画面の設定で変更できます。
+                    </div>
+                  </div>
+                )}
+              </div>
+            </Card>
+          </details>
 
           {selectedPart ? (
             <Card
@@ -639,7 +668,7 @@ export function AudioManagePage() {
                 読み上げ原稿
               </label>
               <div className="max-h-64 overflow-auto rounded-[8px] border border-[var(--nv-color-border)] bg-slate-50 p-3 text-sm text-slate-700 whitespace-pre-wrap">
-                {selectedPart.scriptText}
+                {selectedPart.narrationText || selectedPart.scriptText}
               </div>
             </Card>
           ) : (
@@ -710,7 +739,7 @@ export function AudioManagePage() {
 
               {showSyncPreview && syncSegments.length > 0 && (
                 <div className="space-y-2">
-                  <p className="text-xs text-slate-500">行クリックで該当位置へシーク</p>
+                  <p className="text-xs text-slate-600">行クリックで該当位置へシーク</p>
                   <div
                     ref={syncListRef}
                     className="max-h-56 overflow-auto rounded-[8px] border border-[var(--nv-color-border)] bg-slate-50"
@@ -727,7 +756,7 @@ export function AudioManagePage() {
                             active ? 'bg-blue-100 text-blue-900' : 'text-slate-700 hover:bg-white'
                           }`}
                         >
-                          <span className="mr-2 inline-block w-7 text-right text-xs text-slate-400">
+                          <span className="mr-2 inline-block w-7 text-right text-xs text-slate-600">
                             {idx + 1}
                           </span>
                           {seg}
@@ -742,7 +771,7 @@ export function AudioManagePage() {
                 <div>エンジン: {formatTtsEngineLabel(selectedPart.audio.ttsEngine)}</div>
                 <div>ボイス: {selectedPart.audio.voiceId}</div>
                 <div>推定長: {selectedPart.audio.durationSec}s</div>
-                <div className="break-all text-[11px] text-slate-500">
+                <div className="break-all text-xs text-slate-600">
                   {selectedPart.audio.filePath}
                 </div>
               </div>

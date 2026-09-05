@@ -8,9 +8,9 @@ import { promisify } from 'node:util';
 import { deflateSync } from 'node:zlib';
 import { ProjectRepository } from '../project/repository';
 import { createNewPart, createNewProject } from '../../shared/project/schema';
-import { deriveIntegrity } from '../../shared/project/integrity';
+import { deriveIntegrity, isVideoCurrent } from '../../shared/project/integrity';
 import { resolutionForAspect } from '../../shared/project/videoFormat';
-import { invokeOperation } from '../ipc/operations';
+import { invokeOperation, registerOperation } from '../ipc/operations';
 import { renderPartVideoNative, resolveNativeVideoRendererBinary } from './native';
 
 const state = vi.hoisted(() => ({ root: '' }));
@@ -23,6 +23,7 @@ vi.mock('electron', () => ({
 const execute = promisify(execFile);
 let inspector: string;
 let renderer: string;
+const productionRecords: Array<Record<string, unknown>> = [];
 
 function png(red: number, green: number, blue: number) {
   const crc = (buffer: Buffer) => {
@@ -95,12 +96,26 @@ describe.skipIf(process.platform !== 'darwin' || process.env.NEWSVIDEO_NATIVE_TE
       await import('../ipc/video');
     }, 120000);
     afterAll(async () => {
+      if (process.env.NEWSVIDEO_BENCHMARK_REPORT)
+        await fs.writeFile(
+          process.env.NEWSVIDEO_BENCHMARK_REPORT,
+          JSON.stringify(
+            {
+              capturedAt: new Date().toISOString(),
+              method: 'Automated native pipeline fixtures; not human production observations',
+              productions: productionRecords,
+            },
+            null,
+            2
+          )
+        );
       if (state.root) await fs.rm(state.root, { recursive: true, force: true });
     });
 
-    it.each(['16:9', '9:16', '1:1'] as const)(
+    it.each(['16:9', '9:16', '1:1', '16:9', '9:16'] as const)(
       'exports visible multiple scenes, normalized clips and closing card at %s',
       async (ratio) => {
+        const started = performance.now();
         const repository = new ProjectRepository(path.join(state.root, 'projects'));
         let project = createNewProject(`Native ${ratio}`, '');
         project.article = {
@@ -142,7 +157,25 @@ describe.skipIf(process.platform !== 'darwin' || process.env.NEWSVIDEO_NATIVE_TE
             settings: { speakingRate: 1, pitch: 0, languageCode: 'ja-JP' },
             generatedAt: new Date().toISOString(),
           };
-          if (index === 0) { part.graphic = { enabled: true, headline: '編集できる見出し', keyNumber: '42%', source: '固定素材で検証', bars: [{ label: '項目', value: 70 }] }; part.captionsEnabled = true; part.captions = [{ id: crypto.randomUUID(), start: 0, end: 1, text: '字幕を表示する検証', timing: 'manual' }]; }
+          if (index === 0) {
+            part.graphic = {
+              enabled: true,
+              headline: '編集できる見出し',
+              keyNumber: '42%',
+              source: '固定素材で検証',
+              bars: [{ label: '項目', value: 70 }],
+            };
+            part.captionsEnabled = true;
+            part.captions = [
+              {
+                id: crypto.randomUUID(),
+                start: 0,
+                end: 1,
+                text: '字幕を表示する検証',
+                timing: 'manual',
+              },
+            ];
+          }
           project.parts.push(part);
         }
         project.integrity = deriveIntegrity(null, project);
@@ -208,6 +241,24 @@ describe.skipIf(process.platform !== 'darwin' || process.env.NEWSVIDEO_NATIVE_TE
           20
         );
         expect(colors[4][1]).toBeGreaterThan(colors[4][0] * 3);
+        const persisted = await repository.load(project.id);
+        expect(isVideoCurrent(persisted)).toBe(true);
+        expect(persisted.metrics?.outputDurationSec).toBeCloseTo(result.duration, 2);
+        expect(persisted.metrics?.renderAttempts).toBe(1);
+        expect(persisted.metrics?.firstOutputAt).toBeTruthy();
+        productionRecords.push({
+          ratio,
+          elapsedSec: (performance.now() - started) / 1000,
+          durationSec: result.duration,
+          width,
+          height,
+          videoTracks: result.videoTracks,
+          audioTracks: result.audioTracks,
+          captionsVisible: true,
+          graphicVisible: true,
+          currentOutput: true,
+          apiRequests: 0,
+        });
         const preview = await invokeOperation<{ previewPath: string }>(
           'video:preview',
           project.parts[0].id
@@ -219,6 +270,44 @@ describe.skipIf(process.platform !== 'darwin' || process.env.NEWSVIDEO_NATIVE_TE
       },
       180000
     );
+
+    it('replaces a short audio region, inserts a measured pause and exports synchronized captions', async () => {
+      await import('../ipc/settings');
+      await import('../project/finishing');
+      const { getProjectRepository } = await import('../ipc/project');
+      const repo = getProjectRepository();
+      const project = await repo.readDirectory((await repo.directories())[0]);
+      const part = project.parts[0];
+      registerOperation('tts:generate', async () => ({
+        audio: { ...part.audio!, id: crypto.randomUUID() },
+        usage: null,
+      }));
+      const replaced = await invokeOperation<typeof project>('tts:replaceSegment', {
+        projectId: project.id,
+        partId: part.id,
+        start: 0.2,
+        end: 0.6,
+        text: '短い修正',
+      });
+      expect(replaced.parts[0].audio!.durationSec).toBeCloseTo(1.6, 2);
+      expect(replaced.audio.length).toBeGreaterThan(project.audio.length);
+      const paused = await invokeOperation<typeof project>('tts:insertPause', {
+        projectId: project.id,
+        partId: part.id,
+        at: 0.2,
+        seconds: 0.5,
+      });
+      expect(paused.parts[0].audio!.durationSec).toBeCloseTo(2.1, 2);
+      const { measurePcmWav } = await import('../../shared/project/audioQuality');
+      const measured = measurePcmWav(await fs.readFile(paused.parts[0].audio!.filePath));
+      expect(measured.durationSec).toBeCloseTo(2.1, 2);
+      expect(measured.silenceRatio).toBeGreaterThan(0.2);
+      const captions = await invokeOperation<string>('project:captions', {
+        id: project.id,
+        format: 'srt',
+      });
+      expect(await fs.readFile(captions, 'utf8')).toContain('短い修正');
+    }, 30000);
 
     it('resolves the native helper from a bundled module when cwd is outside the repository', async () => {
       const { build } = await import('esbuild');

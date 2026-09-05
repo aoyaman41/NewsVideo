@@ -13,6 +13,12 @@ it('splits without losing text or deleting retained assets and merges in order',
   expect(() => splitScene(project, project.parts[0].id, 0)).toThrow();
 });
 it('flags unmatched quantities as review candidates', () => {
-  expect(unmatchedTerms('OpenAIは2026年に20億円と発表', 'OpenAIは2026年に10億円')).toContain('20億');
+  expect(unmatchedTerms('OpenAIは2026年に20億円と発表', 'OpenAIは2026年に10億円')).toContain(
+    '20億円'
+  );
   expect(unmatchedTerms('OpenAIは2026年', 'OpenAIは2026年')).toEqual([]);
+});
+
+it('distinguishes currency and compound units', () => {
+  expect(unmatchedTerms('20億円、5万人', '20億ドル、5万件')).toEqual(['20億円', '5万人']);
 });

@@ -3,6 +3,13 @@ import { DEFAULT_SETTINGS } from '../../shared/settings/appSettings';
 
 type IpcHandler = (event: unknown, ...args: unknown[]) => Promise<unknown>;
 
+const repositoryMock = vi.hoisted(() => ({
+  directories: vi.fn(async () => [] as string[]),
+  readDirectory: vi.fn(),
+  update: vi.fn(),
+}));
+vi.mock('./project', () => ({ getProjectRepository: () => repositoryMock }));
+
 const handlers = new Map<string, IpcHandler>();
 const mockHandle = vi.fn((channel: string, handler: IpcHandler) => {
   handlers.set(channel, handler);
@@ -13,11 +20,13 @@ const writeFileMock = vi.fn();
 const accessMock = vi.fn();
 
 vi.mock('electron', () => ({
+  BrowserWindow: { getAllWindows: () => [] },
   ipcMain: {
     handle: mockHandle,
   },
   app: {
-    isPackaged: false, getAppPath: () => '/app',
+    isPackaged: false,
+    getAppPath: () => '/app',
     getPath: vi.fn(() => '/tmp/newsvideo-test'),
   },
   safeStorage: {
@@ -34,6 +43,9 @@ vi.mock('node:fs/promises', () => ({
 }));
 
 async function loadSettingsModule(): Promise<void> {
+  repositoryMock.directories.mockReset().mockResolvedValue([]);
+  repositoryMock.readDirectory.mockReset();
+  repositoryMock.update.mockReset();
   handlers.clear();
   mockHandle.mockClear();
   readFileMock.mockReset();
@@ -81,7 +93,9 @@ describe('settings IPC handlers', () => {
     );
 
     const handler = getHandler('settings:get');
-    const result = (await handler({ senderFrame: { url: 'http://localhost:5173', parent: null } })) as typeof DEFAULT_SETTINGS & { cost?: unknown };
+    const result = (await handler({
+      senderFrame: { url: 'http://localhost:5173', parent: null },
+    })) as typeof DEFAULT_SETTINGS & { cost?: unknown };
 
     expect(result.ttsEngine).toBe('gemini_tts');
     expect(result.ttsVoice).toBe(DEFAULT_SETTINGS.ttsVoice);
@@ -99,7 +113,9 @@ describe('settings IPC handlers', () => {
     readFileMock.mockResolvedValueOnce(JSON.stringify(DEFAULT_SETTINGS));
     const handler = getHandler('settings:set');
 
-    await expect(handler({ senderFrame: { url: 'http://localhost:5173', parent: null } }, { videoFps: 'fast' })).rejects.toThrow();
+    await expect(
+      handler({ senderFrame: { url: 'http://localhost:5173', parent: null } }, { videoFps: 'fast' })
+    ).rejects.toThrow();
     expect(writeFileMock).not.toHaveBeenCalled();
   });
 
@@ -135,5 +151,28 @@ describe('settings IPC handlers', () => {
     expect(saved.ttsModel).toBe('gemini-2.5-flash-preview-tts');
     expect(saved.geminiThinkingLevel).toBe('low');
     expect(saved.unknown).toBeUndefined();
+  });
+});
+
+it('propagates only changed generation defaults and leaves running job snapshots intact', async () => {
+  await loadSettingsModule();
+  readFileMock.mockResolvedValueOnce(JSON.stringify(DEFAULT_SETTINGS));
+  repositoryMock.directories.mockResolvedValue(['/idle', '/running']);
+  repositoryMock.readDirectory
+    .mockResolvedValueOnce({ id: 'idle' })
+    .mockResolvedValueOnce({ id: 'running', job: { status: 'running' } });
+  const project = { id: 'idle', revision: 1, generationConfig: { ttsVoice: 'Existing voice' } };
+  repositoryMock.update.mockImplementation(async (_id, mutate) => {
+    mutate(project);
+    return project;
+  });
+  await getHandler('settings:set')(
+    { senderFrame: { url: 'http://localhost:5173', parent: null } },
+    { scriptTextModel: 'gpt-6-astra' }
+  );
+  expect(repositoryMock.update).toHaveBeenCalledTimes(1);
+  expect(project.generationConfig).toMatchObject({
+    scriptTextModel: 'gpt-6-astra',
+    ttsVoice: 'Existing voice',
   });
 });

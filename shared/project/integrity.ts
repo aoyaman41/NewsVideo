@@ -1,3 +1,5 @@
+import { applyReadings, readingEntrySchema } from './narration';
+import { z } from 'zod';
 import type { Project, Part } from './schema';
 
 export type Freshness = 'missing' | 'current' | 'stale';
@@ -34,6 +36,7 @@ export function sourceInputs(project: Project, part: Part) {
   const script = inputFingerprint({
     model: project.generationConfig?.scriptTextModel,
     reasoning: project.generationConfig?.openaiReasoningEffort,
+    thinking: project.generationConfig?.geminiThinkingLevel,
     article: {
       title: project.article.title,
       source: project.article.source,
@@ -56,10 +59,22 @@ export function sourceInputs(project: Project, part: Part) {
   return {
     script,
     prompt: promptInput,
-    image: inputFingerprint({ promptInput, prompt, model: project.generationConfig?.imageModel, resolution: project.generationConfig?.imageResolution }),
+    image: inputFingerprint({
+      promptInput,
+      prompt,
+      model: project.generationConfig?.imageModel,
+      resolution: project.generationConfig?.imageResolution,
+    }),
     audio: inputFingerprint({
-      text: part.scriptText, narrationText: part.narrationText, dictionary: project.generationConfig?.readingDictionary,
-      engine: project.generationConfig?.ttsEngine, model: project.generationConfig?.ttsModel, voice: project.generationConfig?.ttsVoice, rate: project.generationConfig?.ttsSpeakingRate, pitch: project.generationConfig?.ttsPitch,
+      text: applyReadings(
+        part.narrationText || part.scriptText,
+        z.array(readingEntrySchema).catch([]).parse(project.generationConfig?.readingDictionary)
+      ),
+      engine: project.generationConfig?.ttsEngine,
+      model: project.generationConfig?.ttsModel,
+      voice: project.generationConfig?.ttsVoice,
+      rate: project.generationConfig?.ttsSpeakingRate,
+      pitch: project.generationConfig?.ttsPitch,
       style: profile.ttsNarrationStylePreset,
       note: profile.ttsNarrationStyleNote,
     }),
@@ -74,7 +89,10 @@ export function videoInput(project: Project) {
       index: part.index,
       title: part.title,
       scriptText: part.scriptText,
-      panelImages: part.panelImages, captions: part.captions, captionsEnabled: part.captionsEnabled, graphic: part.graphic,
+      panelImages: part.panelImages,
+      captions: part.captions,
+      captionsEnabled: part.captionsEnabled,
+      graphic: part.graphic,
       audio: part.audio,
     })),
     profile: project.presentationProfile,

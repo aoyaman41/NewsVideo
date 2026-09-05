@@ -1,5 +1,13 @@
 import type { RenderOptions } from '../../shared/project/videoFormat';
-import type { Project, ProjectMeta, Article, Part, ImageAsset, ImagePrompt, AudioAsset } from '../../shared/project/schema';
+import type {
+  Project,
+  ProjectMeta,
+  Article,
+  Part,
+  ImageAsset,
+  ImagePrompt,
+  AudioAsset,
+} from '../../shared/project/schema';
 import type {
   type GeminiThinkingLevel,
   type GeminiTtsModel,
@@ -43,20 +51,44 @@ type TokenUsage = {
 interface ElectronAPI {
   diagnostics: { export: () => Promise<string | null> };
   project: {
-    captions: (request: { id: string; format: "srt" | "vtt" }) => Promise<string>,
-    manage: (request: { action: "clone" | "archive" | "export" | "import" | "trash" | "restore"; id?: string; template?: boolean; archived?: boolean; key?: string }) => Promise<unknown>,
+    captions: (request: { id: string; format: 'srt' | 'vtt' }) => Promise<string>;
+    manage: (request: {
+      action: 'clone' | 'archive' | 'export' | 'import' | 'trash' | 'restore';
+      id?: string;
+      template?: boolean;
+      archived?: boolean;
+      key?: string;
+    }) => Promise<unknown>;
     onFlushRequested: (callback: () => void) => () => void;
     finishFlush: (success: boolean) => void;
     onChanged: (callback: (event: { id: string; revision?: number }) => void) => () => void;
     list: () => Promise<ProjectListItem[]>;
     load: (projectId: string) => Promise<Project>;
-    save: (project: Project) => Promise<{ success: boolean; savedAt: string; revision: number; project: Project }>;
+    save: (
+      project: Project
+    ) => Promise<{ success: boolean; savedAt: string; revision: number; project: Project }>;
     delete: (projectId: string) => Promise<{ success: boolean }>;
-    create: (name: string | { name: string; purpose?: "short" | "explain" | "news"; sample?: boolean }) => Promise<ProjectMeta>;
+    create: (
+      name: string | { name: string; purpose?: 'short' | 'explain' | 'news'; sample?: boolean }
+    ) => Promise<ProjectMeta>;
   };
 
   jobs: {
-    start: (id: string, options: { mode: 'automatic' | 'review'; targetPartCount: number; budgetUsd?: number; restart?: boolean }) => Promise<import('../../shared/project/jobs').GenerationJob>;
+    recoverAsset: (request: {
+      projectId: string;
+      index: number;
+      jobId?: string;
+      partId: string;
+    }) => Promise<{ success: boolean }>;
+    start: (
+      id: string,
+      options: {
+        mode: 'automatic' | 'review';
+        targetPartCount: number;
+        budgetUsd?: number;
+        restart?: boolean;
+      }
+    ) => Promise<import('../../shared/project/jobs').GenerationJob>;
     cancel: (id: string) => Promise<{ success: boolean }>;
   };
   settings: {
@@ -105,8 +137,19 @@ interface ElectronAPI {
   };
 
   tts: {
-    insertPause: (request: { projectId: string; partId: string; at: number; seconds: number }) => Promise<Project>,
-    replaceSegment: (request: { projectId: string; partId: string; start: number; end: number; text: string }) => Promise<Project>,
+    insertPause: (request: {
+      projectId: string;
+      partId: string;
+      at: number;
+      seconds: number;
+    }) => Promise<Project>;
+    replaceSegment: (request: {
+      projectId: string;
+      partId: string;
+      start: number;
+      end: number;
+      text: string;
+    }) => Promise<Project>;
     generate: (
       text: string,
       options: TTSOptions,
@@ -312,8 +355,6 @@ interface CostRates {
     imageOutputPerImageUsd?: number;
   };
 }
-
-
 
 interface FileDialogOptions {
   title?: string;

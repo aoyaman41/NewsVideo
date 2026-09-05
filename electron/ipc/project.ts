@@ -41,8 +41,11 @@ registerOperation('project:list', async () => {
           metrics: productionMetrics(project),
           archived: project.archived,
           template: project.template,
-          durationSec: project.parts.reduce((sum, part) => sum + (part.audio?.durationSec ?? part.durationEstimateSec), 0),
-          thumbnailPath: [...project.images, ...project.article.importedImages].find((image) => image.id === (project.thumbnail?.imageId ?? project.parts[0]?.panelImages[0]?.imageId))?.filePath,
+          durationSec: project.metrics?.outputDurationSec,
+          thumbnailPath: [...project.images, ...project.article.importedImages].find(
+            (image) =>
+              image.id === (project.thumbnail?.imageId ?? project.parts[0]?.panelImages[0]?.imageId)
+          )?.filePath,
           lastVideoPath: project.autoGenerationStatus?.lastVideoPath,
           thumbnailImageId: project.thumbnail?.imageId,
           summary: getProjectProgress(project),
@@ -63,8 +66,22 @@ registerOperation('project:list', async () => {
 });
 
 registerOperation('project:create', async (_, input: unknown) => {
-  const request = z.union([z.string(), z.object({ name: z.string(), purpose: z.enum(['short', 'explain', 'news']).optional(), sample: z.boolean().optional() })]).parse(input);
-  const name = z.string().trim().min(1).max(200).parse(typeof request === 'string' ? request : request.name || '新しい動画');
+  const request = z
+    .union([
+      z.string(),
+      z.object({
+        name: z.string(),
+        purpose: z.enum(['short', 'explain', 'news']).optional(),
+        sample: z.boolean().optional(),
+      }),
+    ])
+    .parse(input);
+  const name = z
+    .string()
+    .trim()
+    .min(1)
+    .max(200)
+    .parse(typeof request === 'string' ? request : request.name || '新しい動画');
   const project = createNewProject(name, '');
   try {
     const settings = normalizeSettings(
@@ -74,9 +91,14 @@ registerOperation('project:create', async (_, input: unknown) => {
   } catch {
     /* Defaults work before settings exist. */
   }
-  if (typeof request !== 'string' && request.purpose) { const purpose = PURPOSES.find((item) => item.id === request.purpose)!; project.presentationProfile = structuredClone(purpose.profile); project.generationConfig = { targetPartCount: purpose.parts }; }
+  if (typeof request !== 'string' && request.purpose) {
+    const purpose = PURPOSES.find((item) => item.id === request.purpose)!;
+    project.presentationProfile = structuredClone(purpose.profile);
+    project.generationConfig = { targetPartCount: purpose.parts };
+  }
   const created = await getProjectRepository().create(project);
-  if (typeof request !== 'string' && request.sample) return populateSample(getProjectRepository(), created);
+  if (typeof request !== 'string' && request.sample)
+    return populateSample(getProjectRepository(), created);
   changed(created.id, created.revision);
   return created;
 });
@@ -100,22 +122,42 @@ registerOperation('project:delete', async (_, input: unknown) => {
 });
 
 registerOperation('project:manage', async (_, request: unknown) => {
-  const input = z.discriminatedUnion('action', [
-    z.object({ action: z.literal('clone'), id: z.string().uuid(), template: z.boolean().optional() }),
-    z.object({ action: z.literal('archive'), id: z.string().uuid(), archived: z.boolean() }),
-    z.object({ action: z.literal('export'), id: z.string().uuid() }),
-    z.object({ action: z.literal('import') }),
-    z.object({ action: z.literal('trash') }),
-    z.object({ action: z.literal('restore'), key: z.string() }),
-  ]).parse(request);
-  const lifecycle = new ProjectLifecycle(getProjectRepository(), (file) => fileAccess().media(file));
+  const input = z
+    .discriminatedUnion('action', [
+      z.object({
+        action: z.literal('clone'),
+        id: z.string().uuid(),
+        template: z.boolean().optional(),
+      }),
+      z.object({ action: z.literal('archive'), id: z.string().uuid(), archived: z.boolean() }),
+      z.object({ action: z.literal('export'), id: z.string().uuid() }),
+      z.object({ action: z.literal('import') }),
+      z.object({ action: z.literal('trash') }),
+      z.object({ action: z.literal('restore'), key: z.string() }),
+    ])
+    .parse(request);
+  const lifecycle = new ProjectLifecycle(getProjectRepository(), (file) =>
+    fileAccess().media(file)
+  );
   if (input.action === 'trash') return lifecycle.trash();
-  if (input.action === 'archive') { const project = await getProjectRepository().update(input.id, (data) => { data.archived = input.archived; }); changed(project.id, project.revision); return project; }
+  if (input.action === 'archive') {
+    const project = await getProjectRepository().update(input.id, (data) => {
+      data.archived = input.archived;
+    });
+    changed(project.id, project.revision);
+    return project;
+  }
   if (input.action === 'clone') return lifecycle.clone(input.id, input.template);
   if (input.action === 'restore') return lifecycle.restore(input.key);
-  const selection = await dialog.showOpenDialog({ title: input.action === 'export' ? 'バックアップの保存先' : '復元する .newsbackup フォルダー', properties: ['openDirectory'] });
+  const selection = await dialog.showOpenDialog({
+    title: input.action === 'export' ? 'バックアップの保存先' : '復元する .newsbackup フォルダー',
+    properties: ['openDirectory'],
+  });
   if (selection.canceled || !selection.filePaths[0]) return null;
   const selected = selection.filePaths[0];
-  if (input.action === 'export') { await fileAccess().grant(selected, true, true); return lifecycle.export(input.id, selected); }
+  if (input.action === 'export') {
+    await fileAccess().grant(selected, true, true);
+    return lifecycle.export(input.id, selected);
+  }
   return lifecycle.import(selected);
 });

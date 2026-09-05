@@ -62,4 +62,12 @@ export function classifyGenerationError(error: unknown) {
   };
 }
 
-export const JOB_STATUS_LABELS = { queued: '開始待ち', running: '生成中', paused: '確認待ち', cancelled: '停止済み', failed: '失敗', completed: '完了', interrupted: '再開待ち' } as const;
+export const JOB_STATUS_LABELS = {
+  queued: '開始待ち',
+  running: '生成中',
+  paused: '確認待ち',
+  cancelled: '停止済み',
+  failed: '失敗',
+  completed: '完了',
+  interrupted: '再開待ち',
+} as const;

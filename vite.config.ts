@@ -91,7 +91,19 @@ const buildPreloadPlugin = () => ({
 
 export default defineConfig({
   plugins: [
-    { name: 'renderer-csp', transformIndexHtml(html, context) { return html.replace('__NEWSVIDEO_CSP__', contentSecurityPolicy(context.server ? (context.server.resolvedUrls?.local[0] ?? 'http://localhost:5173') : undefined)); } },
+    {
+      name: 'renderer-csp',
+      transformIndexHtml(html, context) {
+        return html.replace(
+          '__NEWSVIDEO_CSP__',
+          contentSecurityPolicy(
+            context.server
+              ? (context.server.resolvedUrls?.local[0] ?? 'http://localhost:5173')
+              : undefined
+          )
+        );
+      },
+    },
     react(),
     buildPreloadPlugin(),
     electron([

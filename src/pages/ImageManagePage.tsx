@@ -1,3 +1,4 @@
+import { useScrollMemory } from '../hooks/useScrollMemory';
 import { useSceneSelection, rememberedScene } from '../stores/sceneSelection';
 import { projectClient, useProjectState } from '../stores/projectStore';
 import { useState, useEffect, useCallback, useMemo } from 'react';
@@ -45,6 +46,7 @@ export function ImageManagePage() {
 
   const [project, setProject] = useProjectState(projectId);
   const [selectedPartId, setSelectedPartId] = useSceneSelection(projectId);
+  const scrollRef = useScrollMemory(`${projectId}:ImageManagePage`);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [isGeneratingPrompts, setIsGeneratingPrompts] = useState(false);
@@ -122,7 +124,7 @@ export function ImageManagePage() {
 
         // 最初のパートを選択
         if (loadedProject.parts.length > 0) {
-          setSelectedPartId(rememberedScene(projectId, loadedProject.parts[0].id));
+          setSelectedPartId(rememberedScene(projectId, loadedProject.parts));
         }
       } catch (err) {
         console.error('Failed to load project:', err);
@@ -579,7 +581,7 @@ export function ImageManagePage() {
   if (isLoading) {
     return (
       <div className="flex flex-1 items-center justify-center">
-        <p className="text-slate-500">読み込み中...</p>
+        <p className="text-slate-600">読み込み中...</p>
       </div>
     );
   }
@@ -650,15 +652,12 @@ export function ImageManagePage() {
               {IMAGE_ASPECT_RATIO_LABELS[project.presentationProfile.aspectRatio]}
             </Badge>
           </div>
-          <p className="text-xs text-slate-500">
-            この画面ではプロンプト作成と画像割り当てだけを扱います。全体進捗は上部の Workflow
-            で確認できます。
-          </p>
-          <div className="mt-4 border-t border-[var(--nv-color-border)] pt-4">
+          <details className="text-sm">
+            <summary className="cursor-pointer">スタイル参照（色・余白・見出しを揃える）</summary>
             <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
               <div>
                 <h3 className="text-sm font-semibold text-slate-900">スタイル参照</h3>
-                <p className="text-xs text-slate-500">
+                <p className="text-xs text-slate-600">
                   最大3枚のスライドサンプルを画像生成時に渡し、色・余白・文字階層を揃えます。
                 </p>
               </div>
@@ -667,6 +666,7 @@ export function ImageManagePage() {
               </Button>
             </div>
             <textarea
+              aria-label="スタイル参照に合わせたい点"
               key={project.presentationProfile.styleReferenceNote}
               defaultValue={project.presentationProfile.styleReferenceNote}
               onBlur={(e) => handleUpdateStyleReferenceNote(e.target.value)}
@@ -682,15 +682,18 @@ export function ImageManagePage() {
                 emptyMessage="参照に使える画像がありません"
               />
             ) : (
-              <div className="rounded-[8px] border border-dashed border-slate-300 bg-slate-50 px-3 py-6 text-center text-xs text-slate-500">
+              <div className="rounded-[8px] border border-dashed border-slate-300 bg-slate-50 px-3 py-6 text-center text-xs text-slate-600">
                 参照に使える画像がありません。スライドサンプルを追加してください。
               </div>
             )}
-          </div>
+          </details>
         </Card>
       </div>
 
-      <div className="grid min-h-0 flex-1 grid-cols-[260px_minmax(0,1.15fr)_minmax(0,1.15fr)] gap-4 overflow-hidden p-4">
+      <div
+        ref={scrollRef}
+        className="grid min-h-0 flex-1 grid-cols-1 xl:grid-cols-[220px_minmax(0,1fr)_minmax(0,1fr)] auto-rows-max xl:auto-rows-auto gap-4 overflow-auto p-4"
+      >
         <Card
           title="パート一覧"
           subtitle={`${project.parts.length}パート`}
@@ -711,12 +714,12 @@ export function ImageManagePage() {
                     }`}
                   >
                     <div className="flex items-center gap-2">
-                      <span className="text-xs text-slate-400">{index + 1}</span>
+                      <span className="text-xs text-slate-600">{index + 1}</span>
                       <span className="truncate text-sm font-semibold text-slate-900">
                         {part.title}
                       </span>
                     </div>
-                    <div className="mt-1 flex items-center gap-1 text-[11px]">
+                    <div className="mt-1 flex items-center gap-1 text-xs">
                       <Badge tone={partPrompt ? 'success' : 'warning'}>
                         {partPrompt ? 'プロンプト済み' : '未プロンプト'}
                       </Badge>
@@ -733,7 +736,11 @@ export function ImageManagePage() {
 
         <Card
           title={selectedPart ? selectedPart.title : 'プロンプト'}
-          subtitle={selectedPart?.summary || 'パートを選択してください'}
+          subtitle={
+            selectedPart
+              ? selectedPart.summary || '選択シーンの画像プロンプト'
+              : 'シーンを選択してください'
+          }
           className="min-h-0 overflow-auto"
         >
           {selectedPart ? (

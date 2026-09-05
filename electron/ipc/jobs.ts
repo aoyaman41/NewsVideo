@@ -37,3 +37,43 @@ registerOperation('jobs:cancel', async (_, id: unknown) => {
   await engine.cancel(z.string().uuid().parse(id));
   return { success: true };
 });
+
+registerOperation('jobs:recoverAsset', async (_, input: unknown) => {
+  const request = z
+    .object({
+      projectId: z.string().uuid(),
+      index: z.number().int().nonnegative(),
+      jobId: z.string().uuid().optional(),
+      partId: z.string().uuid(),
+    })
+    .parse(input);
+  const { imageAssetSchema, audioAssetSchema } = await import('../../shared/project/schema');
+  const { fileAccess } = await import('../utils/fileAccess');
+  const repo = getProjectRepository();
+  const project = await repo.load(request.projectId);
+  const sourceJob = [project.job, ...(project.jobHistory ?? [])].find(
+    (job) => job && (!request.jobId || job.id === request.jobId)
+  );
+  const output = sourceJob?.outputs[request.index];
+  if (!output || !project.parts.some((part) => part.id === request.partId))
+    throw new Error('復元する素材とシーンを確認してください。');
+  const image = imageAssetSchema.safeParse(output.payload);
+  const audio = audioAssetSchema.safeParse((output.payload as { audio?: unknown })?.audio);
+  if (!image.success && !audio.success) throw new Error('この履歴は画像・音声素材ではありません。');
+  await fileAccess().media(image.success ? image.data.filePath : audio.data!.filePath);
+  const saved = await repo.update(project.id, (data) => {
+    const part = data.parts.find((item) => item.id === request.partId);
+    if (!part) throw new Error('シーンが変更されました。再度選択してください。');
+    if (image.success) {
+      if (!data.images.some((item) => item.id === image.data.id)) data.images.push(image.data);
+      part.panelImages = [{ imageId: image.data.id }];
+    }
+    if (audio.success) {
+      if (!data.audio.some((item) => item.id === audio.data.id)) data.audio.push(audio.data);
+      part.audio = audio.data;
+    }
+  });
+  for (const window of BrowserWindow.getAllWindows())
+    window.webContents.send('project:changed', { id: saved.id, revision: saved.revision });
+  return { success: true };
+});

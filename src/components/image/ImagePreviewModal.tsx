@@ -18,7 +18,10 @@ export function ImagePreviewModal({ image, open, onClose }: ImagePreviewModalPro
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
       onClick={onClose}
       role="dialog"
-      aria-modal="true" aria-label="画像プレビュー" ref={ref} tabIndex={-1}
+      aria-modal="true"
+      aria-label="画像プレビュー"
+      ref={ref}
+      tabIndex={-1}
     >
       <div
         className="bg-white rounded-lg shadow-xl max-w-5xl w-[92vw] max-h-[90vh] overflow-hidden"
@@ -26,7 +29,8 @@ export function ImagePreviewModal({ image, open, onClose }: ImagePreviewModalPro
       >
         <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200">
           <div className="text-sm text-gray-600">
-            {image.sourceType === 'generated' ? 'AI生成' : 'インポート'} / {image.metadata.width}×{image.metadata.height}
+            {image.sourceType === 'generated' ? 'AI生成' : 'インポート'} / {image.metadata.width}×
+            {image.metadata.height}
           </div>
           <button
             onClick={onClose}

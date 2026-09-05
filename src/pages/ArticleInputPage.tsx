@@ -1,3 +1,4 @@
+import { JobHistory } from '../components/article/JobHistory';
 import { SourceRecords } from '../components/article/SourceRecords';
 import { JOB_STATUS_LABELS } from '../../shared/project/jobs';
 import { GenerationQuote } from '../components/article/GenerationQuote';
@@ -13,9 +14,7 @@ import type {
   PresentationProfile,
   Project,
 } from '../schemas';
-import {
-  createOpenAIUsageRecord,
-} from '../utils/usage';
+import { createOpenAIUsageRecord } from '../utils/usage';
 import {
   CLOSING_LINE_MODE_LABELS,
   PRESENTATION_PROFILE_PRESET_DESCRIPTIONS,
@@ -106,7 +105,8 @@ export function ArticleInputPage() {
         const normalizedProfile = normalizePresentationProfile(project.presentationProfile);
         setPresentationProfile(normalizedProfile);
         savedPresentationProfileRef.current = JSON.stringify(normalizedProfile);
-        if (typeof project.generationConfig?.targetPartCount === 'number') setTargetPartCount(project.generationConfig.targetPartCount);
+        if (typeof project.generationConfig?.targetPartCount === 'number')
+          setTargetPartCount(project.generationConfig.targetPartCount);
         if (project.parts?.length) {
           const nextCount = Math.min(20, Math.max(1, project.parts.length));
           setTargetPartCount(nextCount);
@@ -120,8 +120,6 @@ export function ArticleInputPage() {
           }
           return new Map();
         });
-
-
       } catch (err) {
         console.error('Failed to load project:', err);
         reportError(
@@ -235,19 +233,44 @@ export function ArticleInputPage() {
   const handleAutoSubmit = async (data: ArticleInputType, restart = false) => {
     if (!projectId || !project) return;
     try {
-      const draft = { ...project, article: { ...project.article, ...data, importedImages: images }, presentationProfile };
+      const draft = {
+        ...project,
+        article: { ...project.article, ...data, importedImages: images },
+        presentationProfile,
+      };
       await projectClient.save(draft);
-      await window.electronAPI.jobs.start(projectId, { mode: generationMode, targetPartCount, budgetUsd: budgetUsd.trim() ? Number(budgetUsd) : undefined, restart });
-    } catch (error) { reportError(error instanceof Error ? error.message : String(error)); }
+      await window.electronAPI.jobs.start(projectId, {
+        mode: generationMode,
+        targetPartCount,
+        budgetUsd: budgetUsd.trim() ? Number(budgetUsd) : undefined,
+        restart,
+      });
+    } catch (error) {
+      reportError(error instanceof Error ? error.message : String(error));
+    }
   };
   const handleAutoResume = (data: ArticleInputType) => handleAutoSubmit(data);
   const handleAutoRestart = (data: ArticleInputType) => handleAutoSubmit(data, true);
-  const handleAutoCancel = () => { if (projectId) void window.electronAPI.jobs.cancel(projectId).catch((error) => reportError(String(error))); };
+  const handleAutoCancel = () => {
+    if (projectId)
+      void window.electronAPI.jobs.cancel(projectId).catch((error) => reportError(String(error)));
+  };
   const autoRunning = project?.job?.status === 'running' || project?.job?.status === 'queued';
   const currentAutoStatus = project?.job?.stage;
 
   const handleImportedText = (title: string, text: string) => {
-    setProject((previous) => previous ? { ...previous, article: { ...previous.article, title: previous.article.title.trim() ? previous.article.title : title, bodyText: text } } : previous);
+    setProject((previous) =>
+      previous
+        ? {
+            ...previous,
+            article: {
+              ...previous.article,
+              title: previous.article.title.trim() ? previous.article.title : title,
+              bodyText: text,
+            },
+          }
+        : previous
+    );
     setArticleData((prev) => ({
       ...prev,
       title: prev.title && prev.title.trim().length > 0 ? prev.title : title,
@@ -257,7 +280,17 @@ export function ArticleInputPage() {
 
   const handleImagesAdded = (added: ImageAsset[], addedBlobUrls: Map<string, string>) => {
     setImages((prev) => [...prev, ...added]);
-    setProject((previous) => previous ? { ...previous, article: { ...previous.article, importedImages: [...previous.article.importedImages, ...added] } } : previous);
+    setProject((previous) =>
+      previous
+        ? {
+            ...previous,
+            article: {
+              ...previous.article,
+              importedImages: [...previous.article.importedImages, ...added],
+            },
+          }
+        : previous
+    );
     setBlobUrls((prev) => {
       const next = new Map(prev);
       for (const [id, url] of addedBlobUrls.entries()) {
@@ -269,7 +302,19 @@ export function ArticleInputPage() {
 
   const handleImageRemoved = (imageId: string) => {
     setImages((prev) => prev.filter((image) => image.id !== imageId));
-    setProject((previous) => previous ? { ...previous, article: { ...previous.article, importedImages: previous.article.importedImages.filter((image) => image.id !== imageId) } } : previous);
+    setProject((previous) =>
+      previous
+        ? {
+            ...previous,
+            article: {
+              ...previous.article,
+              importedImages: previous.article.importedImages.filter(
+                (image) => image.id !== imageId
+              ),
+            },
+          }
+        : previous
+    );
     setBlobUrls((prev) => {
       const next = new Map(prev);
       const url = next.get(imageId);
@@ -290,233 +335,296 @@ export function ArticleInputPage() {
           <div className="space-y-4">
             {error && <ErrorDetailPanel message={error} onDismiss={() => setError(null)} />}
 
-            <details className="rounded-lg border border-slate-200 bg-white p-3"><summary className="cursor-pointer text-sm font-semibold">今回の動画の声・見た目・詳細設定</summary>
-            <Card title="今回の生成設定" subtitle="このプロジェクトに適用します。アプリ全体の既定値は設定画面で変更できます。">
-              <div className="grid gap-4 md:grid-cols-2">
-                <div>
-                  <label className="mb-1 block text-xs font-semibold text-slate-600">
-                    配信スタイル
-                  </label>
-                  <select
-                    value={presentationProfile.preset}
-                    onChange={(e) =>
-                      applyPresentationPreset(e.target.value as PresentationProfilePreset)
-                    }
-                    className="nv-input"
-                  >
-                    {PRESENTATION_PROFILE_PRESETS.map((preset) => (
-                      <option key={preset} value={preset}>
-                        {PRESENTATION_PROFILE_PRESET_LABELS[preset]}
-                      </option>
-                    ))}
-                  </select>
-                  <p className="mt-2 text-xs text-slate-500">{presetDescription}</p>
-                </div>
-
-                <div>
-                  <label className="mb-1 block text-xs font-semibold text-slate-600">
-                    パート数
-                  </label>
-                  <div className="flex flex-wrap items-center gap-3">
-                    <input
-                      type="number"
-                      min={1}
-                      max={20}
-                      value={targetPartCount}
-                      onChange={(e) => {
-                        const next = Number(e.target.value);
-                        if (!Number.isFinite(next)) return;
-                        setTargetPartCount(Math.min(20, Math.max(1, Math.round(next))));
-                      }}
-                      className="nv-input w-28"
-                    />
-                    <Badge tone="info">1〜20</Badge>
+            <details className="rounded-lg border border-slate-200 bg-white p-3">
+              <summary className="cursor-pointer text-sm font-semibold">
+                今回の動画の声・見た目・詳細設定
+              </summary>
+              <Card
+                title="今回の生成設定"
+                subtitle="このプロジェクトに適用します。アプリ全体の既定値は設定画面で変更できます。"
+              >
+                <div className="grid gap-4 md:grid-cols-2">
+                  <div>
+                    <label className="mb-1 block text-xs font-semibold text-slate-600">
+                      配信スタイル
+                    </label>
+                    <select
+                      value={presentationProfile.preset}
+                      onChange={(e) =>
+                        applyPresentationPreset(e.target.value as PresentationProfilePreset)
+                      }
+                      className="nv-input"
+                    >
+                      {PRESENTATION_PROFILE_PRESETS.map((preset) => (
+                        <option key={preset} value={preset}>
+                          {PRESENTATION_PROFILE_PRESET_LABELS[preset]}
+                        </option>
+                      ))}
+                    </select>
+                    <p className="mt-2 text-xs text-slate-600">{presetDescription}</p>
                   </div>
-                  <p className="mt-2 text-xs text-slate-500">
-                    画像を分けたい場合はパート数を増やしてください（後から編集可能）。
-                  </p>
-                </div>
 
-                <div>
-                  <label className="mb-1 block text-xs font-semibold text-slate-600">
-                    1パートの目安秒数
-                  </label>
-                  <div className="flex flex-wrap items-center gap-3">
-                    <input
-                      type="number"
-                      min={10}
-                      max={300}
-                      value={presentationProfile.targetDurationPerPartSec}
-                      onChange={(e) => {
-                        const next = Number(e.target.value);
-                        if (!Number.isFinite(next)) return;
+                  <div>
+                    <label className="mb-1 block text-xs font-semibold text-slate-600">
+                      パート数
+                    </label>
+                    <div className="flex flex-wrap items-center gap-3">
+                      <input
+                        type="number"
+                        min={1}
+                        max={20}
+                        value={targetPartCount}
+                        onChange={(e) => {
+                          const next = Number(e.target.value);
+                          if (!Number.isFinite(next)) return;
+                          setTargetPartCount(Math.min(20, Math.max(1, Math.round(next))));
+                        }}
+                        className="nv-input w-28"
+                      />
+                      <Badge tone="info">1〜20</Badge>
+                    </div>
+                    <p className="mt-2 text-xs text-slate-600">
+                      画像を分けたい場合はパート数を増やしてください（後から編集可能）。
+                    </p>
+                  </div>
+
+                  <div>
+                    <label className="mb-1 block text-xs font-semibold text-slate-600">
+                      1パートの目安秒数
+                    </label>
+                    <div className="flex flex-wrap items-center gap-3">
+                      <input
+                        type="number"
+                        min={10}
+                        max={300}
+                        value={presentationProfile.targetDurationPerPartSec}
+                        onChange={(e) => {
+                          const next = Number(e.target.value);
+                          if (!Number.isFinite(next)) return;
+                          setPresentationProfile((prev) => ({
+                            ...prev,
+                            targetDurationPerPartSec: Math.min(300, Math.max(10, Math.round(next))),
+                          }));
+                        }}
+                        className="nv-input w-28"
+                      />
+                      <Badge tone="neutral">10〜300秒</Badge>
+                    </div>
+                    <p className="mt-2 text-xs text-slate-600">
+                      プリセット初期値は自動で入ります。必要なら上書きできます。
+                    </p>
+                  </div>
+
+                  <div>
+                    <label className="mb-1 block text-xs font-semibold text-slate-600">
+                      締め文
+                    </label>
+                    <select
+                      value={presentationProfile.closingLineMode}
+                      onChange={(e) =>
                         setPresentationProfile((prev) => ({
                           ...prev,
-                          targetDurationPerPartSec: Math.min(300, Math.max(10, Math.round(next))),
-                        }));
-                      }}
-                      className="nv-input w-28"
-                    />
-                    <Badge tone="neutral">10〜300秒</Badge>
+                          closingLineMode: e.target.value as PresentationProfile['closingLineMode'],
+                        }))
+                      }
+                      className="nv-input"
+                    >
+                      {Object.entries(CLOSING_LINE_MODE_LABELS).map(([mode, label]) => (
+                        <option key={mode} value={mode}>
+                          {label}
+                        </option>
+                      ))}
+                    </select>
+                    <p className="mt-2 text-xs text-slate-600">
+                      現在の出力予定: {closingLinePreview ?? '締め文なし'}
+                    </p>
                   </div>
-                  <p className="mt-2 text-xs text-slate-500">
-                    プリセット初期値は自動で入ります。必要なら上書きできます。
-                  </p>
+
+                  <div>
+                    <label className="mb-1 block text-xs font-semibold text-slate-600">
+                      画像スタイル
+                    </label>
+                    <select
+                      value={presentationProfile.imageStylePreset}
+                      onChange={(e) =>
+                        setPresentationProfile((prev) => ({
+                          ...prev,
+                          imageStylePreset: e.target
+                            .value as PresentationProfile['imageStylePreset'],
+                        }))
+                      }
+                      className="nv-input"
+                    >
+                      {IMAGE_STYLE_PRESETS.map((preset) => (
+                        <option key={preset} value={preset}>
+                          {IMAGE_STYLE_PRESET_LABELS[preset]}
+                        </option>
+                      ))}
+                    </select>
+                    <p className="mt-2 text-xs text-slate-600">{imageStyleDescription}</p>
+                  </div>
+
+                  <div>
+                    <label className="mb-1 block text-xs font-semibold text-slate-600">
+                      画像アスペクト比
+                    </label>
+                    <select
+                      value={presentationProfile.aspectRatio}
+                      onChange={(e) =>
+                        setPresentationProfile((prev) => ({
+                          ...prev,
+                          aspectRatio: e.target.value as PresentationProfile['aspectRatio'],
+                        }))
+                      }
+                      className="nv-input"
+                    >
+                      {IMAGE_ASPECT_RATIOS.map((aspectRatio) => (
+                        <option key={aspectRatio} value={aspectRatio}>
+                          {IMAGE_ASPECT_RATIO_LABELS[aspectRatio]}
+                        </option>
+                      ))}
+                    </select>
+                    <p className="mt-2 text-xs text-slate-600">
+                      画像プロンプト生成と画像生成の両方で使われます。
+                    </p>
+                  </div>
+
+                  <div>
+                    <label className="mb-1 block text-xs font-semibold text-slate-600">
+                      音声の話し方
+                    </label>
+                    <select
+                      value={presentationProfile.ttsNarrationStylePreset}
+                      onChange={(e) =>
+                        setPresentationProfile((prev) => ({
+                          ...prev,
+                          ttsNarrationStylePreset: e.target
+                            .value as PresentationProfile['ttsNarrationStylePreset'],
+                        }))
+                      }
+                      className="nv-input"
+                    >
+                      {TTS_NARRATION_STYLE_PRESETS.map((preset) => (
+                        <option key={preset} value={preset}>
+                          {TTS_NARRATION_STYLE_LABELS[preset]}
+                        </option>
+                      ))}
+                    </select>
+                    <p className="mt-2 text-xs text-slate-600">{ttsStyleDescription}</p>
+                  </div>
                 </div>
 
-                <div>
-                  <label className="mb-1 block text-xs font-semibold text-slate-600">締め文</label>
-                  <select
-                    value={presentationProfile.closingLineMode}
-                    onChange={(e) =>
-                      setPresentationProfile((prev) => ({
-                        ...prev,
-                        closingLineMode: e.target.value as PresentationProfile['closingLineMode'],
-                      }))
-                    }
-                    className="nv-input"
-                  >
-                    {Object.entries(CLOSING_LINE_MODE_LABELS).map(([mode, label]) => (
-                      <option key={mode} value={mode}>
-                        {label}
-                      </option>
-                    ))}
-                  </select>
-                  <p className="mt-2 text-xs text-slate-500">
-                    現在の出力予定: {closingLinePreview ?? '締め文なし'}
-                  </p>
-                </div>
+                {presentationProfile.closingLineMode === 'custom' && (
+                  <div className="mt-4">
+                    <label className="mb-1 block text-xs font-semibold text-slate-600">
+                      カスタム締め文
+                    </label>
+                    <input
+                      type="text"
+                      value={presentationProfile.closingLineText}
+                      onChange={(e) =>
+                        setPresentationProfile((prev) => ({
+                          ...prev,
+                          closingLineText: e.target.value,
+                        }))
+                      }
+                      className="nv-input"
+                      placeholder="ご視聴ありがとうございました"
+                    />
+                  </div>
+                )}
 
-                <div>
-                  <label className="mb-1 block text-xs font-semibold text-slate-600">
-                    画像スタイル
-                  </label>
-                  <select
-                    value={presentationProfile.imageStylePreset}
-                    onChange={(e) =>
-                      setPresentationProfile((prev) => ({
-                        ...prev,
-                        imageStylePreset: e.target.value as PresentationProfile['imageStylePreset'],
-                      }))
-                    }
-                    className="nv-input"
-                  >
-                    {IMAGE_STYLE_PRESETS.map((preset) => (
-                      <option key={preset} value={preset}>
-                        {IMAGE_STYLE_PRESET_LABELS[preset]}
-                      </option>
-                    ))}
-                  </select>
-                  <p className="mt-2 text-xs text-slate-500">{imageStyleDescription}</p>
-                </div>
-
-                <div>
-                  <label className="mb-1 block text-xs font-semibold text-slate-600">
-                    画像アスペクト比
-                  </label>
-                  <select
-                    value={presentationProfile.aspectRatio}
-                    onChange={(e) =>
-                      setPresentationProfile((prev) => ({
-                        ...prev,
-                        aspectRatio: e.target.value as PresentationProfile['aspectRatio'],
-                      }))
-                    }
-                    className="nv-input"
-                  >
-                    {IMAGE_ASPECT_RATIOS.map((aspectRatio) => (
-                      <option key={aspectRatio} value={aspectRatio}>
-                        {IMAGE_ASPECT_RATIO_LABELS[aspectRatio]}
-                      </option>
-                    ))}
-                  </select>
-                  <p className="mt-2 text-xs text-slate-500">
-                    画像プロンプト生成と画像生成の両方で使われます。
-                  </p>
-                </div>
-
-                <div>
-                  <label className="mb-1 block text-xs font-semibold text-slate-600">
-                    音声の話し方
-                  </label>
-                  <select
-                    value={presentationProfile.ttsNarrationStylePreset}
-                    onChange={(e) =>
-                      setPresentationProfile((prev) => ({
-                        ...prev,
-                        ttsNarrationStylePreset: e.target
-                          .value as PresentationProfile['ttsNarrationStylePreset'],
-                      }))
-                    }
-                    className="nv-input"
-                  >
-                    {TTS_NARRATION_STYLE_PRESETS.map((preset) => (
-                      <option key={preset} value={preset}>
-                        {TTS_NARRATION_STYLE_LABELS[preset]}
-                      </option>
-                    ))}
-                  </select>
-                  <p className="mt-2 text-xs text-slate-500">{ttsStyleDescription}</p>
-                </div>
-              </div>
-
-              {presentationProfile.closingLineMode === 'custom' && (
                 <div className="mt-4">
                   <label className="mb-1 block text-xs font-semibold text-slate-600">
-                    カスタム締め文
+                    音声スタイル補足
                   </label>
                   <input
                     type="text"
-                    value={presentationProfile.closingLineText}
+                    value={presentationProfile.ttsNarrationStyleNote}
                     onChange={(e) =>
                       setPresentationProfile((prev) => ({
                         ...prev,
-                        closingLineText: e.target.value,
+                        ttsNarrationStyleNote: e.target.value,
                       }))
                     }
                     className="nv-input"
-                    placeholder="ご視聴ありがとうございました"
+                    placeholder="語尾はやわらかく、煽りすぎない"
                   />
+                  <p className="mt-2 text-xs text-slate-600">
+                    短い補足だけを上書きできます。engine やボイス設定は変更しません。
+                  </p>
                 </div>
-              )}
-
-              <div className="mt-4">
-                <label className="mb-1 block text-xs font-semibold text-slate-600">
-                  音声スタイル補足
-                </label>
-                <input
-                  type="text"
-                  value={presentationProfile.ttsNarrationStyleNote}
-                  onChange={(e) =>
-                    setPresentationProfile((prev) => ({
-                      ...prev,
-                      ttsNarrationStyleNote: e.target.value,
-                    }))
-                  }
-                  className="nv-input"
-                  placeholder="語尾はやわらかく、煽りすぎない"
-                />
-                <p className="mt-2 text-xs text-slate-500">
-                  短い補足だけを上書きできます。engine やボイス設定は変更しません。
-                </p>
-              </div>
-            </Card></details>
+              </Card>
+            </details>
 
             <Card title="記事情報" subtitle="必須項目を入力してスクリプトを生成">
               {project && <GenerationQuote project={project} partCount={targetPartCount} />}
               <div className="mb-4 grid gap-3 sm:grid-cols-2">
-                <label className="text-sm">生成の進め方<select className="nv-input" value={generationMode} onChange={(event) => setGenerationMode(event.target.value as 'automatic' | 'review')}><option value="review">台本・素材を確認しながら</option><option value="automatic">すべて自動で進める</option></select></label>
-                <label className="text-sm">ジョブ予算（USD、空欄で制限なし）<input type="number" min="0" step="0.1" className="nv-input" value={budgetUsd} onChange={(event) => setBudgetUsd(event.target.value)} /></label>
+                <label className="text-sm">
+                  生成の進め方
+                  <select
+                    className="nv-input"
+                    value={generationMode}
+                    onChange={(event) =>
+                      setGenerationMode(event.target.value as 'automatic' | 'review')
+                    }
+                  >
+                    <option value="review">台本・素材を確認しながら</option>
+                    <option value="automatic">すべて自動で進める</option>
+                  </select>
+                </label>
+                <label className="text-sm">
+                  ジョブ予算（USD、空欄で制限なし）
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.1"
+                    className="nv-input"
+                    value={budgetUsd}
+                    onChange={(event) => setBudgetUsd(event.target.value)}
+                  />
+                </label>
               </div>
-              {project?.job && <div className="mb-4 rounded border p-3 text-sm" role="status">
-                <p>{project.job.stage} / {JOB_STATUS_LABELS[project.job.status]} ・使用額 ${project.job.spentUsd.toFixed(4)}</p>
-                {project.job.unknownCharges > 0 && <p>料金未確定のリクエスト {project.job.unknownCharges}件。API側の利用明細で確認してください。</p>}
-                {project.job.error && <p className="text-red-700">{project.job.error.message}</p>}
-                <p>開始前に推定料金の余裕を含めて予算を確認します。実際の料金を厳密に上限へ抑えるものではありません。</p>
-              </div>}
+              {project?.job && (
+                <div className="mb-4 rounded border p-3 text-sm" role="status">
+                  <p className="text-xs break-all">ジョブID: {project.job.id}</p>
+                  <p>
+                    {project.job.stage} / {JOB_STATUS_LABELS[project.job.status]} ・使用額 $
+                    {project.job.spentUsd.toFixed(4)}
+                  </p>
+                  {project.job.unknownCharges > 0 && (
+                    <p>
+                      料金未確定のリクエスト {project.job.unknownCharges}
+                      件。API側の利用明細で確認してください。
+                    </p>
+                  )}
+                  {project.job.error && <p className="text-red-700">{project.job.error.message}</p>}
+                  <p>
+                    開始前に推定料金の余裕を含めて予算を確認します。実際の料金を厳密に上限へ抑えるものではありません。
+                  </p>
+                </div>
+              )}
+              {project && <JobHistory project={project} />}
               <ArticleInput
-                onChange={(data) => { setArticleData(data); setProject((previous) => previous ? { ...previous, name: previous.name === '新しい動画' && data.title?.trim() ? data.title.trim() : previous.name, article: { ...previous.article, ...data, importedImages: images } } : previous); }}
-                onSaveDraft={() => { if (projectId) void projectClient.flush(projectId).catch((error) => setError(String(error))); }}
+                onChange={(data) => {
+                  setArticleData(data);
+                  setProject((previous) =>
+                    previous
+                      ? {
+                          ...previous,
+                          name:
+                            previous.name === '新しい動画' && data.title?.trim()
+                              ? data.title.trim()
+                              : previous.name,
+                          article: { ...previous.article, ...data, importedImages: images },
+                        }
+                      : previous
+                  );
+                }}
+                onSaveDraft={() => {
+                  if (projectId)
+                    void projectClient.flush(projectId).catch((error) => setError(String(error)));
+                }}
                 defaultValues={articleData}
                 onSubmit={handleSubmit}
                 onAutoSubmit={handleAutoResume}
@@ -538,9 +646,8 @@ export function ArticleInputPage() {
                   />
                   <Badge tone="info">記事保存 → スクリプト → 画像 → 音声 → 動画</Badge>
                 </div>
-                <p className="text-xs text-slate-500">
-                  上部の Workflow
-                  が全体進捗を示します。このカードでは現在の自動生成状態だけを表示します。
+                <p className="text-xs text-slate-600">
+                  台本と素材の確認時には、記事フォームの「続きから自動生成」で再開できます。
                 </p>
                 <div className="rounded-[8px] border border-[var(--nv-color-border)] bg-slate-50 px-3 py-3 text-xs">
                   {autoRunning && currentAutoStatus ? (
