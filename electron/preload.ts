@@ -102,7 +102,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   video: {
     render: (project: unknown, options: unknown, outputPath: string) =>
       ipcRenderer.invoke('video:render', project, options, outputPath),
-    preview: (partId: string) => ipcRenderer.invoke('video:preview', partId),
+    preview: (partId: string, intended?: unknown) =>
+      ipcRenderer.invoke('video:preview', partId, intended),
     cancelRender: () => ipcRenderer.invoke('video:cancelRender'),
   },
 

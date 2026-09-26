@@ -161,7 +161,8 @@ describe('settings IPC handlers', () => {
     const saved = JSON.parse(String(content));
     expect(saved.scriptTextModel).toBe('gpt-5.6-terra');
     expect(saved.imagePromptTextModel).toBe('gpt-5.6-luna');
-    expect(saved.imageModel).toBe('gemini-3-pro-image-preview');
+    // 提供終了した preview 版の ID は GA 版の ID で保存される
+    expect(saved.imageModel).toBe('gemini-3-pro-image');
     expect(saved.ttsEngine).toBe('gemini_tts');
     expect(saved.openaiReasoningEffort).toBe('max');
     expect(saved.ttsModel).toBe('gemini-2.5-flash-preview-tts');
@@ -240,7 +241,10 @@ describe('Anthropic settings', () => {
   });
 
   it('persists claudeEffort and propagates it to idle projects', async () => {
-    readFileMock.mockResolvedValueOnce(JSON.stringify(DEFAULT_SETTINGS));
+    // 既定のテキストモデルは Claude なので、旧来の OpenAI モデルを保存済みの設定から切り替える
+    readFileMock.mockResolvedValueOnce(
+      JSON.stringify({ ...DEFAULT_SETTINGS, scriptTextModel: 'gpt-5.2' })
+    );
     repositoryMock.directories.mockResolvedValue(['/idle']);
     repositoryMock.readDirectory.mockResolvedValueOnce({ id: 'idle' });
     const project = { id: 'idle', revision: 1, generationConfig: {} };
@@ -260,6 +264,23 @@ describe('Anthropic settings', () => {
       scriptTextModel: 'claude-opus-5-5',
       claudeEffort: 'max',
     });
+  });
+
+  it('persists the image prompt effort separately and propagates it to idle projects', async () => {
+    readFileMock.mockResolvedValueOnce(JSON.stringify(DEFAULT_SETTINGS));
+    repositoryMock.directories.mockResolvedValue(['/idle']);
+    repositoryMock.readDirectory.mockResolvedValueOnce({ id: 'idle' });
+    const project = { id: 'idle', revision: 1, generationConfig: {} };
+    repositoryMock.update.mockImplementation(async (_id, mutate) => {
+      mutate(project);
+      return project;
+    });
+
+    await getHandler('settings:set')(event, { claudeImagePromptEffort: 'low' });
+
+    const saved = JSON.parse(String(writeFileMock.mock.calls[0][1]));
+    expect(saved).toMatchObject({ claudeEffort: 'medium', claudeImagePromptEffort: 'low' });
+    expect(project.generationConfig).toEqual({ claudeImagePromptEffort: 'low' });
   });
 });
 

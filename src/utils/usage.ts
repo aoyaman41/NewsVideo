@@ -2,8 +2,8 @@ import type { ImageAsset, UsageRecord } from '../schemas';
 import {
   ANTHROPIC_TEXT_COMPLETION_MODEL,
   DEFAULT_GEMINI_TTS_MODEL,
-  DEFAULT_IMAGE_MODEL,
   GEMINI_TEXT_COMPLETION_MODEL,
+  LEGACY_FALLBACK_GEMINI_IMAGE_MODEL,
   OPENAI_TEXT_COMPLETION_MODEL,
   getImageModelProvider,
   isImageModel,
@@ -103,7 +103,10 @@ export function createImageUsageRecord(details: ImageUsageDetails): UsageRecord 
     id: crypto.randomUUID(),
     provider: details.provider,
     category: 'image',
-    model: details.model || (details.provider === 'openai' ? 'gpt-image-2' : DEFAULT_IMAGE_MODEL),
+    // モデル未記録の古いレコードは、既定値ではなく当時のモデルで計算する(過去のコスト表示を変えない)
+    model:
+      details.model ||
+      (details.provider === 'openai' ? 'gpt-image-2' : LEGACY_FALLBACK_GEMINI_IMAGE_MODEL),
     operation: details.operation,
     inputTokens: clampNonNegative(details.inputTokens),
     ...(details.textInputTokens !== undefined

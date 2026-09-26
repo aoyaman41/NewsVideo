@@ -12,6 +12,9 @@ const mocks = vi.hoisted(() => ({
   construct: vi.fn(),
   create: vi.fn(),
   stream: vi.fn(),
+  openaiParse: vi.fn(),
+  openaiCreate: vi.fn(),
+  geminiGenerate: vi.fn(),
 }));
 
 vi.mock('electron', () => ({
@@ -38,12 +41,28 @@ vi.mock('@anthropic-ai/sdk', async (importOriginal) => {
   }
   return { ...actual, default: MockAnthropic };
 });
+vi.mock('openai', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('openai')>();
+  class MockOpenAI {
+    chat = { completions: { parse: mocks.openaiParse, create: mocks.openaiCreate } };
+  }
+  return { ...actual, default: MockOpenAI };
+});
+vi.mock('@google/genai', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@google/genai')>();
+  class MockGoogleGenAI {
+    models = { generateContent: mocks.geminiGenerate };
+  }
+  return { ...actual, GoogleGenAI: MockGoogleGenAI };
+});
 
+// 台本用と画像プロンプト用の effort を別の値にして、用途ごとに正しい方が送られることを確かめる
 const CLAUDE_SETTINGS: AppSettings = {
   ...DEFAULT_SETTINGS,
   scriptTextModel: 'claude-opus-5-5',
   imagePromptTextModel: 'claude-opus-5-5',
   claudeEffort: 'high',
+  claudeImagePromptEffort: 'low',
 };
 
 const article = {
@@ -129,6 +148,9 @@ beforeEach(() => {
   mocks.construct.mockReset();
   mocks.create.mockReset();
   mocks.stream.mockReset();
+  mocks.openaiParse.mockReset();
+  mocks.openaiCreate.mockReset();
+  mocks.geminiGenerate.mockReset();
 });
 
 describe('Claude script generation', () => {
@@ -289,63 +311,143 @@ describe('Claude script generation', () => {
   });
 });
 
-describe('Claude image prompt generation', () => {
-  const imagePromptJson = JSON.stringify({
-    prompts: [
+describe('script prompt', () => {
+  it('leaves the JSON format to the schema and tells the model the text is read aloud', async () => {
+    streamReturning(claudeMessage(JSON.stringify(scriptPayload)));
+
+    await runWithSettings(CLAUDE_SETTINGS, () =>
+      handler('ai:generateScript')(undefined, article, { targetPartCount: 3 })
+    );
+
+    const request = lastRequest(mocks.stream) as {
+      system: string;
+      messages: Array<{ content: string }>;
+      output_config: { format: { schema: unknown } };
+    };
+    const userPrompt = request.messages[0].content;
+    expect(request.system).toContain('あなたは情報動画のスクリプトライターです');
+    // 役割の宣言は system にだけ書き、JSON の例と「JSON のみ」の指示はスキーマに任せる
+    expect(userPrompt).not.toContain('あなたは');
+    expect(userPrompt).not.toContain('JSON');
+    expect(userPrompt).toContain('3個のパートに分割');
+    expect(userPrompt).toContain('音声合成でそのまま読み上げます');
+    expect(userPrompt).toContain('括弧・記号・英字の略語は使わず');
+    expect(JSON.stringify(request.output_config.format.schema)).toContain('ナレーション本文');
+  });
+});
+
+const slideDesign = {
+  visualCopy: {
+    headline: '新しい橋が開通',
+    subhead: '',
+    keyNumber: '',
+    bullets: ['通勤時間が短縮'],
+  },
+  layoutPlan: {
+    intent: '開通を伝える',
+    composition: '見出しを上部に配置',
+    objects: [
       {
-        topic: '新しい橋',
-        entities: ['橋'],
-        locations: [],
-        quantFacts: [],
-        visualCopy: { headline: '新しい橋が開通', bullets: ['通勤時間が短縮'] },
-        layoutPlan: {
-          intent: '開通を伝える',
-          composition: '見出しを上部に配置',
-          objects: [
-            {
-              type: 'headline',
-              role: '主情報',
-              position: 'top-center',
-              content: '新しい橋が開通',
-              emphasis: 'large',
-            },
-          ],
-        },
+        type: 'headline',
+        role: '主情報',
+        position: 'top-center',
+        content: '見出しを大きく配置',
+        emphasis: 'large',
       },
     ],
-  });
-  const parts = [
-    { id: 'part-1', index: 0, title: '概要', summary: '開通', scriptText: '橋が開通しました。' },
-    { id: 'part-2', index: 1, title: '影響', summary: '短縮', scriptText: '通勤が短縮します。' },
-  ];
+  },
+};
+const parts = [
+  { id: 'part-1', index: 0, title: '概要', summary: '開通', scriptText: '橋が開通しました。' },
+  { id: 'part-2', index: 1, title: '影響', summary: '短縮', scriptText: '通勤が短縮します。' },
+];
 
-  it('caches the repeated system prompt for per-scene batch requests', async () => {
+type ClaudeTextBlock = { type: 'text'; text: string; cache_control?: unknown };
+type ClaudeRequest = {
+  system: unknown;
+  messages: Array<{ role: string; content: ClaudeTextBlock[] }>;
+  output_config: { effort?: string; format?: { schema: Record<string, unknown> } };
+};
+
+function claudeRequests(): ClaudeRequest[] {
+  return mocks.create.mock.calls.map(([request]) => request as ClaudeRequest);
+}
+
+function articleIdOf(text: string): string {
+  const id = text.match(/^<article id="(article-[0-9a-f]{12})">/)?.[1];
+  if (!id) throw new Error(`article tag not found: ${text.slice(0, 40)}`);
+  return id;
+}
+
+describe('Claude image prompt generation', () => {
+  it('caches the article block and uses structured output for batch requests', async () => {
     mocks.create.mockResolvedValue(
-      claudeMessage(`\`\`\`json\n${imagePromptJson}\n\`\`\``, {
+      claudeMessage(JSON.stringify(slideDesign), {
         usage: { input_tokens: 300, cache_read_input_tokens: 900, output_tokens: 400 },
       })
     );
 
     const result = (await runWithSettings(CLAUDE_SETTINGS, () =>
       handler('ai:generateImagePrompts')(undefined, parts, article, {})
-    )) as { prompts: Array<{ prompt: string }>; usage: Record<string, unknown> };
+    )) as {
+      prompts: Array<{ prompt: string; visualCopy?: unknown; negativePrompt: string }>;
+      usage: Record<string, unknown>;
+    };
 
     expect(mocks.stream).not.toHaveBeenCalled();
     expect(mocks.create).toHaveBeenCalledTimes(2);
-    for (const [request] of mocks.create.mock.calls) {
+    const requests = claudeRequests();
+    for (const request of requests) {
       expect(request).toMatchObject({
         model: 'claude-opus-5-5',
         max_tokens: 16_000,
-        system: [{ type: 'text', text: expect.any(String), cache_control: { type: 'ephemeral' } }],
-        output_config: { effort: 'high' },
+        // 画像プロンプトは台本(high)とは別の claudeImagePromptEffort を使う
+        output_config: {
+          effort: 'low',
+          format: { type: 'json_schema', schema: expect.objectContaining({ type: 'object' }) },
+        },
       });
-      expect(request.output_config).not.toHaveProperty('format');
       for (const key of ['thinking', 'temperature', 'top_p', 'top_k']) {
         expect(request).not.toHaveProperty(key);
       }
+      expect(typeof request.system).toBe('string');
+      expect(request.system).not.toContain('JSON');
+      const [articleBlock, partBlock] = request.messages[0].content;
+      expect(request.messages[0].content).toHaveLength(2);
+      expect(articleBlock).toEqual({
+        type: 'text',
+        text: expect.stringMatching(/^<article id="article-[0-9a-f]{12}">\n/),
+        cache_control: { type: 'ephemeral' },
+      });
+      expect(articleBlock.text).toContain(article.bodyText);
+      expect(articleBlock.text.endsWith('</article>')).toBe(true);
+      expect(partBlock).not.toHaveProperty('cache_control');
+      expect(partBlock.text).toContain(articleIdOf(articleBlock.text));
     }
-    expect(result.prompts).toHaveLength(2);
-    expect(result.prompts[0].prompt).toContain('新しい橋が開通');
+    // 記事ブロックはパート間で完全に同じ(キャッシュの前提)で、パートの情報は 2 番目のブロックに入る
+    expect(requests[0].messages[0].content[0]).toEqual(requests[1].messages[0].content[0]);
+    expect(requests[0].messages[0].content[1].text).toContain('パート番号: 1');
+    expect(requests[1].messages[0].content[1].text).toContain('パート番号: 2');
+
+    // 画像プロンプトの組み立てで使わない項目は出力させない
+    const schema = requests[0].output_config.format!.schema as {
+      properties: Record<string, unknown>;
+    };
+    expect(Object.keys(schema.properties)).toEqual(['visualCopy', 'layoutPlan']);
+    expect(JSON.stringify(schema)).toContain('新しい文字列は入れない');
+
+    const prompt = result.prompts[0].prompt;
+    expect(prompt).toContain(
+      '画面に描く文字:\n- 見出し:「新しい橋が開通」\n- 要点1:「通勤時間が短縮」'
+    );
+    expect(prompt).not.toContain('サブ見出し');
+    expect(prompt).not.toContain('画面コピー');
+    expect(prompt).not.toContain('描画しない');
+    expect(result.prompts[0].visualCopy).toEqual({
+      headline: '新しい橋が開通',
+      bullets: ['通勤時間が短縮'],
+    });
+    expect(result.prompts[0].negativePrompt).toBe('人物, 顔, 手, ロゴ, 透かし, QRコード');
     expect(result.usage).toMatchObject({
       provider: 'anthropic',
       model: 'claude-opus-5-5',
@@ -355,20 +457,66 @@ describe('Claude image prompt generation', () => {
     });
   });
 
-  it('does not add a cache breakpoint for a single-scene regeneration', async () => {
-    mocks.create.mockResolvedValueOnce(claudeMessage(imagePromptJson));
+  it('adds the cache breakpoint even when the batch has only one part', async () => {
+    mocks.create.mockResolvedValue(claudeMessage(JSON.stringify(slideDesign)));
 
     await runWithSettings(CLAUDE_SETTINGS, () =>
-      handler('ai:generateImagePromptForTarget')(undefined, parts, article, 'part-2', {})
+      handler('ai:generateImagePrompts')(undefined, parts.slice(0, 1), article, {})
     );
 
-    expect(mocks.create).toHaveBeenCalledTimes(1);
-    expect(typeof lastRequest(mocks.create).system).toBe('string');
+    expect(claudeRequests()[0].messages[0].content[0]).toMatchObject({
+      cache_control: { type: 'ephemeral' },
+    });
+  });
+
+  it('caches the same article block on the single-target path used by automatic jobs', async () => {
+    mocks.create.mockResolvedValue(claudeMessage(JSON.stringify(slideDesign)));
+
+    await runWithSettings(CLAUDE_SETTINGS, () =>
+      handler('ai:generateImagePrompts')(undefined, parts.slice(0, 1), article, {})
+    );
+    const result = (await runWithSettings(CLAUDE_SETTINGS, () =>
+      handler('ai:generateImagePromptForTarget')(undefined, parts, article, 'part-2', {})
+    )) as { prompt: { partId: string; prompt: string } };
+
+    const [batchRequest, targetRequest] = claudeRequests();
+    expect(targetRequest.messages[0].content[0]).toEqual(batchRequest.messages[0].content[0]);
+    expect(targetRequest.messages[0].content[1].text).toContain('パート番号: 2');
+    expect(targetRequest.output_config).toMatchObject({ effort: 'low' });
+    expect(result.prompt.partId).toBe('part-2');
+    expect(result.prompt.prompt).toContain('- 見出し:「新しい橋が開通」');
+  });
+
+  it('keeps the article id stable for the same article and changes it with the article', async () => {
+    mocks.create.mockResolvedValue(claudeMessage(JSON.stringify(slideDesign)));
+    const editedArticle = { ...article, bodyText: `${article.bodyText}追記。` };
+
+    for (const target of [article, article, editedArticle]) {
+      await runWithSettings(CLAUDE_SETTINGS, () =>
+        handler('ai:generateImagePromptForTarget')(undefined, parts, target, 'part-1', {})
+      );
+    }
+
+    const ids = claudeRequests().map((request) => articleIdOf(request.messages[0].content[0].text));
+    expect(ids[0]).toBe(ids[1]);
+    expect(ids[2]).not.toBe(ids[0]);
+  });
+
+  it('rejects a response that does not match the slide design schema', async () => {
+    mocks.create.mockResolvedValueOnce(
+      claudeMessage(`\`\`\`json\n${JSON.stringify(slideDesign)}\n\`\`\``)
+    );
+
+    await expect(
+      runWithSettings(CLAUDE_SETTINGS, () =>
+        handler('ai:generateImagePromptForTarget')(undefined, parts, article, 'part-1', {})
+      )
+    ).rejects.toThrow('AIから構造化された応答を取得できませんでした');
   });
 });
 
 describe('Claude comment application', () => {
-  it('returns plain text for script comments', async () => {
+  it('returns plain text for script comments with the script effort', async () => {
     mocks.create.mockResolvedValueOnce(claudeMessage('修正後のスクリプトです。'));
 
     const result = (await runWithSettings(CLAUDE_SETTINGS, () =>
@@ -386,7 +534,7 @@ describe('Claude comment application', () => {
     expect(request.output_config).not.toHaveProperty('format');
   });
 
-  it('uses structured output for image prompt comments', async () => {
+  it('uses structured output and the image prompt effort for image prompt comments', async () => {
     mocks.create.mockResolvedValueOnce(claudeMessage(JSON.stringify({ prompt: '修正後の指示' })));
 
     const result = (await runWithSettings(CLAUDE_SETTINGS, () =>
@@ -398,9 +546,228 @@ describe('Claude comment application', () => {
     )) as { text: string };
 
     expect(result.text).toBe('修正後の指示');
-    expect(lastRequest(mocks.create).output_config).toMatchObject({
-      effort: 'high',
+    const request = lastRequest(mocks.create) as {
+      system: string;
+      messages: Array<{ content: string }>;
+      output_config: unknown;
+    };
+    expect(request.output_config).toMatchObject({
+      effort: 'low',
       format: { type: 'json_schema', schema: expect.objectContaining({ type: 'object' }) },
     });
+    expect(request.system).not.toContain('JSON');
+    expect(request.messages[0].content).not.toContain('JSON');
+    expect(request.messages[0].content).toContain('「画面に描く文字」欄');
+  });
+});
+
+const OPENAI_SETTINGS: AppSettings = {
+  ...DEFAULT_SETTINGS,
+  scriptTextModel: 'gpt-5.6-sol',
+  imagePromptTextModel: 'gpt-5.6-sol',
+  openaiReasoningEffort: 'medium',
+};
+
+function openaiParsed(parsed: unknown, model = 'gpt-5.6-sol') {
+  return {
+    model,
+    choices: [{ finish_reason: 'stop', message: { parsed, refusal: null } }],
+    usage: {
+      prompt_tokens: 1200,
+      completion_tokens: 300,
+      total_tokens: 1500,
+      prompt_tokens_details: { cached_tokens: 800, cache_write_tokens: 100 },
+    },
+  };
+}
+
+type OpenAIRequest = {
+  messages: Array<{ role: string; content: unknown }>;
+  prompt_cache_key?: string;
+  response_format: unknown;
+  reasoning_effort?: string;
+  temperature?: number;
+};
+
+describe('OpenAI image prompt generation', () => {
+  beforeEach(() => {
+    mocks.secrets = { openai: 'test-openai-key' };
+  });
+
+  it('sends the article as its own content part with a cache breakpoint on gpt-5.6', async () => {
+    mocks.openaiParse.mockResolvedValue(openaiParsed(slideDesign));
+
+    const result = (await runWithSettings(OPENAI_SETTINGS, () =>
+      handler('ai:generateImagePromptForTarget')(undefined, parts, article, 'part-1', {})
+    )) as { prompt: { prompt: string }; usage: Record<string, unknown> };
+
+    const request = mocks.openaiParse.mock.calls[0][0] as OpenAIRequest;
+    expect(request.messages[0]).toEqual({ role: 'system', content: expect.any(String) });
+    const [articlePart, partPart] = request.messages[1].content as Array<{
+      type: string;
+      text: string;
+      prompt_cache_breakpoint?: unknown;
+    }>;
+    expect(articlePart).toEqual({
+      type: 'text',
+      text: expect.stringMatching(/^<article id="article-[0-9a-f]{12}">/),
+      prompt_cache_breakpoint: { mode: 'explicit' },
+    });
+    expect(partPart).toEqual({ type: 'text', text: expect.stringContaining('パート番号: 1') });
+    expect(request.prompt_cache_key).toBe(articleIdOf(articlePart.text));
+    expect(request.response_format).toMatchObject({
+      type: 'json_schema',
+      json_schema: { name: 'slide_design', strict: true },
+    });
+    expect(request.reasoning_effort).toBe('medium');
+    expect(request).not.toHaveProperty('temperature');
+    expect(result.prompt.prompt).toContain('- 見出し:「新しい橋が開通」');
+    expect(result.usage).toMatchObject({
+      provider: 'openai',
+      inputTokens: 1200,
+      cachedInputTokens: 800,
+      cacheWriteTokens: 100,
+    });
+  });
+
+  it('does not send a cache breakpoint to models older than gpt-5.6', async () => {
+    mocks.openaiParse.mockResolvedValue(openaiParsed(slideDesign, 'gpt-5.2'));
+
+    await runWithSettings(
+      {
+        ...OPENAI_SETTINGS,
+        scriptTextModel: 'gpt-5.2',
+        imagePromptTextModel: 'gpt-5.2',
+        openaiReasoningEffort: 'none',
+      },
+      () => handler('ai:generateImagePromptForTarget')(undefined, parts, article, 'part-1', {})
+    );
+
+    const request = mocks.openaiParse.mock.calls[0][0] as OpenAIRequest;
+    const [articlePart] = request.messages[1].content as Array<Record<string, unknown>>;
+    expect(articlePart).not.toHaveProperty('prompt_cache_breakpoint');
+    expect(request.prompt_cache_key).toMatch(/^article-[0-9a-f]{12}$/);
+  });
+});
+
+const GEMINI_SETTINGS: AppSettings = {
+  ...DEFAULT_SETTINGS,
+  scriptTextModel: 'gemini-3.1-pro',
+  imagePromptTextModel: 'gemini-3.1-pro',
+  geminiThinkingLevel: 'high',
+};
+
+function geminiResponse(text: string) {
+  return {
+    text,
+    candidates: [{ content: { parts: [{ text }] } }],
+    usageMetadata: {
+      promptTokenCount: 1000,
+      candidatesTokenCount: 200,
+      thoughtsTokenCount: 300,
+      totalTokenCount: 1500,
+    },
+  };
+}
+
+type GeminiRequest = {
+  model: string;
+  contents: string;
+  config: Record<string, unknown> & { responseJsonSchema?: unknown };
+};
+
+function geminiRequest(): GeminiRequest {
+  const call = mocks.geminiGenerate.mock.calls.at(-1);
+  if (!call) throw new Error('request was not sent');
+  return call[0] as GeminiRequest;
+}
+
+describe('Gemini text generation', () => {
+  beforeEach(() => {
+    mocks.secrets = { google_ai: 'test-google-key' };
+  });
+
+  it('sends a JSON schema without temperature and counts thinking tokens as output', async () => {
+    mocks.geminiGenerate.mockResolvedValue(geminiResponse(JSON.stringify(scriptPayload)));
+
+    const result = (await runWithSettings(GEMINI_SETTINGS, () =>
+      handler('ai:generateScript')(undefined, article, {})
+    )) as { parts: Array<{ title: string }>; usage: Record<string, unknown> };
+
+    const request = geminiRequest();
+    expect(request.model).toBe('gemini-3.1-pro-preview');
+    expect(request.config).not.toHaveProperty('temperature');
+    expect(request.config.responseMimeType).toBe('application/json');
+    const schemaText = JSON.stringify(request.config.responseJsonSchema);
+    expect(schemaText).toContain('"parts"');
+    expect(schemaText).toContain('ナレーション本文');
+    for (const unsupported of ['$schema', 'minLength', 'exclusiveMinimum']) {
+      expect(schemaText).not.toContain(unsupported);
+    }
+    expect(request.contents).not.toContain('JSON');
+    expect(result.parts[0]).toMatchObject({ title: '開通の概要' });
+    expect(result.usage).toMatchObject({
+      provider: 'gemini',
+      inputTokens: 1000,
+      outputTokens: 500,
+      reasoningTokens: 300,
+      totalTokens: 1500,
+    });
+  });
+
+  it('rejects a script response that does not match the schema', async () => {
+    mocks.geminiGenerate.mockResolvedValue(geminiResponse(JSON.stringify({ parts: [] })));
+
+    await expect(
+      runWithSettings(GEMINI_SETTINGS, () => handler('ai:generateScript')(undefined, article, {}))
+    ).rejects.toThrow('AIから構造化された応答を取得できませんでした');
+  });
+
+  it('extracts the slide design with a schema and the article at the start', async () => {
+    mocks.geminiGenerate.mockResolvedValue(geminiResponse(JSON.stringify(slideDesign)));
+
+    const result = (await runWithSettings(GEMINI_SETTINGS, () =>
+      handler('ai:generateImagePromptForTarget')(undefined, parts, article, 'part-2', {})
+    )) as { prompt: { prompt: string } };
+
+    const request = geminiRequest();
+    expect(request.contents).toMatch(/^<article id="article-[0-9a-f]{12}">/);
+    expect(request.contents).toContain('パート番号: 2');
+    expect(request.config).not.toHaveProperty('temperature');
+    expect(request.config.responseJsonSchema).toMatchObject({
+      type: 'object',
+      properties: { visualCopy: expect.any(Object), layoutPlan: expect.any(Object) },
+    });
+    expect(result.prompt.prompt).toContain('- 見出し:「新しい橋が開通」');
+  });
+
+  it('uses a schema only for image prompt comments', async () => {
+    mocks.geminiGenerate.mockResolvedValueOnce(geminiResponse('修正後のスクリプト'));
+    await runWithSettings(GEMINI_SETTINGS, () =>
+      handler('ai:applyComment')(
+        undefined,
+        { type: 'script', id: 'part-1', currentText: '元のスクリプト' },
+        '短く'
+      )
+    );
+    expect(geminiRequest().config).not.toHaveProperty('responseJsonSchema');
+    expect(geminiRequest().config).not.toHaveProperty('responseMimeType');
+    expect(geminiRequest().config).not.toHaveProperty('temperature');
+
+    mocks.geminiGenerate.mockResolvedValueOnce(
+      geminiResponse(JSON.stringify({ prompt: '修正後の指示' }))
+    );
+    const result = (await runWithSettings(GEMINI_SETTINGS, () =>
+      handler('ai:applyComment')(
+        undefined,
+        { type: 'imagePrompt', id: 'prompt-1', currentText: '元の指示' },
+        '色を明るく'
+      )
+    )) as { text: string };
+    expect(geminiRequest().config).toMatchObject({
+      responseMimeType: 'application/json',
+      responseJsonSchema: { type: 'object', properties: { prompt: expect.any(Object) } },
+    });
+    expect(result.text).toBe('修正後の指示');
   });
 });

@@ -107,6 +107,7 @@ registerOperation('settings:set', async (_, settings: unknown) => {
     'openaiReasoningEffort',
     'geminiThinkingLevel',
     'claudeEffort',
+    'claudeImagePromptEffort',
     'imageModel',
     'imageResolution',
     'ttsEngine',

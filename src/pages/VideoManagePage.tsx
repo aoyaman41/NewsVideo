@@ -1,6 +1,12 @@
 import { useScrollMemory } from '../hooks/useScrollMemory';
 import { useSceneSelection, rememberedScene } from '../stores/sceneSelection';
 import { resolutionForAspect, type RenderOptions } from '../../shared/project/videoFormat';
+import {
+  renderConflictMessage,
+  stripRenderConflictMarker,
+} from '../../shared/project/renderIntent';
+import { inputFingerprint } from '../../shared/project/integrity';
+import { withRenderConflictRetry } from '../utils/renderRetry';
 import { projectClient, useProjectState } from '../stores/projectStore';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
@@ -48,6 +54,12 @@ type ResolvedVideoAsset = {
   mtimeMs: number | null;
 };
 
+const JOB_ACTIVE_MESSAGE = '自動生成の実行中です。完了すると、書き出しとプレビューができます。';
+
+function renderErrorMessage(error: unknown, fallback: string): string {
+  return error instanceof Error ? stripRenderConflictMarker(error.message) : fallback;
+}
+
 export function VideoManagePage() {
   const { projectId } = useParams<{ projectId: string }>();
   const navigate = useNavigate();
@@ -78,6 +90,7 @@ export function VideoManagePage() {
   const [isPreviewing, setIsPreviewing] = useState(false);
   const [isRendering, setIsRendering] = useState(false);
   const [progress, setProgress] = useState<VideoProgress | null>(null);
+  const [liveJob, setLiveJob] = useState<{ projectId: string; status?: string } | null>(null);
   const [showProgress, setShowProgress] = useState(false);
   const [presentationProfile, setPresentationProfile] = useState(getDefaultPresentationProfile());
 
@@ -171,6 +184,12 @@ export function VideoManagePage() {
     []
   );
 
+  // 自動生成ジョブの実行中は、手動の書き出しとプレビューを受け付けない(ジョブの動画工程と競合させない)
+  const jobStatus =
+    (liveJob && liveJob.projectId === projectId ? liveJob.status : undefined) ??
+    project?.job?.status;
+  const jobActive = jobStatus === 'running' || jobStatus === 'queued';
+
   const missingAudioCount = useMemo(() => {
     if (!project) return 0;
     return project.parts.filter((p) => !p.audio).length;
@@ -241,6 +260,15 @@ export function VideoManagePage() {
       cancelled = true;
     };
   }, [mediaError, videoSrc]);
+
+  // 保持データが未保存の編集中でも、このプロジェクトのジョブの状態はイベントから直接追う
+  useEffect(() => {
+    if (!projectId) return;
+    return window.electronAPI.events.subscribe('job:statusChange', (payload: unknown) => {
+      const event = payload as { projectId?: string; job?: { status?: string } } | null;
+      if (event?.projectId === projectId) setLiveJob({ projectId, status: event.job?.status });
+    });
+  }, [projectId]);
 
   useEffect(() => {
     const unsubscribe = window.electronAPI.events.subscribe(
@@ -457,11 +485,20 @@ export function VideoManagePage() {
   }, [outputPath]);
 
   const handleGeneratePreview = useCallback(async () => {
-    if (!selectedPartId) return;
+    if (!selectedPartId || !projectId) return;
+    if (jobActive) {
+      toast.info(JOB_ACTIVE_MESSAGE, 'プレビューできません');
+      return;
+    }
     try {
       setIsPreviewing(true);
       setError(null);
-      const res = await window.electronAPI.video.preview(selectedPartId);
+      const res = await withRenderConflictRetry(projectId, async () => {
+        // 画面が意図した内容を保存してから渡す(Main 側で最新の保存内容と照合する)
+        await projectClient.flush(projectId);
+        const intended = await projectClient.load(projectId);
+        return window.electronAPI.video.preview(selectedPartId, intended);
+      });
       forceReloadVideoAsset(res.previewPath);
       // 先頭から再生できるように
       setTimeout(() => {
@@ -469,14 +506,18 @@ export function VideoManagePage() {
       }, 0);
     } catch (err) {
       console.error('Failed to generate preview:', err);
-      reportError(err instanceof Error ? err.message : 'プレビュー生成に失敗しました');
+      reportError(renderErrorMessage(err, 'プレビュー生成に失敗しました'));
     } finally {
       setIsPreviewing(false);
     }
-  }, [forceReloadVideoAsset, reportError, selectedPartId]);
+  }, [forceReloadVideoAsset, jobActive, projectId, reportError, selectedPartId, toast]);
 
   const handleRender = useCallback(async () => {
     if (!project) return;
+    if (jobActive) {
+      toast.info(JOB_ACTIVE_MESSAGE, '書き出しできません');
+      return;
+    }
     if (!outputPath.trim()) {
       setError(null);
       toast.warning('保存先を選択してから書き出してください。', '出力先が未指定です');
@@ -493,29 +534,38 @@ export function VideoManagePage() {
         ...renderOptions,
         resolution: resolutionForAspect(renderOptions.resolution, presentationProfile.aspectRatio),
       };
-      const renderProject: Project = {
-        ...project,
-        presentationProfile,
-        outputSettings: effectiveOptions,
-      };
-      await projectClient.save(renderProject);
-      const res = await window.electronAPI.video.render(
-        renderProject,
-        effectiveOptions,
-        outputPath.trim()
-      );
+      const res = await withRenderConflictRetry(project.id, async (isRetry) => {
+        // 再試行のときは読み直した最新の保持データから組み立てる
+        const source = await projectClient.load(project.id);
+        // 締めカードなどの表示設定は画面の値で上書きするので、読み直した保存内容と食い違う
+        // (画面に未保存の編集がある、または別の保存で変わった)ときは自動で再試行しない
+        if (
+          isRetry &&
+          inputFingerprint(normalizePresentationProfile(source.presentationProfile)) !==
+            inputFingerprint(presentationProfile)
+        )
+          throw new Error(renderConflictMessage('render'));
+        const renderProject: Project = {
+          ...source,
+          presentationProfile,
+          outputSettings: effectiveOptions,
+        };
+        await projectClient.save(renderProject);
+        return window.electronAPI.video.render(renderProject, effectiveOptions, outputPath.trim());
+      });
       forceReloadVideoAsset(res.outputPath);
       setTimeout(() => {
         if (videoRef.current) videoRef.current.currentTime = 0;
       }, 0);
     } catch (err) {
       console.error('Failed to render video:', err);
-      reportError(err instanceof Error ? err.message : '動画書き出しに失敗しました');
+      reportError(renderErrorMessage(err, '動画書き出しに失敗しました'));
     } finally {
       setIsRendering(false);
     }
   }, [
     forceReloadVideoAsset,
+    jobActive,
     outputPath,
     presentationProfile,
     project,
@@ -578,14 +628,16 @@ export function VideoManagePage() {
               <Button
                 variant="secondary"
                 onClick={handleGeneratePreview}
-                disabled={isPreviewing || isRendering || !selectedPartId}
+                disabled={isPreviewing || isRendering || jobActive || !selectedPartId}
+                title={jobActive ? JOB_ACTIVE_MESSAGE : undefined}
               >
                 {isPreviewing ? 'プレビュー生成中...' : '選択パートをプレビュー'}
               </Button>
               <Button
                 variant="success"
                 onClick={handleRender}
-                disabled={isRendering || isPreviewing || project.parts.length === 0}
+                disabled={isRendering || isPreviewing || jobActive || project.parts.length === 0}
+                title={jobActive ? JOB_ACTIVE_MESSAGE : undefined}
               >
                 {isRendering ? '書き出し中...' : '動画を書き出し'}
               </Button>
@@ -597,6 +649,11 @@ export function VideoManagePage() {
             </div>
           }
         >
+          {jobActive && (
+            <p role="status" className="mb-2 text-xs font-semibold text-blue-700">
+              {JOB_ACTIVE_MESSAGE}
+            </p>
+          )}
           <div className="flex flex-wrap items-center gap-2 text-xs">
             <Badge tone={missingAudioCount === 0 ? 'success' : 'warning'}>
               音声未生成 {missingAudioCount}

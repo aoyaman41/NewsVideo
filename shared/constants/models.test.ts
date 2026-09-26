@@ -39,6 +39,27 @@ import {
   isOpenAIImageModel,
   OPENAI_IMAGE_MODELS,
 } from './models';
+// Gemini 画像の GA 化(M1)も他の変更と衝突しないよう別の import にまとめる
+import {
+  GEMINI_IMAGE_MODELS,
+  imageModelFingerprintId,
+  LEGACY_FALLBACK_GEMINI_IMAGE_MODEL,
+  normalizeImageModelId,
+} from './models';
+// M3: 既定のテキストモデルと、選択肢から外した旧モデルの扱い
+import {
+  DEFAULT_IMAGE_PROMPT_TEXT_MODEL,
+  DEFAULT_SCRIPT_TEXT_MODEL,
+  LEGACY_GEMINI_TTS_MODELS,
+  LEGACY_IMAGE_MODELS,
+  LEGACY_TEXT_COMPLETION_MODELS,
+  OPENAI_TEXT_COMPLETION_MODEL,
+  SELECTABLE_GEMINI_TTS_MODELS,
+  SELECTABLE_IMAGE_MODELS,
+  SELECTABLE_TEXT_COMPLETION_MODELS,
+  isTextCompletionModel,
+  supportsOpenAIPromptCacheBreakpoint,
+} from './models';
 
 describe('text completion models', () => {
   it('composes the selector list from OpenAI, Gemini and Anthropic provider lists', () => {
@@ -82,7 +103,7 @@ describe('Claude text completion models', () => {
     expect(isAnthropicTextCompletionModel(undefined)).toBe(false);
   });
 
-  it('offers every documented effort for Opus 5.5 and defaults to high', () => {
+  it('offers every documented effort for Opus 5.5 and defaults to medium', () => {
     expect(CLAUDE_EFFORTS).toEqual(['default', 'low', 'medium', 'high', 'xhigh', 'max']);
     expect(getSupportedClaudeEfforts('claude-opus-5-5')).toEqual([
       'low',
@@ -91,7 +112,7 @@ describe('Claude text completion models', () => {
       'xhigh',
       'max',
     ]);
-    expect(getDefaultClaudeEffort('claude-opus-5-5')).toBe('high');
+    expect(getDefaultClaudeEffort('claude-opus-5-5')).toBe('medium');
   });
 
   it('validates the persisted effort vocabulary', () => {
@@ -127,8 +148,9 @@ describe('OpenAI reasoning efforts', () => {
     }
   );
 
-  it('keeps max in the persisted effort vocabulary', () => {
+  it('keeps max in the persisted effort vocabulary and drops the unsupported minimal', () => {
     expect(OPENAI_REASONING_EFFORTS).toContain('max');
+    expect(OPENAI_REASONING_EFFORTS).not.toContain('minimal');
   });
 
   it('returns only efforts shared by every selected OpenAI model', () => {
@@ -155,7 +177,6 @@ describe('supportsOpenAITemperature', () => {
   it('disables temperature for omitted or non-none reasoning effort values', () => {
     expect(supportsOpenAITemperature('gpt-5.2', null)).toBe(false);
     expect(supportsOpenAITemperature('gpt-5.2', 'default')).toBe(false);
-    expect(supportsOpenAITemperature('gpt-5.2', 'minimal')).toBe(false);
     expect(supportsOpenAITemperature('gpt-5.5', 'high')).toBe(false);
     expect(supportsOpenAITemperature('gpt-5.4', 'high')).toBe(false);
     expect(supportsOpenAITemperature('gpt-5.4', 'xhigh')).toBe(false);
@@ -217,10 +238,12 @@ describe('Gemini TTS models', () => {
     expect(getGeminiTtsModelCapabilities('gemini-3.8-flash-tts')).toEqual({
       styleViaSpeechMetadata: true,
       defaultAudioFormat: 'wav',
+      angleBracketTags: true,
     });
     expect(getGeminiTtsModelCapabilities('gemini-3.8-flash-lite-tts')).toEqual({
       styleViaSpeechMetadata: true,
       defaultAudioFormat: 'wav',
+      angleBracketTags: true,
     });
     for (const model of [
       'gemini-3.1-flash-tts-preview',
@@ -230,6 +253,7 @@ describe('Gemini TTS models', () => {
       expect(getGeminiTtsModelCapabilities(model)).toEqual({
         styleViaSpeechMetadata: false,
         defaultAudioFormat: 'pcm',
+        angleBracketTags: false,
       });
     }
   });
@@ -257,11 +281,45 @@ describe('OpenAI image models', () => {
     expect(getImageModelLabel(model)).toBe(label);
   });
 
-  it('keeps Gemini image models on the Gemini provider and the default unchanged', () => {
-    expect(DEFAULT_IMAGE_MODEL).toBe('gemini-3.1-flash-image-preview');
-    expect(getImageModelProvider('gemini-3.1-flash-image-preview')).toBe('gemini');
-    expect(getImageModelProvider('gemini-3-pro-image-preview')).toBe('gemini');
-    expect(isOpenAIImageModel('gemini-3.1-flash-image-preview')).toBe(false);
+  it('defaults new settings to GPT Image 2.5 Sunburst', () => {
+    expect(DEFAULT_IMAGE_MODEL).toBe('gpt-image-2.5-sunburst');
+    expect(getImageModelProvider(DEFAULT_IMAGE_MODEL)).toBe('openai');
+  });
+
+  it.each([
+    ['gemini-3.1-flash-image', 'Gemini 3.1 Flash Image'],
+    ['gemini-3-pro-image', 'Gemini 3 Pro Image'],
+  ] as const)('registers the GA Gemini image model %s', (model, label) => {
+    expect(GEMINI_IMAGE_MODELS).toContain(model);
+    expect(isImageModel(model)).toBe(true);
+    expect(isGeminiImageModel(model)).toBe(true);
+    expect(isOpenAIImageModel(model)).toBe(false);
+    expect(getImageModelProvider(model)).toBe('gemini');
+    expect(getImageModelLabel(model)).toBe(label);
+  });
+
+  it.each([
+    ['gemini-3.1-flash-image-preview', 'gemini-3.1-flash-image'],
+    ['gemini-3-pro-image-preview', 'gemini-3-pro-image'],
+  ] as const)('reads the shut-down preview id %s as its GA successor', (legacy, current) => {
+    expect(isImageModel(legacy)).toBe(false);
+    expect(normalizeImageModelId(legacy)).toBe(current);
+    // 変更検知の指紋は、読み替えの前後で同じ値になる
+    expect(imageModelFingerprintId(current)).toBe(legacy);
+    expect(imageModelFingerprintId(legacy)).toBe(legacy);
+  });
+
+  it('leaves current and unknown image model ids unchanged', () => {
+    for (const model of IMAGE_MODELS) expect(normalizeImageModelId(model)).toBe(model);
+    expect(normalizeImageModelId('unknown-model')).toBe('unknown-model');
+    expect(normalizeImageModelId(undefined)).toBeUndefined();
+    expect(normalizeImageModelId('toString')).toBe('toString');
+    expect(imageModelFingerprintId('gpt-image-2.5-sunburst')).toBe('gpt-image-2.5-sunburst');
+    expect(imageModelFingerprintId(undefined)).toBeUndefined();
+  });
+
+  it('keeps the legacy Gemini image fallback independent of the default', () => {
+    expect(LEGACY_FALLBACK_GEMINI_IMAGE_MODEL).toBe('gemini-3.1-flash-image-preview');
   });
 
   it('rejects dated snapshots and unknown GPT Image ids', () => {
@@ -269,5 +327,59 @@ describe('OpenAI image models', () => {
     expect(isOpenAIImageModel('gpt-image-2.5-flare-2026-09-08')).toBe(false);
     expect(isOpenAIImageModel('gpt-image-2.5')).toBe(false);
     expect(isOpenAIImageModel(undefined)).toBe(false);
+  });
+});
+
+describe('default text models and selectable model lists', () => {
+  it('uses Claude Opus 5.5 for new script and image prompt settings', () => {
+    expect(DEFAULT_SCRIPT_TEXT_MODEL).toBe('claude-opus-5-5');
+    expect(DEFAULT_IMAGE_PROMPT_TEXT_MODEL).toBe('claude-opus-5-5');
+    // model が記録されていない過去の OpenAI レコード用の代替値は旧来のまま
+    expect(OPENAI_TEXT_COMPLETION_MODEL).toBe('gpt-5.2');
+  });
+
+  it('removes legacy text models from the selector but keeps them valid', () => {
+    expect(LEGACY_TEXT_COMPLETION_MODELS).toEqual(['gpt-5.5', 'gpt-5.4', 'gpt-5.2']);
+    expect(SELECTABLE_TEXT_COMPLETION_MODELS).toEqual([
+      'gpt-6-astra',
+      'gpt-5.6-sol',
+      'gpt-5.6-terra',
+      'gpt-5.6-luna',
+      'gemini-3.1-pro',
+      'claude-opus-5-5',
+    ]);
+    for (const model of LEGACY_TEXT_COMPLETION_MODELS) {
+      expect(isTextCompletionModel(model)).toBe(true);
+      expect(TEXT_COMPLETION_MODELS).toContain(model);
+    }
+  });
+
+  it('offers only the Gemini 3.8 TTS models and keeps older TTS ids valid', () => {
+    expect(SELECTABLE_GEMINI_TTS_MODELS).toEqual([
+      'gemini-3.8-flash-tts',
+      'gemini-3.8-flash-lite-tts',
+    ]);
+    for (const model of LEGACY_GEMINI_TTS_MODELS) {
+      expect(isGeminiTtsModel(model)).toBe(true);
+      expect(SELECTABLE_GEMINI_TTS_MODELS).not.toContain(model);
+    }
+  });
+
+  it('removes GPT Image 2 from the selector but keeps it valid', () => {
+    expect(LEGACY_IMAGE_MODELS).toEqual(['gpt-image-2']);
+    expect(SELECTABLE_IMAGE_MODELS).not.toContain('gpt-image-2');
+    expect(SELECTABLE_IMAGE_MODELS).toEqual(
+      IMAGE_MODELS.filter((model) => model !== 'gpt-image-2')
+    );
+    expect(isImageModel('gpt-image-2')).toBe(true);
+  });
+
+  it('allows explicit OpenAI prompt cache breakpoints only on gpt-5.6 and later', () => {
+    for (const model of ['gpt-6-astra', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna'] as const) {
+      expect(supportsOpenAIPromptCacheBreakpoint(model)).toBe(true);
+    }
+    for (const model of ['gpt-5.5', 'gpt-5.4', 'gpt-5.2'] as const) {
+      expect(supportsOpenAIPromptCacheBreakpoint(model)).toBe(false);
+    }
   });
 });

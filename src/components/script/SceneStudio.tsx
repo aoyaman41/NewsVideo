@@ -4,6 +4,8 @@ import { splitScene, mergeSceneWithNext } from '../../../shared/project/scenes';
 import { toLocalFileUrl } from '../../utils/toLocalFileUrl';
 import { Button, Card } from '../ui';
 import { projectClient } from '../../stores/projectStore';
+import { withRenderConflictRetry } from '../../utils/renderRetry';
+import { stripRenderConflictMarker } from '../../../shared/project/renderIntent';
 
 export function SceneStudio({
   project,
@@ -38,12 +40,18 @@ export function SceneStudio({
     setBusy(true);
     setError('');
     try {
-      await projectClient.flush(project.id);
-      const result = await window.electronAPI.video.preview(part.id);
+      const result = await withRenderConflictRetry(project.id, async () => {
+        // 現在の編集を保存し、その内容を渡す(Main 側で最新の保存内容と照合する)
+        await projectClient.flush(project.id);
+        const intended = await projectClient.load(project.id);
+        return window.electronAPI.video.preview(part.id, intended);
+      });
       setPreview(result.previewPath);
       setPreviewVersion(Date.now());
     } catch (failure) {
-      setError(failure instanceof Error ? failure.message : String(failure));
+      setError(
+        failure instanceof Error ? stripRenderConflictMarker(failure.message) : String(failure)
+      );
     } finally {
       setBusy(false);
     }

@@ -187,6 +187,34 @@ export const projectClient = {
   async flushAll() {
     await Promise.all([...entries.keys()].map(flush));
   },
+  /**
+   * 未保存の変更がないときだけ、保存済みの最新を読み直す。読み直したら true を返す。
+   * 書き出しの競合エラーの後、画面の保持データを最新にしてから 1 回だけ再試行するために使う。
+   */
+  async reloadIfClean(id: string): Promise<boolean> {
+    const isClean = () => {
+      const state = read(id);
+      return (
+        Boolean(state.project) &&
+        !pending.has(id) &&
+        !state.conflicts.length &&
+        comparable(state.project) === comparable(state.saved)
+      );
+    };
+    if (!isClean()) return false;
+    const project = await window.electronAPI.project.load(id);
+    const latest = read(id);
+    if (!isClean() || (project.revision ?? 0) < (latest.project?.revision ?? 0)) return false;
+    entries.set(id, {
+      ...latest,
+      project,
+      saved: structuredClone(project),
+      error: null,
+      lastSavedAt: project.updatedAt,
+    });
+    notify();
+    return true;
+  },
 };
 
 export function useProjectState(id: string | undefined) {

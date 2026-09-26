@@ -3,6 +3,7 @@ import type { UsageRecord, Project } from './schema';
 import { partFreshness } from './integrity';
 import { estimateUsageCostUsd, normalizeCostRates } from '../../src/utils/cost';
 import { getTextCompletionModelProvider, isTextCompletionModel } from '../constants/models';
+import { getImageSizeTier } from '../constants/imageQuality';
 
 export type GenerationOperation = 'script' | 'prompt' | 'image' | 'audio';
 
@@ -27,6 +28,11 @@ export function estimateGenerationUsd(
     : model.startsWith('gpt')
       ? 'openai'
       : 'gemini';
+  // 実際に生成するサイズ区分で見積もる(Gemini は Full HD でも 2K で生成するため、2K と同じ見積もりになる)
+  const imageSizeTier = getImageSizeTier(
+    provider === 'openai' ? 'openai' : 'gemini',
+    settings.imageResolution
+  );
   const record: UsageRecord = {
     id: 'estimate',
     createdAt: '',
@@ -37,9 +43,9 @@ export function estimateGenerationUsd(
     inputTokens: Math.ceil(text.length / 1.5) + 1500,
     outputTokens:
       kind === 'image'
-        ? settings.imageResolution === '4k'
+        ? imageSizeTier === '4K'
           ? 32000
-          : settings.imageResolution === '2k'
+          : imageSizeTier === '2K'
             ? 16000
             : 8000
         : kind === 'audio'
@@ -47,8 +53,7 @@ export function estimateGenerationUsd(
           : 3000 * count,
     imageCount: kind === 'image' ? count : undefined,
     imageResolution: settings.imageResolution,
-    imageSizeTier:
-      settings.imageResolution === '4k' ? '4K' : settings.imageResolution === '2k' ? '2K' : '1K',
+    imageSizeTier,
   };
   return estimateUsageCostUsd(record, normalizeCostRates(settings.cost));
 }

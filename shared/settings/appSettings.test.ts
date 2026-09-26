@@ -7,7 +7,7 @@ describe('parseSettingsUpdate', () => {
       scriptTextModel: 'gpt-5.6-sol',
       imagePromptTextModel: 'gpt-5.6-terra',
       ttsModel: 'gemini-3.1-flash-tts-preview',
-      imageModel: 'gemini-3-pro-image-preview',
+      imageModel: 'gemini-3-pro-image',
       imageResolution: '2k',
       openaiReasoningEffort: 'max',
       geminiThinkingLevel: 'low',
@@ -17,7 +17,7 @@ describe('parseSettingsUpdate', () => {
     expect(parsed.scriptTextModel).toBe('gpt-5.6-sol');
     expect(parsed.imagePromptTextModel).toBe('gpt-5.6-terra');
     expect(parsed.ttsModel).toBe('gemini-3.1-flash-tts-preview');
-    expect(parsed.imageModel).toBe('gemini-3-pro-image-preview');
+    expect(parsed.imageModel).toBe('gemini-3-pro-image');
     expect(parsed.imageResolution).toBe('2k');
     expect(parsed.openaiReasoningEffort).toBe('max');
     expect(parsed.geminiThinkingLevel).toBe('low');
@@ -142,29 +142,84 @@ describe('normalizeSettings', () => {
 
     expect(normalized.openaiReasoningEffort).toBe('none');
   });
+
+  it('replaces a saved minimal effort even when no OpenAI model is selected', () => {
+    const normalized = normalizeSettings({
+      scriptTextModel: 'claude-opus-5-5',
+      imagePromptTextModel: 'claude-opus-5-5',
+      openaiReasoningEffort: 'minimal',
+    });
+
+    expect(normalized.openaiReasoningEffort).toBe(DEFAULT_SETTINGS.openaiReasoningEffort);
+    expect(() => parseSettingsUpdate({ openaiReasoningEffort: 'minimal' })).toThrow();
+  });
+
+  it('uses Claude Opus 5.5 for new settings and keeps saved legacy text models', () => {
+    expect(DEFAULT_SETTINGS.scriptTextModel).toBe('claude-opus-5-5');
+    expect(DEFAULT_SETTINGS.imagePromptTextModel).toBe('claude-opus-5-5');
+    expect(normalizeSettings({}).scriptTextModel).toBe('claude-opus-5-5');
+
+    const legacy = normalizeSettings({
+      scriptTextModel: 'gpt-5.2',
+      imagePromptTextModel: 'gpt-5.5',
+      ttsModel: 'gemini-2.5-flash-preview-tts',
+      imageModel: 'gpt-image-2',
+    });
+    expect(legacy).toMatchObject({
+      scriptTextModel: 'gpt-5.2',
+      imagePromptTextModel: 'gpt-5.5',
+      ttsModel: 'gemini-2.5-flash-preview-tts',
+      imageModel: 'gpt-image-2',
+    });
+  });
 });
 
 describe('Claude settings', () => {
-  it('fills claudeEffort with high for settings saved before Claude support', () => {
+  it('fills both Claude efforts with medium for settings saved before Claude support', () => {
     const legacySettings: Record<string, unknown> = { ...DEFAULT_SETTINGS };
     delete legacySettings.claudeEffort;
+    delete legacySettings.claudeImagePromptEffort;
 
     const normalized = normalizeSettings(legacySettings);
 
-    expect(DEFAULT_SETTINGS.claudeEffort).toBe('high');
-    expect(normalized.claudeEffort).toBe('high');
+    expect(DEFAULT_SETTINGS.claudeEffort).toBe('medium');
+    expect(DEFAULT_SETTINGS.claudeImagePromptEffort).toBe('medium');
+    expect(normalized.claudeEffort).toBe('medium');
+    expect(normalized.claudeImagePromptEffort).toBe('medium');
     expect(normalized.scriptTextModel).toBe(DEFAULT_SETTINGS.scriptTextModel);
     expect(normalized.imagePromptTextModel).toBe(DEFAULT_SETTINGS.imagePromptTextModel);
   });
 
   it.each(['bad-effort', 'default', 'none', 42])(
-    'replaces an invalid or placeholder claudeEffort (%s) with the model default',
-    (claudeEffort) => {
-      const normalized = normalizeSettings({ scriptTextModel: 'claude-opus-5-5', claudeEffort });
+    'replaces an invalid or placeholder Claude effort (%s) with the model default',
+    (effort) => {
+      const normalized = normalizeSettings({
+        scriptTextModel: 'claude-opus-5-5',
+        imagePromptTextModel: 'claude-opus-5-5',
+        claudeEffort: effort,
+        claudeImagePromptEffort: effort,
+      });
 
-      expect(normalized.claudeEffort).toBe('high');
+      expect(normalized.claudeEffort).toBe('medium');
+      expect(normalized.claudeImagePromptEffort).toBe('medium');
     }
   );
+
+  it('keeps the script and image prompt efforts independent', () => {
+    const normalized = normalizeSettings({
+      scriptTextModel: 'claude-opus-5-5',
+      imagePromptTextModel: 'claude-opus-5-5',
+      claudeEffort: 'high',
+      claudeImagePromptEffort: 'low',
+    });
+
+    expect(normalized.claudeEffort).toBe('high');
+    expect(normalized.claudeImagePromptEffort).toBe('low');
+    expect(parseSettingsUpdate({ claudeImagePromptEffort: 'xhigh' })).toEqual({
+      claudeImagePromptEffort: 'xhigh',
+    });
+    expect(() => parseSettingsUpdate({ claudeImagePromptEffort: 'none' })).toThrow();
+  });
 
   it('keeps a valid claudeEffort and Claude model selections', () => {
     const normalized = normalizeSettings({
@@ -214,9 +269,30 @@ it('round-trips Astra and GPT Image 2 settings', () => {
 });
 
 it.each(['gpt-image-2.5-sunburst', 'gpt-image-2.5-flare'] as const)(
-  'round-trips the %s image model and keeps the Gemini default for new settings',
+  'round-trips the %s image model and defaults new settings to GPT Image 2.5 Sunburst',
   (imageModel) => {
     expect(normalizeSettings(parseSettingsUpdate({ imageModel }))).toMatchObject({ imageModel });
-    expect(DEFAULT_SETTINGS.imageModel).toBe('gemini-3.1-flash-image-preview');
+    expect(DEFAULT_SETTINGS.imageModel).toBe('gpt-image-2.5-sunburst');
   }
 );
+
+describe('Gemini image model GA migration', () => {
+  it.each([
+    ['gemini-3.1-flash-image-preview', 'gemini-3.1-flash-image'],
+    ['gemini-3-pro-image-preview', 'gemini-3-pro-image'],
+  ] as const)('reads a saved %s as %s', (legacy, current) => {
+    expect(normalizeSettings({ imageModel: legacy }).imageModel).toBe(current);
+    expect(parseSettingsUpdate({ imageModel: legacy }).imageModel).toBe(current);
+  });
+
+  it('keeps a saved Gemini or OpenAI image model and resets only unknown values', () => {
+    expect(normalizeSettings({ imageModel: 'gemini-3-pro-image' }).imageModel).toBe(
+      'gemini-3-pro-image'
+    );
+    expect(normalizeSettings({ imageModel: 'gpt-image-2' }).imageModel).toBe('gpt-image-2');
+    expect(normalizeSettings({ imageModel: 'retired-model' }).imageModel).toBe(
+      'gpt-image-2.5-sunburst'
+    );
+    expect(normalizeSettings({}).imageModel).toBe('gpt-image-2.5-sunburst');
+  });
+});

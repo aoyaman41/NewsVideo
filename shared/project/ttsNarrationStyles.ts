@@ -34,6 +34,9 @@ export function isTtsNarrationStylePreset(value: unknown): value is TtsNarration
   );
 }
 
+/**
+ * 3.1 / 2.5 の TTS 用。日本語の命令文を本文の前に付ける方式で使う。
+ */
 export function buildTtsNarrationInstruction(
   preset: TtsNarrationStylePreset,
   note?: string | null
@@ -42,4 +45,30 @@ export function buildTtsNarrationInstruction(
   const trimmedNote = typeof note === 'string' ? note.trim() : '';
   if (!trimmedNote) return base;
   return `${base}\n補足: ${trimmedNote}`;
+}
+
+// 3.8 TTS 用の短いスタイル記述子。公式は短い記述子を推奨し、長い指示は声のぶれの原因になるとしている
+const TTS_STYLE_DESCRIPTORS: Record<TtsNarrationStylePreset, string> = {
+  news: 'calm, clear news narration',
+  explain: 'warm, measured explainer narration',
+  casual: 'friendly, relaxed conversational narration',
+  promo: 'bright, upbeat promotional narration',
+};
+
+/** 3.8 TTS のスタイルに付ける自由記述の補足の上限(文字数)。超えた分は切り捨てる */
+export const TTS_STYLE_NOTE_MAX_CHARS = 40;
+
+/**
+ * 3.8 TTS 用のスタイル(part.speechMetadata.style)。プリセットの短い記述子の末尾に、
+ * 自由記述の補足(narrationStyleNote)を 1 行にまとめて短く切り詰めて付ける。
+ */
+export function buildTtsStyleDescriptor(
+  preset: TtsNarrationStylePreset,
+  note?: string | null
+): string {
+  const descriptor = TTS_STYLE_DESCRIPTORS[preset];
+  const normalizedNote = typeof note === 'string' ? note.replace(/\s+/g, ' ').trim() : '';
+  if (!normalizedNote) return descriptor;
+  const shortNote = Array.from(normalizedNote).slice(0, TTS_STYLE_NOTE_MAX_CHARS).join('').trim();
+  return `${descriptor}; ${shortNote}`;
 }

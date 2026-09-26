@@ -163,6 +163,24 @@ it('pauses before spending beyond the planning budget', async () => {
   expect(invoke).not.toHaveBeenCalled();
 });
 
+it('does not stop at the budget check just because a charge could not be confirmed', async () => {
+  const original = invoke.getMockImplementation()!;
+  invoke.mockImplementation(async (name: string, ...args: unknown[]) => {
+    const result = await original(name, ...args);
+    if (name !== 'image:generate') return result;
+    // 料金未確定: 使用量が返らなかった画像(このあとに音声のリクエストが続く)
+    const generation = { ...result.metadata.generation };
+    delete generation.inputTokens;
+    delete generation.outputTokens;
+    return { ...result, metadata: { ...result.metadata, generation } };
+  });
+  await engine.start(id, { mode: 'automatic', targetPartCount: 1, budgetUsd: 5 });
+  await engine.wait(id);
+  const job = (await repository.load(id)).job!;
+  expect(job).toMatchObject({ status: 'completed', unknownCharges: 1 });
+  expect(job.stage).not.toBe('予算確認');
+});
+
 it('recognizes interrupted jobs after a process restart without automatically repeating paid requests', async () => {
   await engine.start(id, { mode: 'review', targetPartCount: 1 });
   await engine.wait(id);

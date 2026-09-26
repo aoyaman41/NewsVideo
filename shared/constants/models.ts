@@ -20,16 +20,36 @@ export type GeminiTextCompletionModel = (typeof GEMINI_TEXT_COMPLETION_MODELS)[n
 export type AnthropicTextCompletionModel = (typeof ANTHROPIC_TEXT_COMPLETION_MODELS)[number];
 export type TextCompletionProvider = 'openai' | 'gemini' | 'anthropic';
 
+/**
+ * model が記録されていない OpenAI のテキスト usage と料金計算の代替値。
+ * 既定のテキストモデルを変えても過去レコードのコストが変わらないよう、旧来の既定値に固定する。
+ */
 export const OPENAI_TEXT_COMPLETION_MODEL: OpenAITextCompletionModel = 'gpt-5.2';
-export const DEFAULT_SCRIPT_TEXT_MODEL: TextCompletionModel = OPENAI_TEXT_COMPLETION_MODEL;
-export const DEFAULT_IMAGE_PROMPT_TEXT_MODEL: TextCompletionModel = OPENAI_TEXT_COMPLETION_MODEL;
 export const GEMINI_TEXT_COMPLETION_MODEL: TextCompletionModel = 'gemini-3.1-pro';
 export const ANTHROPIC_TEXT_COMPLETION_MODEL: AnthropicTextCompletionModel = 'claude-opus-5-5';
+/** 新規設定時の初期値。保存済みの scriptTextModel / imagePromptTextModel は normalizeSettings で保持される。 */
+export const DEFAULT_SCRIPT_TEXT_MODEL: TextCompletionModel = ANTHROPIC_TEXT_COMPLETION_MODEL;
+export const DEFAULT_IMAGE_PROMPT_TEXT_MODEL: TextCompletionModel = ANTHROPIC_TEXT_COMPLETION_MODEL;
 
+/**
+ * 設定画面の選択肢から外した旧テキストモデル。検証・正規化・料金表・既存データの読み込みでは
+ * 引き続き有効な値として扱う(TEXT_COMPLETION_MODELS には残す)。
+ */
+export const LEGACY_TEXT_COMPLETION_MODELS = [
+  'gpt-5.5',
+  'gpt-5.4',
+  'gpt-5.2',
+] as const satisfies readonly TextCompletionModel[];
+/** 設定画面で選べるテキストモデル */
+export const SELECTABLE_TEXT_COMPLETION_MODELS: readonly TextCompletionModel[] =
+  TEXT_COMPLETION_MODELS.filter(
+    (model) => !(LEGACY_TEXT_COMPLETION_MODELS as readonly string[]).includes(model)
+  );
+
+// minimal はどのモデルも対応していないため外した。保存済みの minimal は normalizeSettings で置き換える
 export const OPENAI_REASONING_EFFORTS = [
   'default',
   'none',
-  'minimal',
   'low',
   'medium',
   'high',
@@ -53,16 +73,28 @@ export const OPENAI_IMAGE_MODELS = [
   'gpt-image-2.5-flare',
   'gpt-image-2',
 ] as const;
-export const GEMINI_IMAGE_MODELS = [
-  'gemini-3.1-flash-image-preview',
-  'gemini-3-pro-image-preview',
-] as const;
+// preview 版(gemini-3.1-flash-image-preview / gemini-3-pro-image-preview)は 2026-06-25 に提供終了。
+// 保存済みの preview 版の ID は normalizeImageModelId で GA 版へ読み替える。
+export const GEMINI_IMAGE_MODELS = ['gemini-3.1-flash-image', 'gemini-3-pro-image'] as const;
 export const IMAGE_MODELS = [...OPENAI_IMAGE_MODELS, ...GEMINI_IMAGE_MODELS] as const;
 export type OpenAIImageModel = (typeof OPENAI_IMAGE_MODELS)[number];
 export type GeminiImageModel = (typeof GEMINI_IMAGE_MODELS)[number];
 export type ImageModel = (typeof IMAGE_MODELS)[number];
 export type ImageModelProvider = 'openai' | 'gemini';
-export const DEFAULT_IMAGE_MODEL: ImageModel = 'gemini-3.1-flash-image-preview';
+export const DEFAULT_IMAGE_MODEL: ImageModel = 'gpt-image-2.5-sunburst';
+
+/** 提供終了した preview 版の ID → 後継の GA 版の ID */
+export const LEGACY_IMAGE_MODEL_ALIASES: Readonly<Record<string, GeminiImageModel>> = {
+  'gemini-3.1-flash-image-preview': 'gemini-3.1-flash-image',
+  'gemini-3-pro-image-preview': 'gemini-3-pro-image',
+};
+
+/**
+ * model が記録されていない、または料金表にない Gemini 画像レコードの計算に使うモデル。
+ * 既定の画像モデル(DEFAULT_IMAGE_MODEL)を変えても過去レコードのコストが変わらないよう、
+ * 既定値が Gemini だった当時のモデルに固定する。旧形式のコスト設定(imageOutputPerImageUsd 等)の適用先でもある。
+ */
+export const LEGACY_FALLBACK_GEMINI_IMAGE_MODEL = 'gemini-3.1-flash-image-preview';
 
 export const IMAGE_RESOLUTIONS = ['fhd', '2k', '4k'] as const;
 export type ImageResolution = (typeof IMAGE_RESOLUTIONS)[number];
@@ -86,8 +118,8 @@ export const IMAGE_MODEL_LABELS: Record<ImageModel, string> = {
   'gpt-image-2.5-sunburst': 'GPT Image 2.5 Sunburst',
   'gpt-image-2.5-flare': 'GPT Image 2.5 Flare',
   'gpt-image-2': 'GPT Image 2',
-  'gemini-3.1-flash-image-preview': 'Gemini 3.1 Flash Image',
-  'gemini-3-pro-image-preview': 'Gemini 3 Pro Image',
+  'gemini-3.1-flash-image': 'Gemini 3.1 Flash Image',
+  'gemini-3-pro-image': 'Gemini 3 Pro Image',
 };
 
 export const IMAGE_RESOLUTION_LABELS: Record<ImageResolution, string> = {
@@ -116,6 +148,20 @@ export const GEMINI_TTS_MODEL_LABELS: Record<GeminiTtsModel, string> = {
 /** 新規設定時の初期値。保存済みの ttsModel は normalizeSettings で保持される。 */
 export const DEFAULT_GEMINI_TTS_MODEL: GeminiTtsModel = 'gemini-3.8-flash-tts';
 
+/**
+ * 設定画面の選択肢から外した旧 TTS モデル(公式の後継は 3.8 Flash / Flash-Lite)。
+ * 検証・正規化・料金表・既存データの読み込みでは引き続き有効な値として扱う。
+ */
+export const LEGACY_GEMINI_TTS_MODELS = [
+  'gemini-3.1-flash-tts-preview',
+  'gemini-2.5-pro-preview-tts',
+  'gemini-2.5-flash-preview-tts',
+] as const satisfies readonly GeminiTtsModel[];
+/** 設定画面で選べる TTS モデル */
+export const SELECTABLE_GEMINI_TTS_MODELS: readonly GeminiTtsModel[] = GEMINI_TTS_MODELS.filter(
+  (model) => !(LEGACY_GEMINI_TTS_MODELS as readonly string[]).includes(model)
+);
+
 export type GeminiTtsModelCapabilities = {
   /**
    * true: 入力テキストを一字一句そのまま読み上げるモデル。話し方の指示は本文に連結せず、
@@ -127,14 +173,38 @@ export type GeminiTtsModelCapabilities = {
    * 参考情報。デコードはモデル名ではなく応答データの先頭(RIFF)で判定する。
    */
   defaultAudioFormat: 'wav' | 'pcm';
+  /**
+   * true: 本文中の `<...>` を声の演出タグとして解釈するモデル。半角の `<` `>` は全角に変換してから送る。
+   */
+  angleBracketTags: boolean;
 };
 
 const GEMINI_TTS_MODEL_CAPABILITIES: Record<GeminiTtsModel, GeminiTtsModelCapabilities> = {
-  'gemini-3.8-flash-tts': { styleViaSpeechMetadata: true, defaultAudioFormat: 'wav' },
-  'gemini-3.8-flash-lite-tts': { styleViaSpeechMetadata: true, defaultAudioFormat: 'wav' },
-  'gemini-3.1-flash-tts-preview': { styleViaSpeechMetadata: false, defaultAudioFormat: 'pcm' },
-  'gemini-2.5-pro-preview-tts': { styleViaSpeechMetadata: false, defaultAudioFormat: 'pcm' },
-  'gemini-2.5-flash-preview-tts': { styleViaSpeechMetadata: false, defaultAudioFormat: 'pcm' },
+  'gemini-3.8-flash-tts': {
+    styleViaSpeechMetadata: true,
+    defaultAudioFormat: 'wav',
+    angleBracketTags: true,
+  },
+  'gemini-3.8-flash-lite-tts': {
+    styleViaSpeechMetadata: true,
+    defaultAudioFormat: 'wav',
+    angleBracketTags: true,
+  },
+  'gemini-3.1-flash-tts-preview': {
+    styleViaSpeechMetadata: false,
+    defaultAudioFormat: 'pcm',
+    angleBracketTags: false,
+  },
+  'gemini-2.5-pro-preview-tts': {
+    styleViaSpeechMetadata: false,
+    defaultAudioFormat: 'pcm',
+    angleBracketTags: false,
+  },
+  'gemini-2.5-flash-preview-tts': {
+    styleViaSpeechMetadata: false,
+    defaultAudioFormat: 'pcm',
+    angleBracketTags: false,
+  },
 };
 
 const TEXT_COMPLETION_MODEL_SET = new Set<string>(TEXT_COMPLETION_MODELS);
@@ -287,10 +357,11 @@ const CLAUDE_EFFORTS_BY_MODEL: Record<
   'claude-opus-5-5': ['low', 'medium', 'high', 'xhigh', 'max'],
 };
 
-// API 側の既定値は medium だが、脚本品質を重視してアプリの既定値は high にする
+// 公式の推奨どおり medium から始める。台本用(claudeEffort)と画像プロンプト用
+// (claudeImagePromptEffort)は別の設定だが、既定値はどちらも medium
 const CLAUDE_DEFAULT_EFFORT_BY_MODEL: Record<AnthropicTextCompletionModel, SelectableClaudeEffort> =
   {
-    'claude-opus-5-5': 'high',
+    'claude-opus-5-5': 'medium',
   };
 
 export function getSupportedClaudeEfforts(
@@ -307,6 +378,32 @@ export function getDefaultClaudeEffort(
 
 export function isImageModel(value: unknown): value is ImageModel {
   return typeof value === 'string' && IMAGE_MODEL_SET.has(value);
+}
+
+/**
+ * 保存済みの画像モデル ID を現行の ID に読み替える(提供終了した preview 版 → GA 版)。
+ * 設定・プロジェクトの generationConfig・画像生成時の設定の読み込みで使う。
+ * 過去の画像メタデータと usage に記録された ID は書き換えない(料金表に旧 ID の行を残している)。
+ * 対象外の値はそのまま返す。
+ */
+export function normalizeImageModelId<T>(value: T): T | GeminiImageModel {
+  if (typeof value !== 'string') return value;
+  return Object.prototype.hasOwnProperty.call(LEGACY_IMAGE_MODEL_ALIASES, value)
+    ? LEGACY_IMAGE_MODEL_ALIASES[value]
+    : value;
+}
+
+/**
+ * 変更検知(integrity)の指紋に入れる画像モデルの値。
+ * preview 版から GA 版への読み替えだけで画像が「更新が必要」にならないよう、
+ * GA 版の ID は読み替え前の preview 版の ID として扱う(既存の指紋と一致させる)。
+ */
+export function imageModelFingerprintId(value: unknown): unknown {
+  const normalized = normalizeImageModelId(value);
+  const legacy = Object.entries(LEGACY_IMAGE_MODEL_ALIASES).find(
+    ([, current]) => current === normalized
+  );
+  return legacy ? legacy[0] : normalized;
 }
 
 export function isOpenAIImageModel(value: unknown): value is OpenAIImageModel {
@@ -339,4 +436,31 @@ export function getGeminiTtsModelLabel(model: GeminiTtsModel): string {
 
 export function getGeminiTtsModelCapabilities(model: GeminiTtsModel): GeminiTtsModelCapabilities {
   return GEMINI_TTS_MODEL_CAPABILITIES[model];
+}
+
+// --- 選択肢から外した旧画像モデル(M3)。Gemini の画像モデル ID には依存しない形で定義する ---
+
+/**
+ * 設定画面の選択肢から外した旧画像モデル。検証・正規化・料金表・既存データの読み込みでは
+ * 引き続き有効な値として扱う(IMAGE_MODELS には残す)。
+ */
+export const LEGACY_IMAGE_MODELS = ['gpt-image-2'] as const satisfies readonly ImageModel[];
+/** 設定画面で選べる画像モデル */
+export const SELECTABLE_IMAGE_MODELS: readonly ImageModel[] = IMAGE_MODELS.filter(
+  (model) => !(LEGACY_IMAGE_MODELS as readonly string[]).includes(model)
+);
+
+/**
+ * OpenAI の明示的なキャッシュのブレークポイント(content part の prompt_cache_breakpoint)は
+ * gpt-5.6 以降のモデルだけが対応する。それ以前のモデルには送らない。
+ */
+const OPENAI_PROMPT_CACHE_BREAKPOINT_MODELS = new Set<OpenAITextCompletionModel>([
+  'gpt-6-astra',
+  'gpt-5.6-sol',
+  'gpt-5.6-terra',
+  'gpt-5.6-luna',
+]);
+
+export function supportsOpenAIPromptCacheBreakpoint(model: OpenAITextCompletionModel): boolean {
+  return OPENAI_PROMPT_CACHE_BREAKPOINT_MODELS.has(model);
 }

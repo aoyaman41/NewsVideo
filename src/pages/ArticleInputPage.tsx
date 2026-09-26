@@ -52,7 +52,8 @@ export function ArticleInputPage() {
   const [images, setImages] = useState<ImageAsset[]>([]);
   const [blobUrls, setBlobUrls] = useState<Map<string, string>>(new Map());
   const [isGenerating, setIsGenerating] = useState(false);
-  const [generationMode, setGenerationMode] = useState<'automatic' | 'review'>('review');
+  // 既定は全自動(確認のために止めない)。「確認しながら」は選択肢として残す
+  const [generationMode, setGenerationMode] = useState<'automatic' | 'review'>('automatic');
   const [budgetUsd, setBudgetUsd] = useState('5');
   const [error, setError] = useState<string | null>(null);
   const [targetPartCount, setTargetPartCount] = useState<number>(5);
@@ -107,6 +108,8 @@ export function ArticleInputPage() {
         savedPresentationProfileRef.current = JSON.stringify(normalizedProfile);
         if (typeof project.generationConfig?.targetPartCount === 'number')
           setTargetPartCount(project.generationConfig.targetPartCount);
+        // 途中で止まっているジョブは、開始したときの進め方のまま「続きから」再開できるようにする
+        if (project.job && project.job.status !== 'completed') setGenerationMode(project.job.mode);
         if (project.parts?.length) {
           const nextCount = Math.min(20, Math.max(1, project.parts.length));
           setTargetPartCount(nextCount);
@@ -569,8 +572,8 @@ export function ArticleInputPage() {
                       setGenerationMode(event.target.value as 'automatic' | 'review')
                     }
                   >
-                    <option value="review">台本・素材を確認しながら</option>
                     <option value="automatic">すべて自動で進める</option>
+                    <option value="review">台本・素材を確認しながら</option>
                   </select>
                 </label>
                 <label className="text-sm">

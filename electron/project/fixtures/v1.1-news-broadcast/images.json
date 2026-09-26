@@ -1,0 +1,30 @@
+[
+  {
+    "id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+    "filePath": "/Users/example/Library/Application Support/newsvideo/projects/報道サンプル_5b0f6c1e.newsproj/images/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa.png",
+    "sourceType": "generated",
+    "metadata": {
+      "width": 1920,
+      "height": 1080,
+      "mimeType": "image/png",
+      "fileSize": 123456,
+      "createdAt": "2026-02-10T01:30:00.000Z",
+      "promptId": "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+      "tags": []
+    }
+  },
+  {
+    "id": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+    "filePath": "/Users/example/Library/Application Support/newsvideo/projects/報道サンプル_5b0f6c1e.newsproj/images/bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb.png",
+    "sourceType": "generated",
+    "metadata": {
+      "width": 1920,
+      "height": 1080,
+      "mimeType": "image/png",
+      "fileSize": 123456,
+      "createdAt": "2026-02-10T01:30:00.000Z",
+      "promptId": "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+      "tags": []
+    }
+  }
+]

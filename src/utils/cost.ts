@@ -1,10 +1,10 @@
 import type { UsageRecord } from '../schemas';
 import {
   ANTHROPIC_TEXT_COMPLETION_MODEL,
-  DEFAULT_IMAGE_MODEL,
-  DEFAULT_SCRIPT_TEXT_MODEL,
   GEMINI_IMAGE_MODELS,
   IMAGE_SIZE_TIERS,
+  LEGACY_FALLBACK_GEMINI_IMAGE_MODEL,
+  OPENAI_TEXT_COMPLETION_MODEL,
   type ImageResolution,
   type ImageSizeTier,
 } from '../../shared/constants/models';
@@ -236,30 +236,39 @@ const DEFAULT_GEMINI_TTS_RATES: Record<string, TokenRate> = {
   },
 };
 
+const GEMINI_FLASH_IMAGE_RATE: GeminiImageRate = {
+  billingMode: 'per_token',
+  textInputPer1MTokensUsd: 0.5,
+  outputPer1MTokensUsd: GEMINI_FLASH_IMAGE_OUTPUT_PER_1M_TOKENS_USD,
+  fallbackOutputPerImageUsdBySize: GEMINI_FLASH_IMAGE_OUTPUT_PER_IMAGE_USD_BY_SIZE,
+  legacyInputPerImageUsd: LEGACY_IMAGE_INPUT_PER_IMAGE_USD,
+};
+
+const GEMINI_PRO_IMAGE_RATE: GeminiImageRate = {
+  billingMode: 'per_image',
+  textInputPer1MTokensUsd: 2.0,
+  outputPerImageUsdBySize: {
+    '1K': 0.134,
+    '2K': 0.134,
+    '4K': 0.24,
+  },
+  legacyInputPerImageUsd: LEGACY_IMAGE_INPUT_PER_IMAGE_USD,
+};
+
+// GA 版は preview 版と同額(https://ai.google.dev/gemini-api/docs/pricing 、2026-09-26 確認)。
+// preview 版の行は、過去の画像メタデータと usage に記録された ID のコスト計算用に残す。
 const DEFAULT_GEMINI_IMAGE_RATES: Record<string, GeminiImageRate> = {
-  'gemini-3.1-flash-image-preview': {
-    billingMode: 'per_token',
-    textInputPer1MTokensUsd: 0.5,
-    outputPer1MTokensUsd: GEMINI_FLASH_IMAGE_OUTPUT_PER_1M_TOKENS_USD,
-    fallbackOutputPerImageUsdBySize: GEMINI_FLASH_IMAGE_OUTPUT_PER_IMAGE_USD_BY_SIZE,
-    legacyInputPerImageUsd: LEGACY_IMAGE_INPUT_PER_IMAGE_USD,
-  },
-  'gemini-3-pro-image-preview': {
-    billingMode: 'per_image',
-    textInputPer1MTokensUsd: 2.0,
-    outputPerImageUsdBySize: {
-      '1K': 0.134,
-      '2K': 0.134,
-      '4K': 0.24,
-    },
-    legacyInputPerImageUsd: LEGACY_IMAGE_INPUT_PER_IMAGE_USD,
-  },
+  'gemini-3.1-flash-image': cloneImageRate(GEMINI_FLASH_IMAGE_RATE),
+  'gemini-3-pro-image': cloneImageRate(GEMINI_PRO_IMAGE_RATE),
+  'gemini-3.1-flash-image-preview': cloneImageRate(GEMINI_FLASH_IMAGE_RATE),
+  'gemini-3-pro-image-preview': cloneImageRate(GEMINI_PRO_IMAGE_RATE),
 };
 
 export const DEFAULT_COST_RATES: CostRates = {
   currency: 'USD',
   openai: {
-    defaultModel: DEFAULT_SCRIPT_TEXT_MODEL,
+    // model が記録されていない過去の OpenAI レコードの料金。既定のテキストモデル(Claude)には連動させない
+    defaultModel: OPENAI_TEXT_COMPLETION_MODEL,
     textRatesByModel: { ...DEFAULT_OPENAI_TEXT_RATES },
     imageModel: 'gpt-image-2',
     imageRatesByModel: { ...DEFAULT_OPENAI_IMAGE_RATES },
@@ -269,7 +278,7 @@ export const DEFAULT_COST_RATES: CostRates = {
     textRatesByModel: { ...DEFAULT_GEMINI_TEXT_RATES },
     ttsModel: LEGACY_FALLBACK_GEMINI_TTS_MODEL,
     ttsRatesByModel: { ...DEFAULT_GEMINI_TTS_RATES },
-    imageModel: DEFAULT_IMAGE_MODEL,
+    imageModel: LEGACY_FALLBACK_GEMINI_IMAGE_MODEL,
     imageRatesByModel: Object.fromEntries(
       Object.entries(DEFAULT_GEMINI_IMAGE_RATES).map(([model, rate]) => [
         model,
@@ -497,15 +506,22 @@ function getImageOutputPerImageUsd(rate: GeminiImageRate, sizeTier: ImageSizeTie
   return typeof firstDefined === 'number' ? firstDefined : 0;
 }
 
+// inputTokens(prompt_tokens)はキャッシュ読み取り・書き込みを含む合計。書き込み分は割増の単価で計上する
 function estimateOpenAITextCost(record: UsageRecord, rate: TokenRate): number {
   const totalInputTokens = Math.max(0, record.inputTokens ?? 0);
   const cachedInputTokens = Math.max(0, Math.min(record.cachedInputTokens ?? 0, totalInputTokens));
-  const uncachedInputTokens = totalInputTokens - cachedInputTokens;
+  const cacheWriteTokens = Math.max(
+    0,
+    Math.min(record.cacheWriteTokens ?? 0, totalInputTokens - cachedInputTokens)
+  );
+  const uncachedInputTokens = totalInputTokens - cachedInputTokens - cacheWriteTokens;
   const input = (uncachedInputTokens * rate.inputPer1MTokensUsd) / 1_000_000;
   const cachedInput =
     (cachedInputTokens * (rate.cachedInputPer1MTokensUsd ?? rate.inputPer1MTokensUsd)) / 1_000_000;
+  const cacheWrite =
+    (cacheWriteTokens * (rate.cacheWritePer1MTokensUsd ?? rate.inputPer1MTokensUsd)) / 1_000_000;
   const output = ((record.outputTokens ?? 0) * rate.outputPer1MTokensUsd) / 1_000_000;
-  return input + cachedInput + output;
+  return input + cachedInput + cacheWrite + output;
 }
 
 // inputTokens はキャッシュ読み取り・書き込みを含む合計として記録している
@@ -720,7 +736,8 @@ export function normalizeCostRates(input?: unknown): CostRates {
   for (const model of GEMINI_IMAGE_MODELS) {
     if (!geminiImageRatesByModel[model]) {
       geminiImageRatesByModel[model] = cloneImageRate(
-        DEFAULT_GEMINI_IMAGE_RATES[DEFAULT_IMAGE_MODEL]
+        DEFAULT_GEMINI_IMAGE_RATES[model] ??
+          DEFAULT_GEMINI_IMAGE_RATES[LEGACY_FALLBACK_GEMINI_IMAGE_MODEL]
       );
     }
   }

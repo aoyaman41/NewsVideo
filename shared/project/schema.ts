@@ -12,6 +12,7 @@ import {
 } from './presentationProfile';
 import { IMAGE_ASPECT_RATIOS, IMAGE_STYLE_PRESETS } from './imageStylePresets';
 import { TTS_NARRATION_STYLE_PRESETS } from './ttsNarrationStyles';
+import { normalizeImageModelId } from '../constants/models';
 
 // ============================================
 // 基本型スキーマ
@@ -235,6 +236,17 @@ export const presentationProfileSchema = z.object({
 
 export type PresentationProfile = z.infer<typeof presentationProfileSchema>;
 
+/**
+ * generationConfig の保存値を現行の値に読み替える(提供終了した preview 版の画像モデル ID → GA 版)。
+ * 読み込み・保存のどちらの検証でも前段で適用する。
+ */
+function normalizeGenerationConfig(value: unknown): unknown {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return value;
+  const config = value as Record<string, unknown>;
+  const imageModel = normalizeImageModelId(config.imageModel);
+  return imageModel === config.imageModel ? value : { ...config, imageModel };
+}
+
 // プロジェクトメタ情報
 export const projectMetaSchema = z.object({
   id: z.string().uuid(),
@@ -254,7 +266,9 @@ export const projectSchema = projectMetaSchema.extend({
   template: z.boolean().optional(),
   job: jobSchema.optional(),
   jobHistory: z.array(jobSchema).optional(),
-  generationConfig: z.record(z.string(), z.unknown()).optional(),
+  generationConfig: z
+    .preprocess(normalizeGenerationConfig, z.record(z.string(), z.unknown()))
+    .optional(),
   revision: z.number().int().nonnegative().optional(),
   integrity: z
     .object({

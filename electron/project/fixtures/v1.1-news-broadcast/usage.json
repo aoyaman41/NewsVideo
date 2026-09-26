@@ -1,0 +1,22 @@
+[
+  {
+    "id": "12345678-1234-4234-8234-123456789012",
+    "provider": "gemini",
+    "category": "image",
+    "model": "gemini-3-pro-image-preview",
+    "operation": "image_generate",
+    "inputTokens": 400,
+    "outputTokens": 1120,
+    "createdAt": "2026-02-10T01:30:00.000Z"
+  },
+  {
+    "id": "12345678-1234-4234-8234-123456789013",
+    "provider": "openai",
+    "category": "text",
+    "model": "gpt-5.2",
+    "operation": "script_generate",
+    "inputTokens": 1000,
+    "outputTokens": 800,
+    "createdAt": "2026-02-10T01:10:00.000Z"
+  }
+]

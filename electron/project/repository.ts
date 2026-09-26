@@ -5,6 +5,7 @@ import { randomUUID } from 'node:crypto';
 import { deriveIntegrity } from '../../shared/project/integrity';
 import { projectSchema, type Project } from '../../shared/project/schema';
 import { normalizePresentationProfile } from '../../shared/project/presentationProfile';
+import { migrateLegacyProjectData } from '../../shared/project/legacyMigration';
 
 export class ProjectStorageError extends Error {
   constructor(
@@ -69,6 +70,8 @@ export class ProjectRepository {
       );
       data = { ...meta, ...Object.fromEntries(fields.map((field, i) => [field, values[i]])) };
     }
+    // 廃止済みの値(v1.1 の画像スタイル news_broadcast など)を現行の値に読み替えてから検証する
+    data = migrateLegacyProjectData(data);
     const project = projectSchema.parse({
       ...data,
       revision: data.revision ?? 0,

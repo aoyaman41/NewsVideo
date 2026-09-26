@@ -19,11 +19,11 @@ import {
   getSupportedClaudeEfforts,
   getSupportedGeminiThinkingLevels,
   getTextCompletionModelLabel,
-  GEMINI_TTS_MODELS,
-  IMAGE_MODELS,
   IMAGE_RESOLUTION_LABELS,
   IMAGE_RESOLUTIONS,
-  TEXT_COMPLETION_MODELS,
+  SELECTABLE_GEMINI_TTS_MODELS,
+  SELECTABLE_IMAGE_MODELS,
+  SELECTABLE_TEXT_COMPLETION_MODELS,
   type ClaudeEffort,
   type GeminiThinkingLevel,
   type GeminiTtsModel,
@@ -34,6 +34,7 @@ import {
   type SelectableClaudeEffort,
   type SelectableOpenAIReasoningEffort,
   isAnthropicTextCompletionModel,
+  isGeminiImageModel,
   isGeminiTextCompletionModel,
   isOpenAIImageModel,
   isOpenAITextCompletionModel,
@@ -67,6 +68,7 @@ interface Settings {
   openaiReasoningEffort: OpenAIReasoningEffort;
   geminiThinkingLevel: GeminiThinkingLevel;
   claudeEffort: ClaudeEffort;
+  claudeImagePromptEffort: ClaudeEffort;
   imageModel: ImageModel;
   imageResolution: ImageResolution;
   defaultAspectRatio: '16:9' | '1:1' | '9:16';
@@ -92,6 +94,7 @@ const defaultSettings: Settings = {
   openaiReasoningEffort: getDefaultOpenAIReasoningEffort('gpt-5.2'),
   geminiThinkingLevel: getDefaultGeminiThinkingLevel('gemini-3.1-pro'),
   claudeEffort: getDefaultClaudeEffort(ANTHROPIC_TEXT_COMPLETION_MODEL),
+  claudeImagePromptEffort: getDefaultClaudeEffort(ANTHROPIC_TEXT_COMPLETION_MODEL),
   imageModel: DEFAULT_IMAGE_MODEL,
   imageResolution: DEFAULT_IMAGE_RESOLUTION,
   defaultAspectRatio: '16:9',
@@ -108,7 +111,6 @@ const defaultSettings: Settings = {
 function formatOpenAIReasoningLabel(value: OpenAIReasoningEffort): string {
   const labels: Record<Exclude<OpenAIReasoningEffort, 'default'>, string> = {
     none: 'なし',
-    minimal: '最小',
     low: '低',
     medium: '中',
     high: '高',
@@ -134,6 +136,15 @@ function formatGeminiThinkingLabel(value: GeminiThinkingLevel): string {
     high: '高',
   };
   return value === 'default' ? 'モデル既定値' : labels[value];
+}
+
+// 選択肢から外した旧モデルが保存されている場合は、その値も末尾に残して表示する(保存値は変えない)
+function withSavedOption<T extends string>(options: readonly T[], saved: T): readonly T[] {
+  return options.includes(saved) ? options : [...options, saved];
+}
+
+function formatModelOptionLabel(label: string, isSelectable: boolean): string {
+  return isSelectable ? label : `${label}(旧モデル)`;
 }
 
 function formatClaudeEffortLabel(value: ClaudeEffort): string {
@@ -373,12 +384,12 @@ export function SettingsPage() {
     return null;
   }, [settings.imagePromptTextModel, settings.scriptTextModel]);
 
-  const activeAnthropicModel = useMemo(() => {
-    if (isAnthropicTextCompletionModel(settings.scriptTextModel)) return settings.scriptTextModel;
-    if (isAnthropicTextCompletionModel(settings.imagePromptTextModel))
-      return settings.imagePromptTextModel;
-    return null;
-  }, [settings.imagePromptTextModel, settings.scriptTextModel]);
+  const scriptAnthropicModel = isAnthropicTextCompletionModel(settings.scriptTextModel)
+    ? settings.scriptTextModel
+    : null;
+  const imagePromptAnthropicModel = isAnthropicTextCompletionModel(settings.imagePromptTextModel)
+    ? settings.imagePromptTextModel
+    : null;
 
   const openAIReasoningOptions = useMemo((): readonly SelectableOpenAIReasoningEffort[] => {
     return getCommonSupportedOpenAIReasoningEfforts(activeOpenAIModels);
@@ -410,17 +421,32 @@ export function SettingsPage() {
         }
       }
 
-      if (activeAnthropicModel) {
-        const supported = getSupportedClaudeEfforts(activeAnthropicModel);
+      // Claude の effort は台本用(claudeEffort)と画像プロンプト用(claudeImagePromptEffort)で別々に持つ
+      if (scriptAnthropicModel) {
+        const supported = getSupportedClaudeEfforts(scriptAnthropicModel);
         if (!supported.includes(prev.claudeEffort as SelectableClaudeEffort)) {
-          next.claudeEffort = getDefaultClaudeEffort(activeAnthropicModel);
+          next.claudeEffort = getDefaultClaudeEffort(scriptAnthropicModel);
+          changed = true;
+        }
+      }
+
+      if (imagePromptAnthropicModel) {
+        const supported = getSupportedClaudeEfforts(imagePromptAnthropicModel);
+        if (!supported.includes(prev.claudeImagePromptEffort as SelectableClaudeEffort)) {
+          next.claudeImagePromptEffort = getDefaultClaudeEffort(imagePromptAnthropicModel);
           changed = true;
         }
       }
 
       return changed ? next : prev;
     });
-  }, [activeAnthropicModel, activeGeminiModel, activeOpenAIModels, openAIReasoningOptions]);
+  }, [
+    activeGeminiModel,
+    activeOpenAIModels,
+    imagePromptAnthropicModel,
+    openAIReasoningOptions,
+    scriptAnthropicModel,
+  ]);
 
   const scriptOpenAIReasoningOptions = isOpenAITextCompletionModel(settings.scriptTextModel)
     ? openAIReasoningOptions
@@ -835,9 +861,15 @@ export function SettingsPage() {
                       }
                       className="nv-input"
                     >
-                      {TEXT_COMPLETION_MODELS.map((model) => (
+                      {withSavedOption(
+                        SELECTABLE_TEXT_COMPLETION_MODELS,
+                        settings.scriptTextModel
+                      ).map((model) => (
                         <option key={model} value={model}>
-                          {getTextCompletionModelLabel(model)}
+                          {formatModelOptionLabel(
+                            getTextCompletionModelLabel(model),
+                            SELECTABLE_TEXT_COMPLETION_MODELS.includes(model)
+                          )}
                         </option>
                       ))}
                     </select>
@@ -964,11 +996,16 @@ export function SettingsPage() {
                       }
                       className="nv-input"
                     >
-                      {GEMINI_TTS_MODELS.map((model) => (
-                        <option key={model} value={model}>
-                          {getGeminiTtsModelLabel(model)}
-                        </option>
-                      ))}
+                      {withSavedOption(SELECTABLE_GEMINI_TTS_MODELS, settings.ttsModel).map(
+                        (model) => (
+                          <option key={model} value={model}>
+                            {formatModelOptionLabel(
+                              getGeminiTtsModelLabel(model),
+                              SELECTABLE_GEMINI_TTS_MODELS.includes(model)
+                            )}
+                          </option>
+                        )
+                      )}
                     </select>
                     <p className="mt-1 text-xs text-slate-600">モデルID: {settings.ttsModel}</p>
                   </div>
@@ -1056,9 +1093,15 @@ export function SettingsPage() {
                       }
                       className="nv-input"
                     >
-                      {TEXT_COMPLETION_MODELS.map((model) => (
+                      {withSavedOption(
+                        SELECTABLE_TEXT_COMPLETION_MODELS,
+                        settings.imagePromptTextModel
+                      ).map((model) => (
                         <option key={model} value={model}>
-                          {getTextCompletionModelLabel(model)}
+                          {formatModelOptionLabel(
+                            getTextCompletionModelLabel(model),
+                            SELECTABLE_TEXT_COMPLETION_MODELS.includes(model)
+                          )}
                         </option>
                       ))}
                     </select>
@@ -1111,11 +1154,12 @@ export function SettingsPage() {
                       </label>
                       <select
                         id="SettingsPage-field-claude-effort-image"
-                        value={settings.claudeEffort}
+                        value={settings.claudeImagePromptEffort}
                         onChange={(e) =>
                           setSettings((prev) => ({
                             ...prev,
-                            claudeEffort: e.target.value as Settings['claudeEffort'],
+                            claudeImagePromptEffort: e.target
+                              .value as Settings['claudeImagePromptEffort'],
                           }))
                         }
                         className="nv-input"
@@ -1185,11 +1229,16 @@ export function SettingsPage() {
                       }
                       className="nv-input"
                     >
-                      {IMAGE_MODELS.map((model) => (
-                        <option key={model} value={model}>
-                          {getImageModelLabel(model)}
-                        </option>
-                      ))}
+                      {withSavedOption(SELECTABLE_IMAGE_MODELS, settings.imageModel).map(
+                        (model) => (
+                          <option key={model} value={model}>
+                            {formatModelOptionLabel(
+                              getImageModelLabel(model),
+                              SELECTABLE_IMAGE_MODELS.includes(model)
+                            )}
+                          </option>
+                        )
+                      )}
                     </select>
                     <p className="mt-1 text-xs text-slate-600">モデルID: {settings.imageModel}</p>
                     {isOpenAIImageModel(settings.imageModel) && (
@@ -1227,6 +1276,12 @@ export function SettingsPage() {
                       GPT Image 2 / 2.5
                       では指定解像度を優先し、API制約に応じて近いサイズへ自動調整します。
                     </p>
+                    {isGeminiImageModel(settings.imageModel) &&
+                      settings.imageResolution === 'fhd' && (
+                        <p className="mt-1 text-xs text-slate-600">
+                          Gemini では文字を読みやすくするため、Full HD 相当でも 2K で生成します。
+                        </p>
+                      )}
                   </div>
                 </div>
               </Card>

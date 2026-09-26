@@ -13,7 +13,7 @@ import {
   IMAGE_MODELS,
   IMAGE_RESOLUTIONS,
   OPENAI_REASONING_EFFORTS,
-  OPENAI_TEXT_COMPLETION_MODELS,
+  OPENAI_TEXT_COMPLETION_MODEL,
   TEXT_COMPLETION_MODELS,
   getDefaultClaudeEffort,
   getDefaultGeminiThinkingLevel,
@@ -29,6 +29,7 @@ import {
   isOpenAIReasoningEffort,
   isOpenAITextCompletionModel,
   isTextCompletionModel,
+  normalizeImageModelId,
   type AnthropicTextCompletionModel,
   type ClaudeEffort,
   type GeminiThinkingLevel,
@@ -57,7 +58,10 @@ export type AppSettings = {
   imagePromptTextModel: TextCompletionModel;
   openaiReasoningEffort: OpenAIReasoningEffort;
   geminiThinkingLevel: GeminiThinkingLevel;
+  /** 台本の生成と台本へのコメント反映に使う Claude の effort */
   claudeEffort: ClaudeEffort;
+  /** 画像プロンプトの抽出と画像プロンプトへのコメント反映に使う Claude の effort */
+  claudeImagePromptEffort: ClaudeEffort;
   imageModel: ImageModel;
   imageResolution: ImageResolution;
   defaultAspectRatio: '16:9' | '1:1' | '9:16';
@@ -85,6 +89,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   openaiReasoningEffort: getDefaultOpenAIReasoningEffort('gpt-5.2'),
   geminiThinkingLevel: getDefaultGeminiThinkingLevel('gemini-3.1-pro'),
   claudeEffort: getDefaultClaudeEffort(ANTHROPIC_TEXT_COMPLETION_MODEL),
+  claudeImagePromptEffort: getDefaultClaudeEffort(ANTHROPIC_TEXT_COMPLETION_MODEL),
   imageModel: DEFAULT_IMAGE_MODEL,
   imageResolution: DEFAULT_IMAGE_RESOLUTION,
   defaultAspectRatio: '16:9',
@@ -112,7 +117,8 @@ export const settingsUpdateSchema = z
     openaiReasoningEffort: z.enum(OPENAI_REASONING_EFFORTS).optional(),
     geminiThinkingLevel: z.enum(GEMINI_THINKING_LEVELS).optional(),
     claudeEffort: z.enum(CLAUDE_EFFORTS).optional(),
-    imageModel: z.enum(IMAGE_MODELS).optional(),
+    claudeImagePromptEffort: z.enum(CLAUDE_EFFORTS).optional(),
+    imageModel: z.preprocess(normalizeImageModelId, z.enum(IMAGE_MODELS)).optional(),
     imageResolution: z.enum(IMAGE_RESOLUTIONS).optional(),
     defaultAspectRatio: z.enum(['16:9', '1:1', '9:16']).optional(),
     videoResolution: z.enum(['1920x1080', '1280x720', '3840x2160']).optional(),
@@ -146,7 +152,8 @@ function resolveSettingsOpenAIModel(settings: {
   if (isOpenAITextCompletionModel(DEFAULT_SCRIPT_TEXT_MODEL)) {
     return DEFAULT_SCRIPT_TEXT_MODEL;
   }
-  return OPENAI_TEXT_COMPLETION_MODELS[0];
+  // 既定のテキストモデルが OpenAI でないときは、旧来の既定値(gpt-5.2)の推論強度を基準にする
+  return OPENAI_TEXT_COMPLETION_MODEL;
 }
 
 function getCommonSettingsOpenAIReasoningEfforts(settings: {
@@ -162,17 +169,22 @@ function getCommonSettingsOpenAIReasoningEfforts(settings: {
   return getCommonSupportedOpenAIReasoningEfforts(models);
 }
 
-function resolveSettingsAnthropicModel(settings: {
-  scriptTextModel: TextCompletionModel;
-  imagePromptTextModel: TextCompletionModel;
-}): AnthropicTextCompletionModel {
-  if (isAnthropicTextCompletionModel(settings.scriptTextModel)) {
-    return settings.scriptTextModel;
+function resolveSettingsAnthropicModel(model: TextCompletionModel): AnthropicTextCompletionModel {
+  return isAnthropicTextCompletionModel(model) ? model : ANTHROPIC_TEXT_COMPLETION_MODEL;
+}
+
+function normalizeClaudeEffort(
+  value: unknown,
+  model: AnthropicTextCompletionModel
+): SelectableClaudeEffort {
+  if (
+    isClaudeEffort(value) &&
+    value !== 'default' &&
+    getSupportedClaudeEfforts(model).includes(value as SelectableClaudeEffort)
+  ) {
+    return value as SelectableClaudeEffort;
   }
-  if (isAnthropicTextCompletionModel(settings.imagePromptTextModel)) {
-    return settings.imagePromptTextModel;
-  }
-  return ANTHROPIC_TEXT_COMPLETION_MODEL;
+  return getDefaultClaudeEffort(model);
 }
 
 export function normalizeSettings(input: unknown): AppSettings {
@@ -205,6 +217,8 @@ export function normalizeSettings(input: unknown): AppSettings {
     merged.ttsVoice = DEFAULT_SETTINGS.ttsVoice;
   }
 
+  // 提供終了した preview 版の ID は GA 版へ読み替える(未知の値だけ既定値に戻す)
+  merged.imageModel = normalizeImageModelId(merged.imageModel);
   if (!isImageModel(merged.imageModel)) {
     merged.imageModel = DEFAULT_SETTINGS.imageModel;
   }
@@ -236,17 +250,15 @@ export function normalizeSettings(input: unknown): AppSettings {
   } else if (merged.geminiThinkingLevel === 'default') {
     merged.geminiThinkingLevel = getDefaultGeminiThinkingLevel('gemini-3.1-pro');
   }
-  // claudeEffort がない既存の settings.json は既定値で補う
-  const anthropicModel = resolveSettingsAnthropicModel(merged);
-  if (
-    !isClaudeEffort(merged.claudeEffort) ||
-    merged.claudeEffort === 'default' ||
-    !getSupportedClaudeEfforts(anthropicModel).includes(
-      merged.claudeEffort as SelectableClaudeEffort
-    )
-  ) {
-    merged.claudeEffort = getDefaultClaudeEffort(anthropicModel);
-  }
+  // Claude の effort は用途別(台本 / 画像プロンプト)。項目がない既存の settings.json は既定値で補う
+  merged.claudeEffort = normalizeClaudeEffort(
+    merged.claudeEffort,
+    resolveSettingsAnthropicModel(merged.scriptTextModel)
+  );
+  merged.claudeImagePromptEffort = normalizeClaudeEffort(
+    merged.claudeImagePromptEffort,
+    resolveSettingsAnthropicModel(merged.imagePromptTextModel)
+  );
 
   return merged;
 }

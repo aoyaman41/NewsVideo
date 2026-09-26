@@ -233,10 +233,10 @@ export class GenerationJobEngine {
         kind === 'script' ? source.job!.targetPartCount : 1
       ) * 2;
     const job = source.job!;
-    if (
-      job.budgetUsd !== undefined &&
-      (job.unknownCharges > 0 || job.spentUsd + allowance > job.budgetUsd)
-    ) {
+    // 予算で止めるのは、見込み額(確定済みの使用額 + 次の処理の余裕込みの見積もり)が予算を超えるときだけ。
+    // 料金未確定の記録(unknownCharges)があるだけでは止めない。以前はこれで毎回「予算確認」で止まり、
+    // 件数が再開後も引き継がれるため全自動で進められなかった。未確定の件数は画面に表示している。
+    if (job.budgetUsd !== undefined && job.spentUsd + allowance > job.budgetUsd) {
       job.status = 'paused';
       job.stage = '予算確認';
       job.estimatedRemainingUsd = allowance;
@@ -398,7 +398,7 @@ export class GenerationJobEngine {
       }
       await this.review(id, '素材と公開内容の確認');
       project = await this.checkpoint(id, '動画');
-      project.outputSettings = {
+      const outputSettings = {
         videoPartLeadInSec: settings.videoPartLeadInSec,
         openingVideoPath: settings.openingVideoPath,
         endingVideoPath: settings.endingVideoPath,
@@ -412,7 +412,11 @@ export class GenerationJobEngine {
         includeOpening: Boolean(settings.openingVideoPath),
         includeEnding: Boolean(settings.endingVideoPath),
       };
-      project = await this.save(project);
+      // 動画工程の保存はリビジョンの完全一致を求めない(プレビュー時のメトリクス更新などと競合させない)。
+      // 書き出す内容が変わったかどうかは video:render が確かめる。
+      project = await this.commit(id, (latest) => {
+        latest.outputSettings = outputSettings;
+      });
       if (!isVideoCurrent(project)) {
         const expected = videoInput(project);
         const output = await this.invoke<{ outputPath: string }>(
@@ -421,35 +425,40 @@ export class GenerationJobEngine {
           project.outputSettings,
           path.join(project.path, 'output', `${project.name.replace(/[\\/:*?"<>|]/g, '_')}.mp4`)
         );
-        project = await this.repository.load(id);
-        project.job!.outputs.push({
-          step: 'video',
-          payload: output,
-          createdAt: new Date().toISOString(),
+        project = await this.commit(id, (latest) => {
+          latest.job!.outputs.push({
+            step: 'video',
+            payload: output,
+            createdAt: new Date().toISOString(),
+          });
+          // video:render は順番が来た時点の最新を書き出し、その入力の指紋を記録している。
+          // 待つ間に書き出し内容に関係しない更新があった場合も、その記録を古い指紋で上書きしない。
+          if (videoInput(latest) === expected)
+            latest.integrity = { ...latest.integrity!, video: expected };
+          latest.autoGenerationStatus = {
+            ...latest.autoGenerationStatus,
+            running: false,
+            lastVideoPath: output.outputPath,
+            finishedAt: new Date().toISOString(),
+          };
         });
-        project.integrity = { ...project.integrity!, video: expected };
-        project.autoGenerationStatus = {
-          ...project.autoGenerationStatus,
-          running: false,
-          lastVideoPath: output.outputPath,
-          finishedAt: new Date().toISOString(),
-        };
-        project = await this.save(project);
       }
       if (!isVideoCurrent(project))
         throw new Error(
           '生成中に入力が変更されました。動画は保全されていますが再書き出しが必要です。'
         );
-      project = await this.checkpoint(id, '完了');
-      project.job!.status = 'completed';
-      project.job!.estimatedRemainingUsd = 0;
-      project.autoGenerationStatus = {
-        ...project.autoGenerationStatus,
-        running: false,
-        step: '完了',
-        finishedAt: new Date().toISOString(),
-      };
-      await this.save(project);
+      await this.checkpoint(id, '完了');
+      // 完了の記録もリビジョンの一致を求めない(動画の完成後に別の保存があっても失敗扱いにしない)
+      await this.commit(id, (latest) => {
+        latest.job!.status = 'completed';
+        latest.job!.estimatedRemainingUsd = 0;
+        latest.autoGenerationStatus = {
+          ...latest.autoGenerationStatus,
+          running: false,
+          step: '完了',
+          finishedAt: new Date().toISOString(),
+        };
+      });
     } catch (error) {
       if (error instanceof JobPaused) return;
       const project = await this.repository.load(id);

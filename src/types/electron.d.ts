@@ -170,7 +170,8 @@ interface ElectronAPI {
       options: RenderOptions,
       outputPath: string
     ) => Promise<{ outputPath: string }>;
-    preview: (partId: string) => Promise<{ previewPath: string }>;
+    /** intended を渡すと、Main 側でそのパートの内容が保存済みの最新と一致するかを確かめてから作る */
+    preview: (partId: string, intended?: Project) => Promise<{ previewPath: string }>;
     cancelRender: () => Promise<{ success: boolean }>;
   };
 
@@ -233,6 +234,7 @@ interface Settings {
   openaiReasoningEffort: OpenAIReasoningEffort;
   geminiThinkingLevel: GeminiThinkingLevel;
   claudeEffort: ClaudeEffort;
+  claudeImagePromptEffort: ClaudeEffort;
   imageModel: ImageModel;
   imageResolution: ImageResolution;
   defaultAspectRatio: ImageAspectRatio;
