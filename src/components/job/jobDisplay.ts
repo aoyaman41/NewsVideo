@@ -1,4 +1,8 @@
 import type { GenerationJob, JobProgress } from '../../../shared/project/jobs';
+import type { UsageRecord } from '../../../shared/project/schema';
+import { normalizeSettings } from '../../../shared/settings/appSettings';
+import { estimateUsageCostUsd, normalizeCostRates } from '../../utils/cost';
+import { formatCost } from '../../utils/money';
 
 /**
  * 自動生成ジョブの状態を、画面上部の進捗表示で使う形に変換する(表示専用。値は書き換えない)。
@@ -309,9 +313,63 @@ export function jobDismissKey(job: GenerationJob): string {
   return `${job.id}:${job.status}:${job.status === 'paused' ? job.stage : ''}`;
 }
 
-/** 金額を初心者向けに短く表す(1 セント未満は「$0.01 未満」) */
-export function formatUsdShort(amount: number): string {
-  if (!Number.isFinite(amount) || amount <= 0) return '$0';
-  if (amount < 0.01) return '$0.01 未満';
-  return `$${amount.toFixed(2)}`;
+/** 完了したジョブの費用の内訳(画像の指示づくりは画像に含める) */
+export type JobCostBreakdown = { script: number; image: number; audio: number };
+
+const COST_LABELS: Record<keyof JobCostBreakdown, string> = {
+  script: '台本',
+  image: '画像',
+  audio: '音声',
+};
+
+/**
+ * このジョブで記録した使用量(usage の jobId が一致するもの)を、台本・画像・音声に分けて合計する。
+ * 金額はジョブを開始したときの料金表で計算する(job.spentUsd と同じ)。記録がなければ null
+ */
+export function jobCostBreakdown(
+  usage: readonly UsageRecord[],
+  job: Pick<GenerationJob, 'id' | 'settings'>
+): JobCostBreakdown | null {
+  const records = usage.filter((record) => record.jobId === job.id);
+  if (records.length === 0) return null;
+  const rates = normalizeCostRates(normalizeSettings(job.settings).cost);
+  const breakdown: JobCostBreakdown = { script: 0, image: 0, audio: 0 };
+  for (const record of records) {
+    const key: keyof JobCostBreakdown =
+      record.category === 'tts'
+        ? 'audio'
+        : record.category === 'image' || !record.operation.startsWith('script')
+          ? 'image'
+          : 'script';
+    breakdown[key] += estimateUsageCostUsd(record, rates);
+  }
+  return breakdown;
+}
+
+/** 生成中の費用の文:「今回 約 18 円($0.12)・見込み 約 75 円($0.50)」 */
+export function describeRunningCost(
+  job: Pick<GenerationJob, 'spentUsd' | 'estimatedTotalUsd'>,
+  jpyPerUsd: number
+): string {
+  const spent = `今回 ${formatCost(job.spentUsd, jpyPerUsd)}`;
+  if (job.estimatedTotalUsd === undefined) return spent;
+  // 見込みより多く使ったときは、使った額を見込みとして出す
+  const expected = Math.max(job.estimatedTotalUsd, job.spentUsd);
+  return `${spent}・見込み ${formatCost(expected, jpyPerUsd)}`;
+}
+
+/** 完了時の費用の文:「今回かかった費用(推定): 約 76 円($0.51)(台本 …・画像 …・音声 …)」 */
+export function describeCompletedCost(
+  job: Pick<GenerationJob, 'spentUsd' | 'unknownCharges'>,
+  breakdown: JobCostBreakdown | null,
+  jpyPerUsd: number
+): string {
+  const items = breakdown
+    ? (Object.keys(COST_LABELS) as (keyof JobCostBreakdown)[])
+        .filter((key) => breakdown[key] > 0)
+        .map((key) => `${COST_LABELS[key]} ${formatCost(breakdown[key], jpyPerUsd)}`)
+    : [];
+  return `今回かかった費用(推定): ${formatCost(job.spentUsd, jpyPerUsd)}${
+    items.length > 0 ? `。内訳は ${items.join('・')}` : ''
+  }${job.unknownCharges > 0 ? '。一部の料金は各サービスの利用明細で確認してください' : ''}`;
 }

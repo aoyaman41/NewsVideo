@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_SETTINGS, normalizeSettings, parseSettingsUpdate } from './appSettings';
+import {
+  DEFAULT_NEW_PROJECT_DEFAULTS,
+  DEFAULT_SETTINGS,
+  normalizeNewProjectDefaults,
+  normalizeSettings,
+  parseSettingsUpdate,
+} from './appSettings';
 
 describe('parseSettingsUpdate', () => {
   it('accepts valid fields and strips unknown keys', () => {
@@ -329,5 +335,89 @@ describe('auto generation defaults (mode and budget)', () => {
     expect(parseSettingsUpdate({ generationBudgetUsd: 1.5 }).generationBudgetUsd).toBe(1.5);
     expect(() => parseSettingsUpdate({ generationMode: 'fast' })).toThrow();
     expect(() => parseSettingsUpdate({ generationBudgetUsd: -1 })).toThrow();
+  });
+});
+
+// M5: 新しい動画の既定値・為替レート・映像のビットレートの決め方
+describe('new project defaults', () => {
+  it('fills defaults so that new videos start exactly like their purpose', () => {
+    expect(normalizeSettings({}).newProjectDefaults).toEqual(DEFAULT_NEW_PROJECT_DEFAULTS);
+    expect(DEFAULT_NEW_PROJECT_DEFAULTS).toMatchObject({
+      purpose: 'news',
+      ttsNarrationStylePreset: null,
+      sourceDisplayMode: null,
+      closingCardHeadline: '',
+    });
+  });
+
+  it('keeps valid saved items and replaces only the broken ones', () => {
+    const normalized = normalizeNewProjectDefaults({
+      purpose: 'short',
+      imageStylePreset: 'no-such-style',
+      styleReferenceNote: '  青を基調に  ',
+      ttsNarrationStylePreset: 'promo',
+      closingCardEnabled: 'yes',
+      sourceDisplayMode: null,
+      unknown: 'ignored',
+    });
+    expect(normalized).toEqual({
+      ...DEFAULT_NEW_PROJECT_DEFAULTS,
+      purpose: 'short',
+      styleReferenceNote: '青を基調に',
+      ttsNarrationStylePreset: 'promo',
+    });
+    expect(normalizeNewProjectDefaults('broken')).toEqual(DEFAULT_NEW_PROJECT_DEFAULTS);
+    // 以前の記事画面の用途(報告)は、作成画面の最初の選択には使えない
+    expect(normalizeNewProjectDefaults({ purpose: 'report' }).purpose).toBe('news');
+  });
+
+  it('validates partial updates from the settings screen', () => {
+    expect(parseSettingsUpdate({ newProjectDefaults: { purpose: 'explain' } })).toEqual({
+      newProjectDefaults: { purpose: 'explain' },
+    });
+    expect(() => parseSettingsUpdate({ newProjectDefaults: { purpose: 'report' } })).toThrow();
+    expect(() =>
+      parseSettingsUpdate({ newProjectDefaults: { sourceDisplayMode: 'everywhere' } })
+    ).toThrow();
+  });
+});
+
+describe('exchange rate', () => {
+  it('defaults to 150 yen per dollar and keeps a valid saved rate', () => {
+    expect(DEFAULT_SETTINGS.jpyPerUsd).toBe(150);
+    expect(normalizeSettings({}).jpyPerUsd).toBe(150);
+    expect(normalizeSettings({ jpyPerUsd: 147.5 }).jpyPerUsd).toBe(147.5);
+    expect(normalizeSettings({ jpyPerUsd: 0 }).jpyPerUsd).toBe(150);
+    expect(normalizeSettings({ jpyPerUsd: 'abc' }).jpyPerUsd).toBe(150);
+    expect(() => parseSettingsUpdate({ jpyPerUsd: -1 })).toThrow();
+    expect(parseSettingsUpdate({ jpyPerUsd: 155 })).toEqual({ jpyPerUsd: 155 });
+  });
+});
+
+describe('video bitrate mode', () => {
+  it('uses the automatic bitrate for new settings', () => {
+    expect(normalizeSettings({})).toMatchObject({ videoBitrateMode: 'auto', videoBitrate: '8M' });
+  });
+
+  it('treats the old fixed default (8M) of settings saved before M5 as automatic', () => {
+    expect(normalizeSettings({ videoBitrate: '8M' }).videoBitrateMode).toBe('auto');
+    expect(normalizeSettings({ videoBitrate: 'broken' }).videoBitrateMode).toBe('auto');
+  });
+
+  it('keeps a bitrate that the user chose before M5', () => {
+    expect(normalizeSettings({ videoBitrate: '12M' })).toMatchObject({
+      videoBitrateMode: 'manual',
+      videoBitrate: '12M',
+    });
+  });
+
+  it('keeps an explicit choice once the mode is saved (even 8M)', () => {
+    expect(
+      normalizeSettings({ videoBitrateMode: 'manual', videoBitrate: '8M' }).videoBitrateMode
+    ).toBe('manual');
+    expect(
+      normalizeSettings({ videoBitrateMode: 'auto', videoBitrate: '20M' }).videoBitrateMode
+    ).toBe('auto');
+    expect(() => parseSettingsUpdate({ videoBitrateMode: 'fast' })).toThrow();
   });
 });

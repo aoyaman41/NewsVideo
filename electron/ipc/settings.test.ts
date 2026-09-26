@@ -333,3 +333,35 @@ it('propagates only changed generation defaults and leaves running job snapshots
     ttsVoice: 'Existing voice',
   });
 });
+
+// M5: 「新しい動画」の既定値・進め方と予算・為替レートは、作成済みの動画を変えない
+it('saves new video defaults item by item without touching existing projects', async () => {
+  await loadSettingsModule();
+  let stored = JSON.stringify({
+    ...DEFAULT_SETTINGS,
+    newProjectDefaults: { ...DEFAULT_SETTINGS.newProjectDefaults, imageStylePreset: 'editorial' },
+  });
+  readFileMock.mockImplementation(async () => stored);
+  writeFileMock.mockImplementation(async (_path: string, content: string) => {
+    stored = content;
+  });
+  repositoryMock.directories.mockResolvedValue(['/idle']);
+  repositoryMock.readDirectory.mockResolvedValue({ id: 'idle' });
+  const event = { senderFrame: { url: 'http://localhost:5173', parent: null } };
+
+  await getHandler('settings:set')(event, {
+    newProjectDefaults: { purpose: 'short' },
+    generationMode: 'review',
+    generationBudgetUsd: 3,
+    jpyPerUsd: 145,
+  });
+
+  expect(JSON.parse(stored)).toMatchObject({
+    generationMode: 'review',
+    generationBudgetUsd: 3,
+    jpyPerUsd: 145,
+    // 送らなかった項目は今の値のまま
+    newProjectDefaults: { purpose: 'short', imageStylePreset: 'editorial' },
+  });
+  expect(repositoryMock.update).not.toHaveBeenCalled();
+});

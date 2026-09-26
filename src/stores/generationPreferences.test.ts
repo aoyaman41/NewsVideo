@@ -2,7 +2,6 @@ import { describe, expect, it, vi } from 'vitest';
 import { normalizeSettings } from '../../shared/settings/appSettings';
 import {
   budgetToUsd,
-  createSerialSettingsSaver,
   DEFAULT_GENERATION_PREFERENCES,
   forgetLegacyGenerationPreferences,
   LEGACY_PREFERENCES_STORAGE_KEY,
@@ -107,29 +106,4 @@ describe('legacy localStorage values', () => {
     expect(save).not.toHaveBeenCalled();
     expect(storage.values.size).toBe(0);
   });
-});
-
-it('saves updates one at a time and merges the ones that arrive meanwhile', async () => {
-  const calls: GenerationPreferencesUpdate[] = [];
-  let release: () => void = () => {};
-  const save = vi.fn(
-    (update: GenerationPreferencesUpdate) =>
-      new Promise<void>((resolve) => {
-        calls.push(update);
-        release = resolve;
-      })
-  );
-  const saveSerial = createSerialSettingsSaver(save);
-
-  const first = saveSerial({ generationBudgetUsd: 1 });
-  void saveSerial({ generationBudgetUsd: 12 });
-  void saveSerial({ generationMode: 'review' });
-  expect(calls).toEqual([{ generationBudgetUsd: 1 }]);
-
-  release();
-  await vi.waitFor(() => expect(calls).toHaveLength(2));
-  expect(calls[1]).toEqual({ generationBudgetUsd: 12, generationMode: 'review' });
-  release();
-  await first;
-  expect(save).toHaveBeenCalledTimes(2);
 });

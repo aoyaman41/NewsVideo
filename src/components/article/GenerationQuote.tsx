@@ -2,7 +2,7 @@ import { useMemo } from 'react';
 import type { Project } from '../../schemas';
 import { estimateProjectGeneration } from '../../../shared/project/generationEstimate';
 import type { AppSettings } from '../../../shared/settings/appSettings';
-import { formatUsdShort } from '../job/jobDisplay';
+import { formatCost } from '../../utils/money';
 
 const UNIT_LABELS: Record<string, { label: string; unit: string }> = {
   script: { label: '台本', unit: '件' },
@@ -10,7 +10,10 @@ const UNIT_LABELS: Record<string, { label: string; unit: string }> = {
   audio: { label: '音声', unit: '件' },
 };
 
-/** 「おまかせで作る」の前に出す費用の目安(これから作る分だけ。これまでの累計は出さない) */
+/**
+ * 「おまかせで作る」の前に出す費用の見込み(これから作る分だけ。これまでの累計は出さない)。
+ * 幅ではなく「約 X(多くて Y)」で出す。多くては見込み × 1.3
+ */
 export function GenerationQuote({
   project,
   partCount,
@@ -33,15 +36,18 @@ export function GenerationQuote({
     );
 
   return (
-    <section className="nv-surface-muted px-4 py-3 text-sm" aria-label="費用の目安">
+    <section className="nv-surface-muted px-4 py-3 text-sm" aria-label="費用の見込み">
       {items.length > 0 ? (
         <>
           <p className="font-semibold text-[var(--nv-color-text)]">
-            費用の目安: {formatUsdShort(quote.lowerUsd)} 〜 {formatUsdShort(quote.upperUsd)}
+            費用の見込み: {formatCost(quote.usd, settings.jpyPerUsd)}
+            <span className="font-normal text-[var(--nv-color-muted)]">
+              (多くて {formatCost(quote.upperUsd, settings.jpyPerUsd)})
+            </span>
           </p>
           <p className="mt-0.5 text-xs text-[var(--nv-color-muted)]">
             {items.join('・')}
-            を作ります。文字数と設定から計算した目安で、実際の金額は内容によって増減します(税・為替は含みません)。
+            を作ります。文字数と設定から計算した見込みで、実際の金額は内容によって増減します(税は含みません。円は設定の為替レートで換算しています)。
           </p>
         </>
       ) : (

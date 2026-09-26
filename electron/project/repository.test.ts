@@ -103,3 +103,33 @@ it('migrates a legacy project only when saved and retains a complete recoverable
   await fs.writeFile(path.join(directory, 'project.json'), 'broken');
   expect((await repository.load(legacy.id)).article).toEqual(article);
 });
+
+// M5: 保存のたびに使用量の台帳へ追記する(台帳の失敗で保存を失敗させない)
+it('notifies every committed save and ignores failures of the listener', async () => {
+  const onPersist = vi.fn(async () => {
+    throw new Error('ledger unavailable');
+  });
+  const observed = new ProjectRepository(root, { onPersist });
+  const created = await observed.create(createNewProject('Observed', ''));
+  const usage = {
+    id: crypto.randomUUID(),
+    provider: 'anthropic' as const,
+    category: 'text' as const,
+    model: 'claude-opus-5-5',
+    operation: 'script_generate',
+    createdAt: new Date().toISOString(),
+  };
+  const saved = await observed.update(created.id, (project) => {
+    project.usage.push(usage);
+  });
+  expect(saved.usage).toHaveLength(1);
+  expect(onPersist).toHaveBeenCalledTimes(2);
+  expect(onPersist).toHaveBeenLastCalledWith(
+    expect.objectContaining({ id: created.id, usage: [usage] })
+  );
+  // 保存に失敗したときは呼ばない
+  await expect(observed.save({ ...created, revision: 99 })).rejects.toMatchObject({
+    code: 'CONFLICT',
+  });
+  expect(onPersist).toHaveBeenCalledTimes(2);
+});

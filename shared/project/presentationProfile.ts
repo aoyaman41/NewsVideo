@@ -2,13 +2,13 @@ import { z } from 'zod';
 import {
   IMAGE_ASPECT_RATIOS,
   IMAGE_STYLE_PRESETS,
-  DEFAULT_IMAGE_ASPECT_RATIO,
-  DEFAULT_IMAGE_STYLE_PRESET,
   isImageAspectRatio,
   isImageStylePreset,
   type ImageAspectRatio,
   type ImageStylePreset,
 } from './imageStylePresets';
+// 用途ごとの既定値(1 シーンの長さなど)は purposes.ts で決める。ここでは読み出しを再公開する
+import { getDefaultPresentationProfile, type PresentationProfileDefaults } from './purposes';
 import {
   TTS_NARRATION_STYLE_PRESETS,
   isTtsNarrationStylePreset,
@@ -46,11 +46,6 @@ export type PresentationProfile = {
   sourceDisplayText: string;
 };
 
-type PresentationProfileDefaults = {
-  imageStylePreset?: ImageStylePreset;
-  aspectRatio?: ImageAspectRatio;
-};
-
 export const PRESENTATION_PROFILE_PRESET_LABELS: Record<PresentationProfilePreset, string> = {
   news: 'ニュース',
   explain: '解説',
@@ -79,80 +74,7 @@ export const SOURCE_DISPLAY_MODE_LABELS: Record<SourceDisplayMode, string> = {
 
 const TARGET_DURATION_RANGE = { min: 10, max: 300 } as const;
 
-const presetDefaults: Record<PresentationProfilePreset, PresentationProfile> = {
-  news: {
-    preset: 'news',
-    tone: 'news',
-    closingLineMode: 'preset',
-    closingLineText: '',
-    targetDurationPerPartSec: 30,
-    imageStylePreset: DEFAULT_IMAGE_STYLE_PRESET,
-    aspectRatio: DEFAULT_IMAGE_ASPECT_RATIO,
-    styleReferenceImageIds: [],
-    styleReferenceNote: '',
-    ttsNarrationStylePreset: 'news',
-    ttsNarrationStyleNote: '',
-    closingCardEnabled: true,
-    closingCardHeadline: 'ご視聴ありがとうございました',
-    closingCardCtaText: '',
-    sourceDisplayMode: 'auto',
-    sourceDisplayText: '',
-  },
-  explain: {
-    preset: 'explain',
-    tone: 'formal',
-    closingLineMode: 'preset',
-    closingLineText: '',
-    targetDurationPerPartSec: 40,
-    imageStylePreset: DEFAULT_IMAGE_STYLE_PRESET,
-    aspectRatio: DEFAULT_IMAGE_ASPECT_RATIO,
-    styleReferenceImageIds: [],
-    styleReferenceNote: '',
-    ttsNarrationStylePreset: 'explain',
-    ttsNarrationStyleNote: '',
-    closingCardEnabled: true,
-    closingCardHeadline: '最後までご覧いただきありがとうございました',
-    closingCardCtaText: '',
-    sourceDisplayMode: 'auto',
-    sourceDisplayText: '',
-  },
-  report: {
-    preset: 'report',
-    tone: 'formal',
-    closingLineMode: 'preset',
-    closingLineText: '',
-    targetDurationPerPartSec: 25,
-    imageStylePreset: DEFAULT_IMAGE_STYLE_PRESET,
-    aspectRatio: DEFAULT_IMAGE_ASPECT_RATIO,
-    styleReferenceImageIds: [],
-    styleReferenceNote: '',
-    ttsNarrationStylePreset: 'explain',
-    ttsNarrationStyleNote: '',
-    closingCardEnabled: true,
-    closingCardHeadline: 'ご確認ありがとうございました',
-    closingCardCtaText: '',
-    sourceDisplayMode: 'auto',
-    sourceDisplayText: '',
-  },
-  short: {
-    preset: 'short',
-    tone: 'casual',
-    closingLineMode: 'preset',
-    closingLineText: '',
-    targetDurationPerPartSec: 15,
-    imageStylePreset: DEFAULT_IMAGE_STYLE_PRESET,
-    aspectRatio: DEFAULT_IMAGE_ASPECT_RATIO,
-    styleReferenceImageIds: [],
-    styleReferenceNote: '',
-    ttsNarrationStylePreset: 'casual',
-    ttsNarrationStyleNote: '',
-    closingCardEnabled: true,
-    closingCardHeadline: 'また次回もご覧ください',
-    closingCardCtaText: '',
-    sourceDisplayMode: 'hidden',
-    sourceDisplayText: '',
-  },
-};
+export { getDefaultPresentationProfile };
 
 export const PRESENTATION_PROFILE_PRESET_CLOSING_LINES: Record<PresentationProfilePreset, string> =
   {
@@ -185,7 +107,8 @@ export const presentationProfileSchema = z.object({
   sourceDisplayText: z.string(),
 });
 
-export const DEFAULT_PRESENTATION_PROFILE: PresentationProfile = presetDefaults.news;
+export const DEFAULT_PRESENTATION_PROFILE: PresentationProfile =
+  getDefaultPresentationProfile('news');
 
 export function isPresentationProfilePreset(value: unknown): value is PresentationProfilePreset {
   return (
@@ -204,17 +127,6 @@ export function isClosingLineMode(value: unknown): value is ClosingLineMode {
 
 export function isSourceDisplayMode(value: unknown): value is SourceDisplayMode {
   return typeof value === 'string' && SOURCE_DISPLAY_MODES.includes(value as SourceDisplayMode);
-}
-
-export function getDefaultPresentationProfile(
-  preset: PresentationProfilePreset = DEFAULT_PRESENTATION_PROFILE.preset,
-  defaults: PresentationProfileDefaults = {}
-): PresentationProfile {
-  return {
-    ...presetDefaults[preset],
-    imageStylePreset: defaults.imageStylePreset ?? DEFAULT_IMAGE_STYLE_PRESET,
-    aspectRatio: defaults.aspectRatio ?? DEFAULT_IMAGE_ASPECT_RATIO,
-  };
 }
 
 export function normalizePresentationProfile(

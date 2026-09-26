@@ -38,6 +38,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
     save: (project: unknown) => ipcRenderer.invoke('project:save', project),
     delete: (projectId: string) => ipcRenderer.invoke('project:delete', projectId),
     create: (name: unknown) => ipcRenderer.invoke('project:create', name),
+    applyNewProjectDefaults: (request: unknown) =>
+      ipcRenderer.invoke('project:applyNewProjectDefaults', request),
+  },
+
+  // 使った費用(全体の台帳)
+  usage: {
+    summary: () => ipcRenderer.invoke('usage:summary'),
   },
 
   jobs: {

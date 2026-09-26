@@ -7,9 +7,9 @@ import {
 
 /**
  * 自動生成の「進め方」と「予算の上限」の既定値。保存先は AppSettings(settings.json の
- * generationMode / generationBudgetUsd)。記事画面と設定画面の詳細設定の両方から変更でき、
- * 次に「おまかせで作る」を押したときに使う。ジョブ自体は開始時の値を保存しているので、
- * 「続きから」はジョブに保存された値で再開する。
+ * generationMode / generationBudgetUsd)で、設定画面の「新しい動画」で変える。
+ * 記事画面での変更はその回の生成だけに使い、既定値は変えない(M5)。ジョブ自体は開始時の値を
+ * 保存しているので、「続きから」はジョブに保存された値で再開する。
  */
 export type { GenerationMode };
 
@@ -148,41 +148,4 @@ export function ensureGenerationPreferencesMigrated(): Promise<void> {
     }
   );
   return migration;
-}
-
-/**
- * 更新を 1 件ずつ順に保存する。保存中に届いた更新はまとめて次に送る
- * (settings:set は読み込み→書き込みなので、同時に送ると古い値で上書きされることがある)。
- */
-export function createSerialSettingsSaver(
-  save: (update: GenerationPreferencesUpdate) => Promise<unknown>
-) {
-  let pending: GenerationPreferencesUpdate | null = null;
-  let flushing: Promise<void> | null = null;
-  return (update: GenerationPreferencesUpdate): Promise<void> => {
-    pending = { ...pending, ...update };
-    flushing ??= (async () => {
-      try {
-        while (pending) {
-          const next: GenerationPreferencesUpdate = pending;
-          pending = null;
-          await save(next);
-        }
-      } finally {
-        flushing = null;
-      }
-    })();
-    return flushing;
-  };
-}
-
-let saver: ReturnType<typeof createSerialSettingsSaver> | null = null;
-
-/** 記事画面から進め方と予算の既定値を保存する */
-export function saveGenerationPreferences(update: GenerationPreferencesUpdate): Promise<void> {
-  saver ??= createSerialSettingsSaver(async (next) => {
-    await window.electronAPI.settings.set(next);
-    forgetLegacyGenerationPreferences();
-  });
-  return saver(update);
 }

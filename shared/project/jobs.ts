@@ -59,6 +59,11 @@ export const jobSchema = z.object({
   budgetUsd: z.number().nonnegative().optional(),
   spentUsd: z.number().nonnegative(),
   estimatedRemainingUsd: z.number().nonnegative(),
+  /**
+   * 開始(再開)したときの見込み額。それまでに使った額 + これから作る分の見込み。
+   * 生成中の進捗表示の「見込み」に使う。M5 より前のジョブにはない
+   */
+  estimatedTotalUsd: z.number().nonnegative().optional(),
   unknownCharges: z.number().int().nonnegative(),
   error: z.object({ kind: z.string(), message: z.string(), retryable: z.boolean() }).optional(),
   progress: jobProgressSchema.optional(),

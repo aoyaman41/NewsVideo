@@ -1,4 +1,10 @@
-import { PURPOSES } from '../../shared/project/purposes';
+import {
+  DEFAULT_PURPOSE_ID,
+  PURPOSES,
+  describePurpose,
+  type PurposeId,
+} from '../../shared/project/purposes';
+import { normalizeSettings } from '../../shared/settings/appSettings';
 import { toLocalFileUrl } from '../utils/toLocalFileUrl';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
@@ -22,16 +28,7 @@ import { useJobFeed } from '../stores/jobStore';
 import type { ProjectListItem, Tone } from '../types/ui';
 import { cx } from '../utils/cx';
 
-type Purpose = (typeof PURPOSES)[number]['id'];
-
-const PURPOSE_DETAILS: Record<Purpose, string> = {
-  news: '横長・約 90 秒・3 シーン。定期ニュース向け',
-  explain: '横長・約 3 分・6 シーン。じっくり解説したいとき',
-  short: '縦長・約 60 秒・3 シーン。SNS のショート動画向け',
-};
-
-// 一覧で最初に選ばれている種類を先頭にする
-const PURPOSE_ORDER: Purpose[] = ['news', 'explain', 'short'];
+type Purpose = PurposeId;
 
 type ManageAction = Parameters<typeof window.electronAPI.project.manage>[0]['action'];
 
@@ -68,7 +65,9 @@ export function ProjectListPage() {
   const [loadError, setLoadError] = useState<unknown>(null);
   const [isCreating, setIsCreating] = useState(false);
   const [showCreate, setShowCreate] = useState(false);
-  const [purpose, setPurpose] = useState<Purpose>('news');
+  // 最初に選ばれている用途は、設定の「新しい動画」の既定値
+  const [purpose, setPurpose] = useState<Purpose>(DEFAULT_PURPOSE_ID);
+  const [purposeTouched, setPurposeTouched] = useState(false);
   const [openingProjectId, setOpeningProjectId] = useState<string | null>(null);
   const [search, setSearch] = useState('');
   const [showArchived, setShowArchived] = useState(false);
@@ -98,6 +97,20 @@ export function ProjectListPage() {
   useEffect(() => {
     void loadProjects();
   }, [loadProjects]);
+
+  useEffect(() => {
+    let active = true;
+    void window.electronAPI.settings
+      .get()
+      .then((value) => {
+        if (active && !purposeTouched)
+          setPurpose(normalizeSettings(value).newProjectDefaults.purpose);
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, [purposeTouched]);
 
   const manage = async (request: Parameters<typeof window.electronAPI.project.manage>[0]) => {
     try {
@@ -225,8 +238,8 @@ export function ProjectListPage() {
     >
       <div className="space-y-4">
         <div role="radiogroup" aria-label="動画の種類" className="grid gap-2 sm:grid-cols-3">
-          {PURPOSE_ORDER.map((id) => {
-            const item = PURPOSES.find((entry) => entry.id === id)!;
+          {PURPOSES.map((item) => {
+            const id = item.id as Purpose;
             const selected = purpose === id;
             return (
               <button
@@ -234,7 +247,10 @@ export function ProjectListPage() {
                 type="button"
                 role="radio"
                 aria-checked={selected}
-                onClick={() => setPurpose(id)}
+                onClick={() => {
+                  setPurposeTouched(true);
+                  setPurpose(id);
+                }}
                 className={cx(
                   'nv-focus-ring rounded-[var(--nv-radius-sm)] border p-3 text-left transition-colors duration-[var(--nv-duration-fast)]',
                   selected
@@ -247,7 +263,7 @@ export function ProjectListPage() {
                   {item.label}
                 </span>
                 <span className="mt-1 block text-xs text-[var(--nv-color-muted)]">
-                  {PURPOSE_DETAILS[id]}
+                  {describePurpose(item)}。{item.note}
                 </span>
               </button>
             );

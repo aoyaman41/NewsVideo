@@ -1,6 +1,23 @@
 import { readingEntrySchema, type ReadingEntry } from '../project/narration';
 import { z } from 'zod';
 import {
+  CLOSING_LINE_MODES,
+  SOURCE_DISPLAY_MODES,
+  type ClosingLineMode,
+  type SourceDisplayMode,
+} from '../project/presentationProfile';
+import {
+  DEFAULT_IMAGE_STYLE_PRESET,
+  IMAGE_STYLE_PRESETS,
+  type ImageStylePreset,
+} from '../project/imageStylePresets';
+import {
+  TTS_NARRATION_STYLE_PRESETS,
+  type TtsNarrationStylePreset,
+} from '../project/ttsNarrationStyles';
+import { DEFAULT_PURPOSE_ID, PURPOSE_IDS, type PurposeId } from '../project/purposes';
+import { VIDEO_BITRATE_MODES, isVideoBitrate, type VideoBitrateMode } from '../project/videoFormat';
+import {
   ANTHROPIC_TEXT_COMPLETION_MODEL,
   CLAUDE_EFFORTS,
   DEFAULT_GEMINI_TTS_MODEL,
@@ -50,6 +67,108 @@ export type TTSEngine = (typeof TTS_ENGINES)[number];
 export const GENERATION_MODES = ['automatic', 'review'] as const;
 export type GenerationMode = (typeof GENERATION_MODES)[number];
 
+/**
+ * 「新しい動画」の既定値(設定画面の「新しい動画」区分)。新しく作る動画にだけ使い、作成済みの動画は変えない。
+ * 設定保存時に全プロジェクトへ反映する仕組み(electron/ipc/settings.ts の generationKeys)には入れない。
+ * 用途の性格を決める項目(画面の縦横・長さ・シーン数)は用途で決まるので、ここには持たない
+ * (shared/project/purposes.ts の applyNewProjectDefaults で用途の値に重ねる)。
+ * null と空欄は「用途に合わせる」(用途ごとに既定値が違う項目だけ)。
+ */
+export type NewProjectDefaults = {
+  /** 作成画面で最初に選ばれている用途 */
+  purpose: PurposeId;
+  /** 画像の雰囲気と補足 */
+  imageStylePreset: ImageStylePreset;
+  styleReferenceNote: string;
+  /** 話し方と補足。null は用途に合わせる(ニュース調・落ち着いた解説・カジュアル) */
+  ttsNarrationStylePreset: TtsNarrationStylePreset | null;
+  ttsNarrationStyleNote: string;
+  /** 締めのひとこと */
+  closingLineMode: ClosingLineMode;
+  closingLineText: string;
+  /** 締めの画面。見出しが空欄なら用途に合わせる */
+  closingCardEnabled: boolean;
+  closingCardHeadline: string;
+  closingCardCtaText: string;
+  /** 出典の表示。null は用途に合わせる(ショートは表示しない) */
+  sourceDisplayMode: SourceDisplayMode | null;
+  sourceDisplayText: string;
+};
+
+/** 既定値。このままなら、新しい動画は用途の既定値どおりに始まる(M5 以前と同じ) */
+export const DEFAULT_NEW_PROJECT_DEFAULTS: NewProjectDefaults = {
+  purpose: DEFAULT_PURPOSE_ID,
+  imageStylePreset: DEFAULT_IMAGE_STYLE_PRESET,
+  styleReferenceNote: '',
+  ttsNarrationStylePreset: null,
+  ttsNarrationStyleNote: '',
+  closingLineMode: 'preset',
+  closingLineText: '',
+  closingCardEnabled: true,
+  closingCardHeadline: '',
+  closingCardCtaText: '',
+  sourceDisplayMode: null,
+  sourceDisplayText: '',
+};
+
+const TEXT_LIMIT = 500;
+
+/** 保存するときの検証。項目ごとに省略でき(部分的な更新)、不正な値は拒否する */
+export const newProjectDefaultsUpdateSchema = z
+  .object({
+    purpose: z.enum(PURPOSE_IDS),
+    imageStylePreset: z.enum(IMAGE_STYLE_PRESETS),
+    styleReferenceNote: z.string().max(TEXT_LIMIT),
+    ttsNarrationStylePreset: z.enum(TTS_NARRATION_STYLE_PRESETS).nullable(),
+    ttsNarrationStyleNote: z.string().max(TEXT_LIMIT),
+    closingLineMode: z.enum(CLOSING_LINE_MODES),
+    closingLineText: z.string().max(TEXT_LIMIT),
+    closingCardEnabled: z.boolean(),
+    closingCardHeadline: z.string().max(TEXT_LIMIT),
+    closingCardCtaText: z.string().max(TEXT_LIMIT),
+    sourceDisplayMode: z.enum(SOURCE_DISPLAY_MODES).nullable(),
+    sourceDisplayText: z.string().max(TEXT_LIMIT),
+  })
+  .partial()
+  .strip();
+
+/**
+ * 保存済みの値を読むときの正規化。項目ごとに検証し、ない項目・不正な項目は既定値で補う
+ * (1 項目が壊れていても、ほかの項目は残す)。
+ */
+export function normalizeNewProjectDefaults(input: unknown): NewProjectDefaults {
+  const raw =
+    input && typeof input === 'object' && !Array.isArray(input)
+      ? (input as Record<string, unknown>)
+      : {};
+  const shape = newProjectDefaultsUpdateSchema.shape;
+  const result = { ...DEFAULT_NEW_PROJECT_DEFAULTS } as Record<string, unknown>;
+  for (const key of Object.keys(DEFAULT_NEW_PROJECT_DEFAULTS) as (keyof NewProjectDefaults)[]) {
+    if (!(key in raw)) continue;
+    const parsed = shape[key].safeParse(raw[key]);
+    if (parsed.success && parsed.data !== undefined) {
+      result[key] = typeof parsed.data === 'string' ? parsed.data.trim() : parsed.data;
+    }
+  }
+  return result as NewProjectDefaults;
+}
+
+/** 為替レート(1 ドルあたりの円)の既定値と、受け付ける範囲 */
+export const DEFAULT_JPY_PER_USD = 150;
+const JPY_PER_USD_RANGE = { min: 1, max: 10000 } as const;
+
+export function isValidJpyPerUsd(value: unknown): value is number {
+  return (
+    typeof value === 'number' &&
+    Number.isFinite(value) &&
+    value >= JPY_PER_USD_RANGE.min &&
+    value <= JPY_PER_USD_RANGE.max
+  );
+}
+
+/** 以前の既定値(8M 固定)。ビットレートの決め方が保存されていない設定で、この値は「自動」とみなす */
+const LEGACY_DEFAULT_VIDEO_BITRATE = '8M';
+
 export type AppSettings = {
   readingDictionary: ReadingEntry[];
   /**
@@ -57,9 +176,12 @@ export type AppSettings = {
    * 同時実行数はプロバイダと用途ごとの既定値(electron/utils/generationPolicy.ts)で決まり、この値は使わない
    */
   generationConcurrency: number;
-  /** 「おまかせで作る」の進め方の既定値(記事画面と設定画面の詳細設定で変える) */
+  /**
+   * 「おまかせで作る」の進め方の既定値(設定画面の「新しい動画」で変える)。
+   * 記事画面での変更はその回だけに効き、この値は変えない
+   */
   generationMode: GenerationMode;
-  /** 「おまかせで作る」の 1 回の予算の上限の既定値(USD)。null は上限なし */
+  /** 「おまかせで作る」の 1 回の予算の上限の既定値(USD)。null は上限なし。変える場所は進め方と同じ */
   generationBudgetUsd: number | null;
   ttsEngine: TTSEngine;
   ttsModel: GeminiTtsModel;
@@ -76,15 +198,29 @@ export type AppSettings = {
   claudeImagePromptEffort: ClaudeEffort;
   imageModel: ImageModel;
   imageResolution: ImageResolution;
+  /**
+   * 旧設定「新しいプロジェクトの縦横比」。用途を選んで作る動画では用途の縦横を使うため、
+   * 用途を指定しない作成(旧形式の呼び出し)のときだけ使う。保存済みの値を読めるよう項目は残す
+   */
   defaultAspectRatio: '16:9' | '1:1' | '9:16';
   videoResolution: '1920x1080' | '1280x720' | '3840x2160';
   videoFps: number;
+  /**
+   * 映像のビットレートの決め方。auto は解像度と fps から決める(YouTube の推奨値)。
+   * manual は videoBitrate を使う。項目がない以前の settings.json は normalizeSettings で補う
+   */
+  videoBitrateMode: VideoBitrateMode;
+  /** 指定するときの映像のビットレート(auto のときは使わない。「指定する」に切り替えたときの初期値) */
   videoBitrate: string;
   audioBitrate: string;
   videoPartLeadInSec: number;
   openingVideoPath: string;
   endingVideoPath: string;
   defaultProjectDir: string;
+  /** 金額の表示に使う為替レート(1 ドルあたりの円) */
+  jpyPerUsd: number;
+  /** 新しい動画の既定値 */
+  newProjectDefaults: NewProjectDefaults;
   cost?: unknown;
 };
 
@@ -110,12 +246,15 @@ export const DEFAULT_SETTINGS: AppSettings = {
   defaultAspectRatio: '16:9',
   videoResolution: '1920x1080',
   videoFps: 30,
-  videoBitrate: '8M',
+  videoBitrateMode: 'auto',
+  videoBitrate: LEGACY_DEFAULT_VIDEO_BITRATE,
   audioBitrate: '192k',
   videoPartLeadInSec: 0.3,
   openingVideoPath: '',
   endingVideoPath: '',
   defaultProjectDir: '',
+  jpyPerUsd: DEFAULT_JPY_PER_USD,
+  newProjectDefaults: DEFAULT_NEW_PROJECT_DEFAULTS,
 };
 
 export const settingsUpdateSchema = z
@@ -140,12 +279,15 @@ export const settingsUpdateSchema = z
     defaultAspectRatio: z.enum(['16:9', '1:1', '9:16']).optional(),
     videoResolution: z.enum(['1920x1080', '1280x720', '3840x2160']).optional(),
     videoFps: z.number().finite().optional(),
+    videoBitrateMode: z.enum(VIDEO_BITRATE_MODES).optional(),
     videoBitrate: z.string().optional(),
     audioBitrate: z.string().optional(),
     videoPartLeadInSec: z.number().finite().optional(),
     openingVideoPath: z.string().optional(),
     endingVideoPath: z.string().optional(),
     defaultProjectDir: z.string().optional(),
+    jpyPerUsd: z.number().finite().min(JPY_PER_USD_RANGE.min).max(JPY_PER_USD_RANGE.max).optional(),
+    newProjectDefaults: newProjectDefaultsUpdateSchema.optional(),
     cost: z.unknown().optional(),
   })
   .strip();
@@ -228,6 +370,22 @@ export function normalizeSettings(input: unknown): AppSettings {
     )
   ) {
     merged.generationBudgetUsd = DEFAULT_SETTINGS.generationBudgetUsd;
+  }
+
+  if (!isValidJpyPerUsd(merged.jpyPerUsd)) merged.jpyPerUsd = DEFAULT_JPY_PER_USD;
+  merged.newProjectDefaults = normalizeNewProjectDefaults(raw.newProjectDefaults);
+
+  // 映像のビットレートの決め方。項目がない以前の settings.json では、以前の既定値(8M)と書き方に合わない値は
+  // 「自動」、それ以外(利用者が指定した値)は「指定する」とみなす。以前の版は既定値もすべて保存していたため、
+  // 8M は利用者が選んだ値と区別できない(1080p30 なら自動でも 8M で同じ)
+  if (!(VIDEO_BITRATE_MODES as readonly unknown[]).includes(raw.videoBitrateMode)) {
+    merged.videoBitrateMode =
+      isVideoBitrate(merged.videoBitrate) && merged.videoBitrate !== LEGACY_DEFAULT_VIDEO_BITRATE
+        ? 'manual'
+        : 'auto';
+  }
+  if (typeof merged.videoBitrate !== 'string' || !merged.videoBitrate.trim()) {
+    merged.videoBitrate = LEGACY_DEFAULT_VIDEO_BITRATE;
   }
 
   // 旧ボイス名の移行

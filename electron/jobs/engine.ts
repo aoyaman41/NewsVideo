@@ -1,5 +1,5 @@
 import { metricsSchema } from '../../shared/project/metrics';
-import { resolutionForAspect } from '../../shared/project/videoFormat';
+import { resolutionForAspect, resolveVideoBitrate } from '../../shared/project/videoFormat';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import {
@@ -24,7 +24,9 @@ import {
   videoInput,
 } from '../../shared/project/integrity';
 import {
+  BUDGET_RESERVE_MULTIPLIER,
   estimateGenerationUsd,
+  estimateProjectGeneration,
   type GenerationOperation,
 } from '../../shared/project/generationEstimate';
 import { resolvePresentationClosingLine } from '../../shared/project/presentationProfile';
@@ -72,6 +74,24 @@ type Operation<T> = {
   signature: (project: Project) => string;
   context?: JobOperationContext;
 };
+
+/**
+ * ジョブの見込み額。これまでに使った額 + これから作る分の見込み(記事画面の見積もりと同じ計算)。
+ * 最初から作り直すときは、台本からすべて作る前提で見込む
+ */
+function estimateJobTotalUsd(
+  project: Project,
+  settings: AppSettings,
+  job: GenerationJob,
+  restart: boolean
+): number {
+  try {
+    const source = restart ? { ...project, parts: [] } : project;
+    return job.spentUsd + estimateProjectGeneration(source, settings, job.targetPartCount).usd;
+  } catch {
+    return job.spentUsd;
+  }
+}
 
 class JobPaused extends Error {}
 /** 予算の判定で、新しい処理を始めずに止める */
@@ -290,14 +310,21 @@ export class GenerationJobEngine {
             unknownCharges: 0,
           };
       if (previous && !resume) project.jobHistory = [...(project.jobHistory ?? []), previous];
-      project.job = job;
       project.generationConfig = {
         ...settings,
         cost: undefined,
         openingVideoPath: undefined,
         endingVideoPath: undefined,
         defaultProjectDir: undefined,
+        // 新しい動画の既定値と為替レートは、この動画の生成には使わない
+        newProjectDefaults: undefined,
+        jpyPerUsd: undefined,
+        // 記事画面のシーン数(台本ができる前に止まっても、開き直したときに同じ値を出す)
+        targetPartCount: job.targetPartCount,
       };
+      // 生成中の進捗表示に出す「見込み」。これまでに使った額 + これから作る分の見込み
+      job.estimatedTotalUsd = estimateJobTotalUsd(project, settings, job, Boolean(options.restart));
+      project.job = job;
       project = await this.save(project);
       this.cancellations.delete(id);
       const handle: RunHandle = { abort: new AbortController() };
@@ -393,13 +420,14 @@ export class GenerationJobEngine {
       )
         throw new Error(CANCELLED);
       const settings = normalizeSettings(job.settings);
+      // 予約は見込み × 1.5(見込みは 2026-09 の実績に合わせて補正済み。以前は補正前の見込み × 2)
       const allowance =
         estimateGenerationUsd(
           operation.kind,
           operation.input(latest),
           settings,
           operation.kind === 'script' ? job.targetPartCount : 1
-        ) * 2;
+        ) * BUDGET_RESERVE_MULTIPLIER;
       // 予算で止めるのは、確定済みの使用額 + 実行中の処理の予約額 + 次の処理の見込み額(余裕込み)が予算を超えるとき。
       // 料金未確定の記録(unknownCharges)があるだけでは止めない(未確定の件数は画面に表示している)
       const reserved = pendingOperationsOf(job).reduce((sum, item) => sum + item.estimatedUsd, 0);
@@ -502,7 +530,8 @@ export class GenerationJobEngine {
     return this.request<{ prompt: ImagePrompt; usage: Usage }>(id, {
       step: `prompt:${partId}`,
       kind: 'prompt',
-      input: (project) => partOf(project, partId).scriptText,
+      // 画像の指示は記事全体(と全シーンの台本)を読んで作るので、記事本文で見込む
+      input: (project) => project.article.bodyText,
       call: (source) =>
         this.invoke('ai:generateImagePromptForTarget', source.parts, source.article, partId, {
           stylePreset: source.presentationProfile.imageStylePreset,
@@ -654,7 +683,13 @@ export class GenerationJobEngine {
           latest.presentationProfile.aspectRatio
         ),
         fps: settings.videoFps,
-        videoBitrate: settings.videoBitrate,
+        // 映像のビットレートは、自動なら解像度と fps から決める(YouTube の推奨値)
+        videoBitrate: resolveVideoBitrate(
+          settings.videoBitrateMode,
+          settings.videoBitrate,
+          resolutionForAspect(settings.videoResolution, latest.presentationProfile.aspectRatio),
+          settings.videoFps
+        ),
         audioBitrate: settings.audioBitrate,
         includeOpening: Boolean(settings.openingVideoPath),
         includeEnding: Boolean(settings.endingVideoPath),

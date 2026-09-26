@@ -1,3 +1,4 @@
+import { narrationSecondsFor } from './narration';
 import { createNewPart, type Project } from './schema';
 
 export function splitScene(project: Project, id: string, offset: number): Project {
@@ -13,7 +14,7 @@ export function splitScene(project: Project, id: string, offset: number): Projec
     ...createNewPart(index + 1),
     title: `${part.title}（続き）`,
     scriptText: right,
-    durationEstimateSec: right.length / 4,
+    durationEstimateSec: narrationSecondsFor(right.length),
     panelImages: [...part.panelImages],
     scriptModifiedByUser: true,
   };
@@ -25,7 +26,7 @@ export function splitScene(project: Project, id: string, offset: number): Projec
       ...part,
       scriptText: left,
       audio: undefined,
-      durationEstimateSec: left.length / 4,
+      durationEstimateSec: narrationSecondsFor(left.length),
       updatedAt: now,
       scriptModifiedByUser: true,
     },

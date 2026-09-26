@@ -104,10 +104,20 @@ registerOperation('settings:set', async (_, settings: unknown) => {
   const { currentSettings, newSettings } = await serializeSettingsAccess(async () => {
     const currentSettings = await readSettings();
     const validatedSettings = parseSettingsUpdate(settings);
-    const newSettings = normalizeSettings({ ...currentSettings, ...validatedSettings });
+    const newSettings = normalizeSettings({
+      ...currentSettings,
+      ...validatedSettings,
+      // 「新しい動画」の既定値は項目ごとに更新できる(送られなかった項目は今の値を残す)
+      newProjectDefaults: {
+        ...currentSettings.newProjectDefaults,
+        ...validatedSettings.newProjectDefaults,
+      },
+    });
     await fs.writeFile(settingsPath, JSON.stringify(newSettings, null, 2));
     return { currentSettings, newSettings };
   });
+  // 変えると実行中でない全プロジェクトの generationConfig に反映する項目(素材が「更新が必要」になる)。
+  // 「新しい動画」の既定値(newProjectDefaults)・進め方と予算・為替レートは入れない(作成済みの動画は変えない)
   const generationKeys = [
     'readingDictionary',
     'scriptTextModel',

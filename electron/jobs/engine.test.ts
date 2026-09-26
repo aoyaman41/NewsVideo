@@ -139,6 +139,34 @@ it('persists every stage and completes independently of renderer callbacks', asy
   expect(saved.usage.every((record) => record.jobId === saved.job!.id)).toBe(true);
 });
 
+// M5: 生成中に出す「見込み」と、映像のビットレートの自動決定
+it('records the expected total at the start and renders with the automatic bitrate', async () => {
+  const { estimateProjectGeneration } = await import('../../shared/project/generationEstimate');
+  settings = { ...DEFAULT_SETTINGS, videoResolution: '3840x2160', videoFps: 60 };
+  const before = await repository.load(id);
+  const expected = estimateProjectGeneration(before, settings, 2).usd;
+  await engine.start(id, { mode: 'automatic', targetPartCount: 2 });
+  await engine.wait(id);
+  const saved = await repository.load(id);
+  expect(saved.job!.estimatedTotalUsd).toBeCloseTo(expected, 10);
+  expect(saved.job!.estimatedTotalUsd).toBeGreaterThan(0);
+  expect(saved.outputSettings).toMatchObject({
+    resolution: '3840x2160',
+    fps: 60,
+    videoBitrate: '60M',
+  });
+  // 新しい動画の既定値と為替レートは、この動画の生成設定に入れない
+  expect(saved.generationConfig).not.toHaveProperty('newProjectDefaults');
+  expect(saved.generationConfig).not.toHaveProperty('jpyPerUsd');
+});
+
+it('keeps a bitrate that the user chose explicitly', async () => {
+  settings = { ...DEFAULT_SETTINGS, videoBitrateMode: 'manual', videoBitrate: '6M' };
+  await engine.start(id, { mode: 'automatic', targetPartCount: 1 });
+  await engine.wait(id);
+  expect((await repository.load(id)).outputSettings?.videoBitrate).toBe('6M');
+});
+
 it('keeps a successful image when cancellation races the request and resumes without charging for it again', async () => {
   const original = invoke.getMockImplementation()!;
   invoke.mockImplementation(async (name: string, ...args: unknown[]) => {
@@ -529,12 +557,15 @@ it('lets running requests finish and save when stopped in the middle of the para
 });
 
 it('reserves the estimate of running requests before checking the budget and pauses without a revision conflict', async () => {
-  const { estimateGenerationUsd } = await import('../../shared/project/generationEstimate');
+  const { BUDGET_RESERVE_MULTIPLIER, estimateGenerationUsd } =
+    await import('../../shared/project/generationEstimate');
   await engine.start(id, { mode: 'review', targetPartCount: 3 });
   await engine.wait(id);
   const reviewed = await repository.load(id);
   expect(reviewed.job).toMatchObject({ status: 'paused', stage: '台本の確認' });
-  const audioAllowance = estimateGenerationUsd('audio', reviewed.parts[0].scriptText, settings) * 2;
+  const audioAllowance =
+    estimateGenerationUsd('audio', reviewed.parts[0].scriptText, settings) *
+    BUDGET_RESERVE_MULTIPLIER;
   // 2 件分の音声は予約できるが、3 件目は予約すると予算を超える
   const budgetUsd = reviewed.job!.spentUsd + audioAllowance * 2.5;
   const hold = holdOperations(['tts:generate']);

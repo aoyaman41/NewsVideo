@@ -20,7 +20,7 @@ interface ArticleInputProps {
   onChange?: (data: ArticleInputType) => void;
   /** 本文の文字数(表示用) */
   bodyLength?: number;
-  /** ボタンの上に出す内容(費用の目安や案内) */
+  /** ボタンの上に出す内容(費用の見込みや案内) */
   footer?: ReactNode;
   /** 右から順に大きく見せたいボタンを最後に置く */
   actions: ArticleAction[];

@@ -1,5 +1,9 @@
 import { productionMetrics } from '../../shared/project/metrics';
-import { PURPOSES } from '../../shared/project/purposes';
+import {
+  PURPOSE_IDS,
+  applyNewProjectDefaults,
+  withNewProjectDefaults,
+} from '../../shared/project/purposes';
 import { populateSample } from '../project/sample';
 import { ProjectLifecycle } from '../project/lifecycle';
 import { fileAccess } from '../utils/fileAccess';
@@ -12,13 +16,33 @@ import * as path from 'node:path';
 import { z } from 'zod';
 import { ProjectRepository } from '../project/repository';
 import { createNewProject } from '../../shared/project/schema';
-import { normalizeSettings } from '../../shared/settings/appSettings';
+import {
+  newProjectDefaultsUpdateSchema,
+  normalizeNewProjectDefaults,
+  normalizeSettings,
+  type AppSettings,
+} from '../../shared/settings/appSettings';
+import { recordUsageInLedger } from '../usage/ledgerService';
 
 export const getProjectRepository = () => {
-  repository ??= new ProjectRepository(path.join(app.getPath('userData'), 'projects'));
+  repository ??= new ProjectRepository(path.join(app.getPath('userData'), 'projects'), {
+    // 保存のたびに、新しい使用量の記録を全体の台帳(削除しても残る)に追記する
+    onPersist: (project) => recordUsageInLedger(project),
+  });
   return repository;
 };
 let repository: ProjectRepository | undefined;
+
+/** settings.json を読む。まだないとき・読めないときは既定値 */
+async function readAppSettings(): Promise<AppSettings> {
+  try {
+    return normalizeSettings(
+      JSON.parse(await fs.readFile(path.join(app.getPath('userData'), 'settings.json'), 'utf8'))
+    );
+  } catch {
+    return normalizeSettings({});
+  }
+}
 
 function changed(id: string, revision?: number) {
   for (const window of BrowserWindow.getAllWindows())
@@ -71,7 +95,7 @@ registerOperation('project:create', async (_, input: unknown) => {
       z.string(),
       z.object({
         name: z.string(),
-        purpose: z.enum(['short', 'explain', 'news']).optional(),
+        purpose: z.enum(PURPOSE_IDS).optional(),
         sample: z.boolean().optional(),
       }),
     ])
@@ -83,18 +107,15 @@ registerOperation('project:create', async (_, input: unknown) => {
     .max(200)
     .parse(typeof request === 'string' ? request : request.name || '新しい動画');
   const project = createNewProject(name, '');
-  try {
-    const settings = normalizeSettings(
-      JSON.parse(await fs.readFile(path.join(app.getPath('userData'), 'settings.json'), 'utf8'))
-    );
-    project.presentationProfile.aspectRatio = settings.defaultAspectRatio;
-  } catch {
-    /* Defaults work before settings exist. */
-  }
+  const settings = await readAppSettings();
   if (typeof request !== 'string' && request.purpose) {
-    const purpose = PURPOSES.find((item) => item.id === request.purpose)!;
-    project.presentationProfile = structuredClone(purpose.profile);
-    project.generationConfig = { targetPartCount: purpose.parts };
+    // 用途の値に「新しい動画」の既定値を重ねる(縦横・長さ・シーン数は用途、見た目と締めは既定値を優先)
+    const setup = applyNewProjectDefaults(request.purpose, settings.newProjectDefaults);
+    project.presentationProfile = setup.presentationProfile;
+    project.generationConfig = { targetPartCount: setup.targetPartCount };
+  } else {
+    // 用途を指定しない作成(旧形式の呼び出し)だけ、旧設定の縦横比を使う
+    project.presentationProfile.aspectRatio = settings.defaultAspectRatio;
   }
   const created = await getProjectRepository().create(project);
   if (typeof request !== 'string' && request.sample)
@@ -102,6 +123,45 @@ registerOperation('project:create', async (_, input: unknown) => {
   changed(created.id, created.revision);
   return created;
 });
+/**
+ * 「まだ台本がない動画にも適用」: 台本がまだない動画に、「新しい動画」の既定値(見た目と締めの項目)を入れ直す。
+ * 素材がないので作り直しは起きない。生成中の動画とテンプレートは変えない。dryRun は数えるだけ
+ */
+registerOperation('project:applyNewProjectDefaults', async (_, input: unknown) => {
+  const request = z
+    .object({ defaults: newProjectDefaultsUpdateSchema, dryRun: z.boolean().optional() })
+    .parse(input);
+  const defaults = normalizeNewProjectDefaults(request.defaults);
+  const repo = getProjectRepository();
+  let count = 0;
+  for (const directory of await repo.directories()) {
+    try {
+      const project = await repo.readDirectory(directory);
+      if (!isWaitingForScript(project)) continue;
+      count++;
+      if (request.dryRun) continue;
+      const saved = await repo.update(project.id, (data) => {
+        // 読み込みから更新までの間に台本ができた・生成が始まった場合は変えない
+        if (!isWaitingForScript(data)) return;
+        data.presentationProfile = withNewProjectDefaults(data.presentationProfile, defaults);
+      });
+      changed(saved.id, saved.revision);
+    } catch {
+      /* 読めない動画は一覧の表示に任せる */
+    }
+  }
+  return { count };
+});
+
+function isWaitingForScript(project: {
+  parts: unknown[];
+  template?: boolean;
+  job?: { status: string };
+}) {
+  if (project.parts.length > 0 || project.template) return false;
+  return !(project.job && ['running', 'queued'].includes(project.job.status));
+}
+
 registerOperation('project:load', (_, id: unknown) =>
   getProjectRepository().load(z.string().uuid().parse(id))
 );

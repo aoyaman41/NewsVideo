@@ -55,6 +55,8 @@ import {
 } from '../../shared/project/imageStylePresets';
 import { IMAGE_TEXT_SECTION_LABEL, formatImageTextSection } from '../../shared/project/imageText';
 import { PRESENTATION_PROFILE_PRESET_CLOSING_LINES } from '../../shared/project/presentationProfile';
+import { narrationCharsFor } from '../../shared/project/narration';
+import { DEFAULT_SCENE_COUNT, DEFAULT_SECONDS_PER_PART } from '../../shared/project/purposes';
 import { DEFAULT_SETTINGS, normalizeSettings } from '../../shared/settings/appSettings';
 import { sanitizeImagePromptForRendering } from '../../shared/utils/imagePromptSanitizer';
 
@@ -693,12 +695,12 @@ function createScriptGenerationPrompt(article: Article, options: ScriptOptions):
   };
 
   const tone = options.tone || 'news';
-  const targetPartCount = options.targetPartCount || 5;
-  const targetDuration = options.targetDurationPerPartSec || 30;
+  const targetPartCount = options.targetPartCount || DEFAULT_SCENE_COUNT;
+  const targetDuration = options.targetDurationPerPartSec || DEFAULT_SECONDS_PER_PART;
   const closingLine = typeof options.closingLine === 'string' ? options.closingLine.trim() : '';
   const requirements = [
     `${toneDescription[tone]}トーンで書いてください`,
-    `各パートは約${targetDuration}秒（日本語で約${Math.round(targetDuration * 4)}文字）のナレーションになるようにしてください`,
+    `各パートは約${targetDuration}秒（日本語で約${narrationCharsFor(targetDuration)}文字）のナレーションになるようにしてください`,
     '視聴者が理解しやすいよう、論理的な流れで構成してください',
     '重要な情報を漏らさないようにしてください',
     'ナレーションは音声合成でそのまま読み上げます。括弧・記号・英字の略語は使わず、耳で聞いて分かる言葉で書いてください',

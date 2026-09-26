@@ -1,6 +1,11 @@
 import { useScrollMemory } from '../hooks/useScrollMemory';
 import { useSceneSelection, rememberedScene } from '../stores/sceneSelection';
-import { resolutionForAspect, type RenderOptions } from '../../shared/project/videoFormat';
+import {
+  resolutionForAspect,
+  resolveVideoBitrate,
+  type RenderOptions,
+} from '../../shared/project/videoFormat';
+import { normalizeSettings } from '../../shared/settings/appSettings';
 import { renderConflictMessage } from '../../shared/project/renderIntent';
 import { inputFingerprint, isVideoCurrent, partFreshness } from '../../shared/project/integrity';
 import { withRenderConflictRetry } from '../utils/renderRetry';
@@ -290,10 +295,20 @@ export function VideoManagePage() {
         setProject(normalizedProject);
         setPresentationProfile(normalizedPresentationProfile);
         savedPresentationProfileRef.current = JSON.stringify(normalizedPresentationProfile);
+        const appSettings = normalizeSettings(loadedSettings);
         const normalizedSettings: Settings = {
           videoResolution: loadedSettings.videoResolution ?? '1920x1080',
           videoFps: loadedSettings.videoFps ?? 30,
-          videoBitrate: loadedSettings.videoBitrate ?? '8M',
+          // 映像のビットレートは、自動なら解像度と fps から決める(書き出し済みの動画は保存した値を使う)
+          videoBitrate: resolveVideoBitrate(
+            appSettings.videoBitrateMode,
+            appSettings.videoBitrate,
+            resolutionForAspect(
+              appSettings.videoResolution,
+              normalizedProject.presentationProfile.aspectRatio
+            ),
+            appSettings.videoFps
+          ),
           audioBitrate: loadedSettings.audioBitrate ?? '192k',
           openingVideoPath:
             typeof (loadedSettings as Partial<Settings>).openingVideoPath === 'string'

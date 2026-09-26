@@ -11,13 +11,16 @@ import { projectIdFromPath } from '../layout/workflowLabels';
 import { Button, StatusChip, useToast } from '../ui';
 import { cancelJob, resumeJob } from './jobActions';
 import {
+  describeCompletedCost,
   describeJob,
-  formatUsdShort,
+  describeRunningCost,
   isJobActive,
+  jobCostBreakdown,
   jobDismissKey,
   type JobPhase,
   type JobStepView,
 } from './jobDisplay';
+import { useJpyPerUsd } from '../../stores/currencyStore';
 
 const PHASE_CHIP: Record<JobPhase, { tone: Tone; label: string }> = {
   running: { tone: 'info', label: '生成中' },
@@ -144,6 +147,7 @@ function JobBannerItem({ projectId, job, isRoute }: BannerItem) {
   const toast = useToast();
   const [project] = useProjectState(projectId);
   const [pending, setPending] = useState(false);
+  const jpyPerUsd = useJpyPerUsd();
   const view = describeJob(job);
   const chip = PHASE_CHIP[view.phase];
 
@@ -174,10 +178,12 @@ function JobBannerItem({ projectId, job, isRoute }: BannerItem) {
   const showBar = view.phase === 'running' || view.phase === 'stopping';
 
   let detail = view.detail;
-  if (view.phase === 'completed') {
-    detail = `今回の費用の目安: ${formatUsdShort(job.spentUsd)}${
-      job.unknownCharges > 0 ? '(一部の料金は各サービスの利用明細で確認してください)' : ''
-    }`;
+  if (view.phase === 'running') {
+    detail = describeRunningCost(job, jpyPerUsd);
+  } else if (view.phase === 'completed') {
+    // 内訳は、このジョブで記録した使用量から出す(プロジェクトを読み込めていれば)
+    const breakdown = project ? jobCostBreakdown(project.usage, job) : null;
+    detail = describeCompletedCost(job, breakdown, jpyPerUsd);
   }
 
   const actions = (() => {

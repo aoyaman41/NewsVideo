@@ -1,7 +1,14 @@
 import { useCallback } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 
-export type SettingsSection = 'api' | 'models' | 'video' | 'dictionary' | 'advanced';
+export type SettingsSection =
+  | 'api'
+  | 'models'
+  | 'newVideo'
+  | 'video'
+  | 'dictionary'
+  | 'usage'
+  | 'advanced';
 
 export type SettingsLocationState = {
   /** 設定を閉じたときに戻る画面 */
@@ -13,7 +20,15 @@ export type SettingsLocationState = {
 export function readSettingsLocationState(state: unknown): SettingsLocationState {
   if (!state || typeof state !== 'object') return {};
   const value = state as Record<string, unknown>;
-  const sections: SettingsSection[] = ['api', 'models', 'video', 'dictionary', 'advanced'];
+  const sections: SettingsSection[] = [
+    'api',
+    'models',
+    'newVideo',
+    'video',
+    'dictionary',
+    'usage',
+    'advanced',
+  ];
   return {
     returnTo:
       typeof value.returnTo === 'string' && value.returnTo && value.returnTo !== '/settings'

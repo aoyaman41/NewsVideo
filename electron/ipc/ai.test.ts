@@ -337,6 +337,19 @@ describe('script prompt', () => {
     expect(userPrompt).toContain('括弧・記号・英字の略語は使わず');
     expect(JSON.stringify(request.output_config.format.schema)).toContain('ナレーション本文');
   });
+
+  // M5: 秒数から文字数への換算は実測の 5.3 文字/秒(以前は 4 文字/秒で、動画が目標より短くなっていた)
+  it('converts the target seconds per scene with the measured reading speed', async () => {
+    streamReturning(claudeMessage(JSON.stringify(scriptPayload)));
+    await runWithSettings(CLAUDE_SETTINGS, () =>
+      handler('ai:generateScript')(undefined, article, { targetDurationPerPartSec: 30 })
+    );
+    const prompt = (lastRequest(mocks.stream) as { messages: Array<{ content: string }> })
+      .messages[0].content;
+    expect(prompt).toContain('各パートは約30秒（日本語で約159文字）');
+    // シーン数の指定がないときは、既定の用途(ニュース)のシーン数
+    expect(prompt).toContain('3個のパートに分割');
+  });
 });
 
 const slideDesign = {

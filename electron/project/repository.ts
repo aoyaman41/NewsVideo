@@ -18,10 +18,29 @@ export class ProjectStorageError extends Error {
 
 const missing = (error: unknown) => (error as NodeJS.ErrnoException)?.code === 'ENOENT';
 
+export type ProjectRepositoryOptions = {
+  /**
+   * 保存(作成を含む)が確定したあとに呼ぶ。使用量の台帳への追記に使う。
+   * 失敗しても保存は成功扱いのままにする(呼び出し側で待たない・例外を外に出さない)
+   */
+  onPersist?: (project: Project) => void | Promise<void>;
+};
+
 /** A single durable manifest is the commit point. Legacy component JSON files are read only. */
 export class ProjectRepository {
   private queues = new Map<string, Promise<unknown>>();
-  constructor(readonly root: string) {}
+  constructor(
+    readonly root: string,
+    private options: ProjectRepositoryOptions = {}
+  ) {}
+
+  private notifyPersisted(project: Project) {
+    try {
+      void Promise.resolve(this.options.onPersist?.(project)).catch(() => {});
+    } catch {
+      /* 保存そのものは完了している */
+    }
+  }
 
   async directories() {
     await fs.mkdir(this.root, { recursive: true });
@@ -176,6 +195,7 @@ export class ProjectRepository {
       revision: 0,
     });
     await this.atomicWrite(path.join(directory, 'project.json'), JSON.stringify(project));
+    this.notifyPersisted(project);
     return project;
   }
 
@@ -223,6 +243,7 @@ export class ProjectRepository {
       JSON.stringify({ ...current, schemaVersion: 'v2.0' })
     );
     await this.atomicWrite(path.join(directory, 'project.json'), JSON.stringify(next));
+    this.notifyPersisted(next);
     return next;
   }
 }

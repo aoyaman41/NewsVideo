@@ -9,17 +9,20 @@ import { ApiKeyList } from '../components/onboarding/ApiKeyList';
 import { API_KEY_SERVICE_INFO, type ApiKeyService } from '../components/onboarding/apiKeys';
 import { useApiKeyStatus } from '../components/onboarding/useApiKeyStatus';
 import { ReadingDictionaryEditor } from '../components/settings/ReadingDictionaryEditor';
+import { NewVideoDefaultsSection } from '../components/settings/NewVideoDefaultsSection';
+import { UsageCostSection } from '../components/settings/UsageCostSection';
 import {
   readSettingsLocationState,
   type SettingsSection,
 } from '../components/settings/settingsNavigation';
 import {
-  budgetToUsd,
   ensureGenerationPreferencesMigrated,
   forgetLegacyGenerationPreferences,
 } from '../stores/generationPreferences';
+import { setJpyPerUsd } from '../stores/currencyStore';
 import { cx } from '../utils/cx';
 import { normalizeSettings, type AppSettings } from '../../shared/settings/appSettings';
+import { autoVideoBitrate } from '../../shared/project/videoFormat';
 import {
   DEFAULT_GEMINI_TTS_MODEL,
   DEFAULT_IMAGE_MODEL,
@@ -66,10 +69,18 @@ interface VoiceInfo {
 const SECTIONS: Array<{ key: SettingsSection; label: string }> = [
   { key: 'api', label: 'API キー' },
   { key: 'models', label: '生成モデル' },
+  { key: 'newVideo', label: '新しい動画' },
   { key: 'video', label: '動画' },
   { key: 'dictionary', label: '読み辞書' },
+  { key: 'usage', label: '使った費用' },
   { key: 'advanced', label: '詳細設定' },
 ];
+
+const VIDEO_RESOLUTION_WORDS: Record<Settings['videoResolution'], string> = {
+  '1920x1080': 'フル HD',
+  '1280x720': 'HD',
+  '3840x2160': '4K',
+};
 
 // 見た目は M4-B の共通クラス(src/styles/utilities.css の .nv-label / .nv-help)にそろえる
 const fieldLabel = 'nv-label';
@@ -382,6 +393,15 @@ export function SettingsPage() {
 
   const update = <K extends keyof Settings>(key: K, value: Settings[K]) =>
     setSettings((prev) => ({ ...prev, [key]: value }));
+  const updateMany = (patch: Partial<Settings>) => setSettings((prev) => ({ ...prev, ...patch }));
+
+  // 金額の表示(画面上部の進捗表示など)は、保存を待たずに新しいレートで出す
+  useEffect(() => {
+    if (hasLoadedSettings) setJpyPerUsd(settings.jpyPerUsd);
+  }, [hasLoadedSettings, settings.jpyPerUsd]);
+
+  const isOpenAIImage = getImageModelProvider(settings.imageModel) === 'openai';
+  const autoBitrate = autoVideoBitrate(settings.videoResolution, settings.videoFps);
 
   const handleSelectVideoFile = async (field: 'openingVideoPath' | 'endingVideoPath') => {
     try {
@@ -689,6 +709,7 @@ export function SettingsPage() {
                             <option key={resolution} value={resolution}>
                               {IMAGE_RESOLUTION_LABELS[resolution]}
                               {resolution === DEFAULT_IMAGE_RESOLUTION ? '(おすすめ)' : ''}
+                              {resolution === '4k' && isOpenAIImage ? '(実験的)' : ''}
                             </option>
                           ))}
                         </select>
@@ -697,6 +718,9 @@ export function SettingsPage() {
                           {isGeminiImageModel(settings.imageModel) &&
                           settings.imageResolution === 'fhd'
                             ? 'このモデルでは、文字を読みやすくするため 2K で作ります。'
+                            : ''}
+                          {isOpenAIImage && settings.imageResolution === '4k'
+                            ? 'GPT Image の 4K は OpenAI が実験的としている大きさです。うまく作れないときは 2K 相当にしてください。'
                             : ''}
                         </p>
                       </div>
@@ -764,7 +788,7 @@ export function SettingsPage() {
                           />
                         )}
                         <p className={fieldHint}>
-                          話し方(ニュース調など)は記事画面の詳細設定で選べます。
+                          話し方(ニュース調など)は「新しい動画」で既定を決め、動画ごとには記事画面の詳細設定で変えられます。
                         </p>
                       </div>
                     </div>
@@ -773,8 +797,22 @@ export function SettingsPage() {
               </Card>
             )}
 
+            {activeSection === 'newVideo' && (
+              <NewVideoDefaultsSection settings={settings} onChange={updateMany} />
+            )}
+
+            {activeSection === 'usage' && (
+              <UsageCostSection
+                jpyPerUsd={settings.jpyPerUsd}
+                onChangeRate={(value) => update('jpyPerUsd', value)}
+              />
+            )}
+
             {activeSection === 'video' && (
-              <Card title="動画" subtitle="新しく作る動画の既定値です。">
+              <Card
+                title="動画"
+                subtitle="書き出す動画の大きさと、最初と最後に流す動画です。画面の縦横は、動画の用途で決まります。"
+              >
                 <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
                   <div>
                     <label htmlFor="settings-video-resolution" className={fieldLabel}>
@@ -791,26 +829,6 @@ export function SettingsPage() {
                       <option value="1920x1080">フル HD(1920×1080・おすすめ)</option>
                       <option value="1280x720">HD(1280×720・軽い)</option>
                       <option value="3840x2160">4K(3840×2160・時間がかかります)</option>
-                    </select>
-                  </div>
-                  <div>
-                    <label htmlFor="settings-aspect" className={fieldLabel}>
-                      画面の縦横(新しいプロジェクト)
-                    </label>
-                    <select
-                      id="settings-aspect"
-                      value={settings.defaultAspectRatio}
-                      onChange={(e) =>
-                        update(
-                          'defaultAspectRatio',
-                          e.target.value as Settings['defaultAspectRatio']
-                        )
-                      }
-                      className="nv-input"
-                    >
-                      <option value="16:9">16:9(横長)</option>
-                      <option value="9:16">9:16(縦長)</option>
-                      <option value="1:1">1:1(正方形)</option>
                     </select>
                   </div>
                   {(['openingVideoPath', 'endingVideoPath'] as const).map((field) => (
@@ -878,50 +896,6 @@ export function SettingsPage() {
             {activeSection === 'advanced' && (
               <Card title="詳細設定" subtitle="ふだんは変える必要はありません。">
                 <div className="space-y-6">
-                  <Section title="自動生成">
-                    <div className="grid gap-4 md:grid-cols-2">
-                      <div>
-                        <label htmlFor="settings-mode" className={fieldLabel}>
-                          進め方
-                        </label>
-                        <select
-                          id="settings-mode"
-                          value={settings.generationMode}
-                          onChange={(e) =>
-                            update(
-                              'generationMode',
-                              e.target.value === 'review' ? 'review' : 'automatic'
-                            )
-                          }
-                          className="nv-input"
-                        >
-                          <option value="automatic">最後まで自動で進める(おすすめ)</option>
-                          <option value="review">台本と素材ができたところで止めて確認する</option>
-                        </select>
-                      </div>
-                      <div>
-                        <label htmlFor="settings-budget" className={fieldLabel}>
-                          1 回の予算の上限(USD)
-                        </label>
-                        <input
-                          id="settings-budget"
-                          type="number"
-                          min="0"
-                          step="0.1"
-                          value={settings.generationBudgetUsd ?? ''}
-                          onChange={(e) =>
-                            update('generationBudgetUsd', budgetToUsd(e.target.value) ?? null)
-                          }
-                          className="nv-input w-32"
-                          placeholder="上限なし"
-                        />
-                        <p className={fieldHint}>
-                          空欄なら上限なし。見積もりをもとに判断するため、実際の料金を厳密に上限に抑えるものではありません。
-                        </p>
-                      </div>
-                    </div>
-                  </Section>
-
                   <Section
                     title="文章のモデル(用途別)"
                     description="台本と画像の指示で別のモデルを使うときに設定します。"
@@ -990,17 +964,41 @@ export function SettingsPage() {
                         />
                       </div>
                       <div>
-                        <label htmlFor="settings-video-bitrate" className={fieldLabel}>
+                        <label htmlFor="settings-video-bitrate-mode" className={fieldLabel}>
                           映像のビットレート
                         </label>
-                        <input
-                          id="settings-video-bitrate"
-                          type="text"
-                          value={settings.videoBitrate}
-                          onChange={(e) => update('videoBitrate', e.target.value)}
-                          className="nv-input w-32"
-                          placeholder="8M"
-                        />
+                        <div className="flex flex-wrap items-center gap-2">
+                          <select
+                            id="settings-video-bitrate-mode"
+                            value={settings.videoBitrateMode}
+                            onChange={(e) =>
+                              update(
+                                'videoBitrateMode',
+                                e.target.value === 'manual' ? 'manual' : 'auto'
+                              )
+                            }
+                            className="nv-input w-auto"
+                          >
+                            <option value="auto">自動(おすすめ)</option>
+                            <option value="manual">指定する</option>
+                          </select>
+                          {settings.videoBitrateMode === 'manual' && (
+                            <input
+                              id="settings-video-bitrate"
+                              type="text"
+                              aria-label="映像のビットレート(例: 8M)"
+                              value={settings.videoBitrate}
+                              onChange={(e) => update('videoBitrate', e.target.value)}
+                              className="nv-input w-28"
+                              placeholder={autoBitrate}
+                            />
+                          )}
+                        </div>
+                        <p className={fieldHint}>
+                          {settings.videoBitrateMode === 'auto'
+                            ? `動画の大きさと fps から決めます(YouTube の推奨値)。今の設定(${VIDEO_RESOLUTION_WORDS[settings.videoResolution]}・${settings.videoFps} fps)では ${autoBitrate} です。`
+                            : `例: 8M、12M。書き方が正しくないときは自動(今の設定では ${autoBitrate})で書き出します。`}
+                        </p>
                       </div>
                       <div>
                         <label htmlFor="settings-audio-bitrate" className={fieldLabel}>
