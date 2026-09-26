@@ -1,5 +1,26 @@
 import { z } from 'zod';
 
+const jobStepProgressSchema = z.object({
+  done: z.number().int().nonnegative(),
+  total: z.number().int().nonnegative(),
+});
+
+// 工程ごとの進み具合。並列に進む工程(画像と音声など)を同時に表せるよう、工程ごとに持つ。
+// ジョブエンジンが書き込み、画面の進捗表示が読む。古いジョブには存在しない。
+export const jobProgressSchema = z.object({
+  script: jobStepProgressSchema.optional(),
+  prompt: jobStepProgressSchema.optional(),
+  image: jobStepProgressSchema.optional(),
+  audio: jobStepProgressSchema.optional(),
+  video: z
+    .object({
+      percent: z.number().min(0).max(100),
+      message: z.string().optional(),
+    })
+    .optional(),
+});
+export type JobProgress = z.infer<typeof jobProgressSchema>;
+
 export const jobSchema = z.object({
   id: z.string().uuid(),
   status: z.enum([
@@ -35,6 +56,7 @@ export const jobSchema = z.object({
   estimatedRemainingUsd: z.number().nonnegative(),
   unknownCharges: z.number().int().nonnegative(),
   error: z.object({ kind: z.string(), message: z.string(), retryable: z.boolean() }).optional(),
+  progress: jobProgressSchema.optional(),
 });
 export type GenerationJob = z.infer<typeof jobSchema>;
 
