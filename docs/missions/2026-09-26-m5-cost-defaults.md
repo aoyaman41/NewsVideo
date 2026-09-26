@@ -1,13 +1,13 @@
 # 指示書 M5: 費用の見積もりと表示・台帳・詳細設定の初期値・新しい動画の既定値
 
 - 作成日: 2026-09-26
-- ベース: `feature/ux-speed-export-models` の、M4-C を統合したコミット(発注時に §0-1 で指定する)
+- ベース: `feature/ux-speed-export-models` の 5f164c4(M4-C を統合したコミット)
 - 上位の提案書: `docs/missions/2026-09-26-review-cost-defaults.md`(§1 の調査結果、§3 のユーザー決定事項)
 - 統合: メインループがユーザー同席でマージ → 実 API で見積もりと実績を比較 → PR
 
 ## 0. 共通ルール
 
-1. **最初に worktree のベースを確認する。** `git log --oneline -1` が発注時に指定したコミットでなければ、未変更の状態のまま `git reset --hard <指定のコミット>` を実行し、そのあと `npm ci` を実行する
+1. **最初に worktree のベースを確認する。** `git log --oneline -1` がこの指示書のコミットでなければ、未変更の状態のまま `git reset --hard feature/ux-speed-export-models` を実行し、そのあと `npm ci` を実行する
 2. **コミット・push・デプロイはしない。** 納品物は「未コミットの worktree + 完了報告」
 3. **指示書外の設計判断が必要になった場合、または解決できない問題に直面した場合は、勝手に進めず停止してメインループへ報告する**
 4. 実 API を叩かない。シークレットを出力しない。ユーザーデータ(`~/Library/Application Support/newsvideo`)は読み取りのみ可。アプリを `npm run dev` で起動しない(メインループが起動中)
