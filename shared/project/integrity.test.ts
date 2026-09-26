@@ -5,6 +5,7 @@ import {
   deriveIntegrity,
   isVideoCurrent,
   partFreshness,
+  sourceInputs,
   videoInput,
 } from './integrity';
 import { getProjectProgress } from './progress';
@@ -122,4 +123,28 @@ it('accepts assigned imported images without demanding AI prompts and treats leg
   expect(getProjectProgress(project)).toMatchObject({ completedSteps: 5, missingPrompts: 0 });
   delete project.integrity;
   expect(isVideoCurrent(project)).toBe(false);
+});
+
+it('keeps existing script fingerprints when claudeEffort is saved for non-Claude models', () => {
+  const project = completed();
+  project.generationConfig = {
+    scriptTextModel: 'gpt-5.2',
+    openaiReasoningEffort: 'none',
+    geminiThinkingLevel: 'high',
+  };
+  const before = sourceInputs(project, project.parts[0]).script;
+
+  project.generationConfig = { ...project.generationConfig, claudeEffort: 'high' };
+
+  expect(sourceInputs(project, project.parts[0]).script).toBe(before);
+});
+
+it('marks Claude scripts stale when the Claude effort changes', () => {
+  const project = completed();
+  project.generationConfig = { scriptTextModel: 'claude-opus-5-5', claudeEffort: 'high' };
+  const high = sourceInputs(project, project.parts[0]).script;
+
+  project.generationConfig = { ...project.generationConfig, claudeEffort: 'low' };
+
+  expect(sourceInputs(project, project.parts[0]).script).not.toBe(high);
 });

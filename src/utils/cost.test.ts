@@ -426,3 +426,134 @@ describe('normalizeCostRates', () => {
     expect(legacyImageCost).toBeCloseTo(0.51, 10);
   });
 });
+
+describe('Gemini TTS cost', () => {
+  const ttsRecord = (model: string) =>
+    buildUsageRecord({
+      provider: 'gemini',
+      category: 'tts',
+      model,
+      inputTokens: 1_000_000,
+      outputTokens: 1_000_000,
+    });
+
+  it.each([
+    ['gemini-3.8-flash-tts', 0.5, 9],
+    ['gemini-3.8-flash-lite-tts', 0.5, 6],
+  ])('prices %s at the rate through 2026-12-31', (model, input, output) => {
+    expect(DEFAULT_COST_RATES.gemini.ttsRatesByModel[model]).toEqual({
+      inputPer1MTokensUsd: input,
+      outputPer1MTokensUsd: output,
+    });
+    expect(estimateUsageCostUsd(ttsRecord(model), normalizeCostRates(undefined))).toBeCloseTo(
+      input + output,
+      10
+    );
+  });
+
+  it('keeps pricing records without a known model at the previous default TTS rate', () => {
+    const rates = normalizeCostRates({});
+    expect(rates.gemini.ttsModel).toBe('gemini-3.1-flash-tts-preview');
+    for (const model of ['', 'gemini-unknown-tts']) {
+      expect(estimateUsageCostUsd(ttsRecord(model), rates)).toBeCloseTo(1 + 20, 10);
+    }
+    expect(estimateUsageCostUsd(ttsRecord('gemini-3.1-flash-tts-preview'), rates)).toBeCloseTo(
+      21,
+      10
+    );
+  });
+
+  it('applies legacy flat TTS rates to the previous default model, not the new default', () => {
+    const rates = normalizeCostRates({
+      gemini: { ttsInputPer1MTokensUsd: 2, ttsOutputPer1MTokensUsd: 30 },
+    });
+    expect(rates.gemini.ttsRatesByModel['gemini-3.1-flash-tts-preview']).toEqual({
+      inputPer1MTokensUsd: 2,
+      outputPer1MTokensUsd: 30,
+    });
+    expect(rates.gemini.ttsRatesByModel['gemini-3.8-flash-tts']).toEqual({
+      inputPer1MTokensUsd: 0.5,
+      outputPer1MTokensUsd: 9,
+    });
+  });
+
+  it('adds the 3.8 rates to saved cost settings that predate them', () => {
+    const rates = normalizeCostRates({
+      gemini: {
+        ttsModel: 'gemini-3.1-flash-tts-preview',
+        ttsRatesByModel: {
+          'gemini-3.1-flash-tts-preview': { inputPer1MTokensUsd: 1, outputPer1MTokensUsd: 20 },
+        },
+      },
+    });
+    expect(rates.gemini.ttsRatesByModel['gemini-3.8-flash-lite-tts']).toEqual({
+      inputPer1MTokensUsd: 0.5,
+      outputPer1MTokensUsd: 6,
+    });
+  });
+});
+
+describe('GPT Image 2.5 cost', () => {
+  const imageRecord = (model: string) =>
+    buildUsageRecord({
+      provider: 'openai',
+      category: 'image',
+      model,
+      inputTokens: 1_560,
+      textInputTokens: 1_000,
+      imageInputTokens: 560,
+      outputTokens: 1_120,
+      imageCount: 1,
+      imageSizeTier: '1K',
+    });
+
+  it.each(['gpt-image-2.5-sunburst', 'gpt-image-2.5-flare'])(
+    'prices %s at the same token rates as GPT Image 2',
+    (model) => {
+      expect(DEFAULT_COST_RATES.openai.imageRatesByModel[model]).toEqual({
+        inputPer1MTokensUsd: 5,
+        cachedInputPer1MTokensUsd: 1.25,
+        imageInputPer1MTokensUsd: 8,
+        imageCachedInputPer1MTokensUsd: 2,
+        outputPer1MTokensUsd: 30,
+      });
+      expect(DEFAULT_COST_RATES.openai.imageRatesByModel[model]).toEqual(
+        DEFAULT_COST_RATES.openai.imageRatesByModel['gpt-image-2']
+      );
+      const cost = estimateUsageCostUsd(imageRecord(model), DEFAULT_COST_RATES);
+      expect(cost).toBeCloseTo(0.04308, 10);
+      expect(cost).toBeCloseTo(
+        estimateUsageCostUsd(imageRecord('gpt-image-2'), DEFAULT_COST_RATES),
+        10
+      );
+    }
+  );
+
+  it('keeps GPT Image 2 as the fallback for OpenAI image records without a model', () => {
+    expect(DEFAULT_COST_RATES.openai.imageModel).toBe('gpt-image-2');
+  });
+
+  it('adds the 2.5 rates to saved cost settings that predate them', () => {
+    const rates = normalizeCostRates({
+      openai: {
+        imageModel: 'gpt-image-2',
+        imageRatesByModel: {
+          'gpt-image-2': {
+            inputPer1MTokensUsd: 5,
+            cachedInputPer1MTokensUsd: 1.25,
+            imageInputPer1MTokensUsd: 8,
+            imageCachedInputPer1MTokensUsd: 2,
+            outputPer1MTokensUsd: 30,
+          },
+        },
+      },
+    });
+    for (const model of ['gpt-image-2.5-sunburst', 'gpt-image-2.5-flare']) {
+      expect(rates.openai.imageRatesByModel[model]).toMatchObject({
+        inputPer1MTokensUsd: 5,
+        outputPer1MTokensUsd: 30,
+      });
+      expect(estimateUsageCostUsd(imageRecord(model), rates)).toBeCloseTo(0.04308, 10);
+    }
+  });
+});

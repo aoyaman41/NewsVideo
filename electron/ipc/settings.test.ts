@@ -42,6 +42,22 @@ vi.mock('node:fs/promises', () => ({
   access: accessMock,
 }));
 
+const anthropicMocks = vi.hoisted(() => ({
+  construct: vi.fn(),
+  retrieve: vi.fn(),
+}));
+vi.mock('@anthropic-ai/sdk', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@anthropic-ai/sdk')>();
+  class MockAnthropic {
+    static APIError = actual.APIError;
+    models = { retrieve: anthropicMocks.retrieve };
+    constructor(options: unknown) {
+      anthropicMocks.construct(options);
+    }
+  }
+  return { ...actual, default: MockAnthropic };
+});
+
 async function loadSettingsModule(): Promise<void> {
   repositoryMock.directories.mockReset().mockResolvedValue([]);
   repositoryMock.readDirectory.mockReset();
@@ -151,6 +167,99 @@ describe('settings IPC handlers', () => {
     expect(saved.ttsModel).toBe('gemini-2.5-flash-preview-tts');
     expect(saved.geminiThinkingLevel).toBe('low');
     expect(saved.unknown).toBeUndefined();
+  });
+});
+
+describe('Anthropic settings', () => {
+  const event = { senderFrame: { url: 'http://localhost:5173', parent: null } };
+
+  beforeEach(async () => {
+    anthropicMocks.construct.mockReset();
+    anthropicMocks.retrieve.mockReset();
+    await loadSettingsModule();
+  });
+
+  it('allows the anthropic key for renderer key operations but keeps other services blocked', async () => {
+    await expect(getHandler('settings:hasApiKey')(event, 'anthropic')).resolves.toBe(false);
+    await expect(getHandler('settings:hasApiKey')(event, 'google_tts')).rejects.toThrow(
+      '未対応のサービスです。'
+    );
+
+    writeFileMock.mockResolvedValueOnce(undefined);
+    await expect(
+      getHandler('settings:setApiKey')(event, 'anthropic', 'test-anthropic-key')
+    ).resolves.toEqual({ success: true });
+    const [secretsPath, encrypted] = writeFileMock.mock.calls[0];
+    expect(secretsPath).toBe('/tmp/newsvideo-test/secrets.enc');
+    expect(JSON.parse(String(encrypted))).toEqual({ anthropic: 'test-anthropic-key' });
+  });
+
+  it('tests the Anthropic connection through the SDK models endpoint for Opus 5.5', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch');
+    anthropicMocks.retrieve.mockResolvedValueOnce({ id: 'claude-opus-5-5' });
+
+    const result = await getHandler('settings:testConnection')(event, 'anthropic', 'test-key');
+
+    expect(result).toMatchObject({ success: true, message: '接続成功' });
+    expect(anthropicMocks.construct).toHaveBeenCalledWith({
+      apiKey: 'test-key',
+      authToken: null,
+      maxRetries: 0,
+    });
+    expect(anthropicMocks.retrieve).toHaveBeenCalledWith('claude-opus-5-5');
+    expect(fetchSpy).not.toHaveBeenCalled();
+    fetchSpy.mockRestore();
+  });
+
+  it('formats Anthropic API failures like the other providers', async () => {
+    const { AuthenticationError, APIConnectionError } =
+      await vi.importActual<typeof import('@anthropic-ai/sdk')>('@anthropic-ai/sdk');
+    anthropicMocks.retrieve.mockRejectedValueOnce(
+      new AuthenticationError(
+        401,
+        { type: 'error', error: { type: 'authentication_error', message: 'invalid x-api-key' } },
+        undefined,
+        new Headers()
+      )
+    );
+    await expect(
+      getHandler('settings:testConnection')(event, 'anthropic', 'bad-key')
+    ).resolves.toMatchObject({ success: false, message: '接続失敗: 401 invalid x-api-key' });
+
+    anthropicMocks.retrieve.mockRejectedValueOnce(new APIConnectionError({}));
+    await expect(
+      getHandler('settings:testConnection')(event, 'anthropic', 'test-key')
+    ).resolves.toMatchObject({ success: false, message: '接続エラー: Connection error.' });
+  });
+
+  it('reports a missing Anthropic key without calling the API', async () => {
+    const result = await getHandler('settings:testConnection')(event, 'anthropic');
+
+    expect(result).toEqual({ success: false, message: 'APIキーが設定されていません' });
+    expect(anthropicMocks.retrieve).not.toHaveBeenCalled();
+  });
+
+  it('persists claudeEffort and propagates it to idle projects', async () => {
+    readFileMock.mockResolvedValueOnce(JSON.stringify(DEFAULT_SETTINGS));
+    repositoryMock.directories.mockResolvedValue(['/idle']);
+    repositoryMock.readDirectory.mockResolvedValueOnce({ id: 'idle' });
+    const project = { id: 'idle', revision: 1, generationConfig: {} };
+    repositoryMock.update.mockImplementation(async (_id, mutate) => {
+      mutate(project);
+      return project;
+    });
+
+    await getHandler('settings:set')(event, {
+      scriptTextModel: 'claude-opus-5-5',
+      claudeEffort: 'max',
+    });
+
+    const saved = JSON.parse(String(writeFileMock.mock.calls[0][1]));
+    expect(saved).toMatchObject({ scriptTextModel: 'claude-opus-5-5', claudeEffort: 'max' });
+    expect(project.generationConfig).toEqual({
+      scriptTextModel: 'claude-opus-5-5',
+      claudeEffort: 'max',
+    });
   });
 });
 

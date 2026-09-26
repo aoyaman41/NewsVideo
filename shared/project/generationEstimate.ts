@@ -2,6 +2,7 @@ import type { AppSettings } from '../settings/appSettings';
 import type { UsageRecord, Project } from './schema';
 import { partFreshness } from './integrity';
 import { estimateUsageCostUsd, normalizeCostRates } from '../../src/utils/cost';
+import { getTextCompletionModelProvider, isTextCompletionModel } from '../constants/models';
 
 export type GenerationOperation = 'script' | 'prompt' | 'image' | 'audio';
 
@@ -21,7 +22,11 @@ export function estimateGenerationUsd(
         : kind === 'image'
           ? settings.imageModel
           : settings.ttsModel;
-  const provider = model.startsWith('gpt') ? 'openai' : 'gemini';
+  const provider = isTextCompletionModel(model)
+    ? getTextCompletionModelProvider(model)
+    : model.startsWith('gpt')
+      ? 'openai'
+      : 'gemini';
   const record: UsageRecord = {
     id: 'estimate',
     createdAt: '',

@@ -1,8 +1,8 @@
 import OpenAI from 'openai';
-import type { ImageResolution } from '../../shared/constants/models';
+import type { ImageResolution, OpenAIImageModel } from '../../shared/constants/models';
 import type { ImageAspectRatio } from '../../shared/project/imageStylePresets';
 
-// GPT Image 2 requires 16px multiples and at most 8,294,400 pixels.
+// GPT Image 2 / 2.5 require 16px multiples and at most 8,294,400 pixels.
 // Keep the exact project ratio; square 4K is limited to 2880px per edge.
 export function getOpenAIImageDimensions(ratio: ImageAspectRatio, resolution: ImageResolution) {
   if (ratio === '1:1') {
@@ -16,6 +16,7 @@ export function getOpenAIImageDimensions(ratio: ImageAspectRatio, resolution: Im
 
 export async function generateOpenAIImage(
   apiKey: string,
+  model: OpenAIImageModel,
   prompt: string,
   ratio: ImageAspectRatio,
   resolution: ImageResolution
@@ -24,7 +25,7 @@ export async function generateOpenAIImage(
   const client = new OpenAI({ apiKey });
   // The SDK owns retries; do not wrap this request in the Gemini retry helper.
   const response = await client.images.generate({
-    model: 'gpt-image-2',
+    model,
     prompt,
     n: 1,
     size: `${dimensions.width}x${dimensions.height}`,

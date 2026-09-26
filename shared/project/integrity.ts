@@ -1,5 +1,6 @@
 import { applyReadings, readingEntrySchema } from './narration';
 import { z } from 'zod';
+import { isAnthropicTextCompletionModel } from '../constants/models';
 import type { Project, Part } from './schema';
 
 export type Freshness = 'missing' | 'current' | 'stale';
@@ -37,6 +38,10 @@ export function sourceInputs(project: Project, part: Part) {
     model: project.generationConfig?.scriptTextModel,
     reasoning: project.generationConfig?.openaiReasoningEffort,
     thinking: project.generationConfig?.geminiThinkingLevel,
+    // 既存プロジェクトの指紋を変えないよう、Claude を選んでいる場合だけ effort を含める
+    effort: isAnthropicTextCompletionModel(project.generationConfig?.scriptTextModel)
+      ? project.generationConfig?.claudeEffort
+      : undefined,
     article: {
       title: project.article.title,
       source: project.article.source,

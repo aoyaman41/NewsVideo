@@ -1,6 +1,6 @@
 import type { UsageRecord } from '../schemas';
 import {
-  DEFAULT_GEMINI_TTS_MODEL,
+  ANTHROPIC_TEXT_COMPLETION_MODEL,
   DEFAULT_IMAGE_MODEL,
   DEFAULT_SCRIPT_TEXT_MODEL,
   GEMINI_IMAGE_MODELS,
@@ -62,6 +62,10 @@ export type CostRates = {
     imageRatesByModel: Record<string, GeminiImageRate>;
     imageInputPerImageUsd?: number;
     imageOutputPerImageUsd?: number;
+  };
+  anthropic: {
+    defaultTextModel: string;
+    textRatesByModel: Record<string, TokenRate>;
   };
 };
 
@@ -141,7 +145,32 @@ const DEFAULT_OPENAI_TEXT_RATES: Record<string, TokenRate> = {
   },
 };
 
+// キャッシュ書き込みは 5 分 TTL の単価
+const DEFAULT_ANTHROPIC_TEXT_RATES: Record<string, TokenRate> = {
+  'claude-opus-5-5': {
+    inputPer1MTokensUsd: 4.0,
+    cachedInputPer1MTokensUsd: 0.2,
+    cacheWritePer1MTokensUsd: 5.0,
+    outputPer1MTokensUsd: 20.0,
+  },
+};
+
+// GPT Image 2.5 Sunburst / Flare は GPT Image 2 と同額
 const DEFAULT_OPENAI_IMAGE_RATES: Record<string, OpenAIImageRate> = {
+  'gpt-image-2.5-sunburst': {
+    inputPer1MTokensUsd: 5.0,
+    cachedInputPer1MTokensUsd: 1.25,
+    imageInputPer1MTokensUsd: 8.0,
+    imageCachedInputPer1MTokensUsd: 2.0,
+    outputPer1MTokensUsd: 30.0,
+  },
+  'gpt-image-2.5-flare': {
+    inputPer1MTokensUsd: 5.0,
+    cachedInputPer1MTokensUsd: 1.25,
+    imageInputPer1MTokensUsd: 8.0,
+    imageCachedInputPer1MTokensUsd: 2.0,
+    outputPer1MTokensUsd: 30.0,
+  },
   'gpt-image-2': {
     inputPer1MTokensUsd: 5.0,
     cachedInputPer1MTokensUsd: 1.25,
@@ -175,7 +204,24 @@ const DEFAULT_GEMINI_TEXT_RATES: Record<string, GeminiTextRate> = {
   },
 };
 
+/**
+ * model が記録されていない、または料金表にない TTS レコードの計算に使うモデル。
+ * 既定の TTS モデル(DEFAULT_GEMINI_TTS_MODEL)を変えても過去レコードのコストが変わらないよう、
+ * 3.8 追加前の既定値に固定する。旧形式のコスト設定(ttsInputPer1MTokensUsd 等)の適用先でもある。
+ */
+const LEGACY_FALLBACK_GEMINI_TTS_MODEL = 'gemini-3.1-flash-tts-preview';
+
 const DEFAULT_GEMINI_TTS_RATES: Record<string, TokenRate> = {
+  // 3.8 TTS は 2026-12-31 までのキャンペーン価格。2027-01-01 から倍額
+  // (Flash: $1.00 / $18.00、Flash-Lite: $1.00 / $12.00)になるため、その時点で更新する。
+  'gemini-3.8-flash-tts': {
+    inputPer1MTokensUsd: 0.5,
+    outputPer1MTokensUsd: 9.0,
+  },
+  'gemini-3.8-flash-lite-tts': {
+    inputPer1MTokensUsd: 0.5,
+    outputPer1MTokensUsd: 6.0,
+  },
   'gemini-2.5-pro-preview-tts': {
     inputPer1MTokensUsd: 1.0,
     outputPer1MTokensUsd: 20.0,
@@ -221,7 +267,7 @@ export const DEFAULT_COST_RATES: CostRates = {
   gemini: {
     defaultTextModel: 'gemini-3.1-pro',
     textRatesByModel: { ...DEFAULT_GEMINI_TEXT_RATES },
-    ttsModel: DEFAULT_GEMINI_TTS_MODEL,
+    ttsModel: LEGACY_FALLBACK_GEMINI_TTS_MODEL,
     ttsRatesByModel: { ...DEFAULT_GEMINI_TTS_RATES },
     imageModel: DEFAULT_IMAGE_MODEL,
     imageRatesByModel: Object.fromEntries(
@@ -230,6 +276,10 @@ export const DEFAULT_COST_RATES: CostRates = {
         cloneImageRate(rate),
       ])
     ),
+  },
+  anthropic: {
+    defaultTextModel: ANTHROPIC_TEXT_COMPLETION_MODEL,
+    textRatesByModel: { ...DEFAULT_ANTHROPIC_TEXT_RATES },
   },
 };
 
@@ -458,6 +508,24 @@ function estimateOpenAITextCost(record: UsageRecord, rate: TokenRate): number {
   return input + cachedInput + output;
 }
 
+// inputTokens はキャッシュ読み取り・書き込みを含む合計として記録している
+function estimateAnthropicTextCost(record: UsageRecord, rate: TokenRate): number {
+  const totalInputTokens = Math.max(0, record.inputTokens ?? 0);
+  const cachedInputTokens = Math.max(0, Math.min(record.cachedInputTokens ?? 0, totalInputTokens));
+  const cacheWriteTokens = Math.max(
+    0,
+    Math.min(record.cacheWriteTokens ?? 0, totalInputTokens - cachedInputTokens)
+  );
+  const uncachedInputTokens = totalInputTokens - cachedInputTokens - cacheWriteTokens;
+  const input = (uncachedInputTokens * rate.inputPer1MTokensUsd) / 1_000_000;
+  const cachedInput =
+    (cachedInputTokens * (rate.cachedInputPer1MTokensUsd ?? rate.inputPer1MTokensUsd)) / 1_000_000;
+  const cacheWrite =
+    (cacheWriteTokens * (rate.cacheWritePer1MTokensUsd ?? rate.inputPer1MTokensUsd)) / 1_000_000;
+  const output = ((record.outputTokens ?? 0) * rate.outputPer1MTokensUsd) / 1_000_000;
+  return input + cachedInput + cacheWrite + output;
+}
+
 function estimateOpenAIImageCost(record: UsageRecord, rate: OpenAIImageRate): number {
   const totalInputTokens = Math.max(0, record.inputTokens ?? 0);
   const hasModalityBreakdown =
@@ -505,6 +573,10 @@ export function normalizeCostRates(input?: unknown): CostRates {
       imageRatesByModel?: unknown;
       imageInputPerImageUsd?: unknown;
       imageOutputPerImageUsd?: unknown;
+    };
+    anthropic?: {
+      defaultTextModel?: unknown;
+      textRatesByModel?: unknown;
     };
   };
 
@@ -625,6 +697,26 @@ export function normalizeCostRates(input?: unknown): CostRates {
     };
   }
 
+  const anthropicDefaultTextModel =
+    typeof raw.anthropic?.defaultTextModel === 'string' &&
+    raw.anthropic.defaultTextModel.trim().length > 0
+      ? raw.anthropic.defaultTextModel
+      : base.anthropic.defaultTextModel;
+  const anthropicTextRatesByModel = cloneTokenRates(base.anthropic.textRatesByModel);
+  if (raw.anthropic?.textRatesByModel && typeof raw.anthropic.textRatesByModel === 'object') {
+    for (const [model, rate] of Object.entries(
+      raw.anthropic.textRatesByModel as Record<string, unknown>
+    )) {
+      const parsed = parseTokenRate(rate, true);
+      if (parsed) {
+        anthropicTextRatesByModel[model] = {
+          ...anthropicTextRatesByModel[model],
+          ...parsed,
+        };
+      }
+    }
+  }
+
   for (const model of GEMINI_IMAGE_MODELS) {
     if (!geminiImageRatesByModel[model]) {
       geminiImageRatesByModel[model] = cloneImageRate(
@@ -661,6 +753,10 @@ export function normalizeCostRates(input?: unknown): CostRates {
       imageRatesByModel: geminiImageRatesByModel,
       imageInputPerImageUsd: legacyImageInputPerImageUsd ?? undefined,
       imageOutputPerImageUsd: legacyImageOutputPerImageUsd ?? undefined,
+    },
+    anthropic: {
+      defaultTextModel: anthropicDefaultTextModel,
+      textRatesByModel: anthropicTextRatesByModel,
     },
   };
 }
@@ -711,6 +807,16 @@ export function estimateUsageCostUsd(record: UsageRecord, rates: CostRates): num
     const output =
       ((record.outputTokens ?? 0) * rate.outputPer1MTokensUsd * outputMultiplier) / 1_000_000;
     return input + cachedInput + cacheWrite + output;
+  }
+
+  if (record.provider === 'anthropic') {
+    if (record.category !== 'text') return 0;
+    const rate = resolveRecordMapRate(
+      record.model,
+      rates.anthropic.defaultTextModel,
+      rates.anthropic.textRatesByModel
+    );
+    return estimateAnthropicTextCost(record, rate);
   }
 
   if (record.provider !== 'gemini') {

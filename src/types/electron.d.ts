@@ -9,6 +9,7 @@ import type {
   AudioAsset,
 } from '../../shared/project/schema';
 import type {
+  type ClaudeEffort,
   type GeminiThinkingLevel,
   type GeminiTtsModel,
   type ImageModel,
@@ -45,7 +46,7 @@ type TokenUsage = {
   totalTokens?: number;
   requestCount?: number;
   model?: string;
-  provider?: 'openai' | 'gemini';
+  provider?: 'openai' | 'gemini' | 'anthropic';
 };
 
 interface ElectronAPI {
@@ -231,6 +232,7 @@ interface Settings {
   imagePromptTextModel: TextCompletionModel;
   openaiReasoningEffort: OpenAIReasoningEffort;
   geminiThinkingLevel: GeminiThinkingLevel;
+  claudeEffort: ClaudeEffort;
   imageModel: ImageModel;
   imageResolution: ImageResolution;
   defaultAspectRatio: ImageAspectRatio;
@@ -245,7 +247,7 @@ interface Settings {
   cost?: CostRates;
 }
 
-type ApiKeyService = 'openai' | 'google_ai';
+type ApiKeyService = 'openai' | 'google_ai' | 'anthropic';
 
 // その他の型
 interface ScriptOptions {

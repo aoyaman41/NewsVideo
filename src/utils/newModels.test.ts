@@ -30,6 +30,36 @@ it('bills GPT Image 2 as OpenAI image generation instead of Gemini or text gener
   expect(estimateUsageCostUsd(record!, DEFAULT_COST_RATES)).toBeCloseTo(0.065);
 });
 
+it.each(['gpt-image-2.5-sunburst', 'gpt-image-2.5-flare'] as const)(
+  'bills %s as OpenAI image generation at GPT Image 2 prices',
+  (model) => {
+    const image: ImageAsset = {
+      id: crypto.randomUUID(),
+      filePath: '/tmp/test.png',
+      sourceType: 'generated',
+      metadata: {
+        width: 2560,
+        height: 1440,
+        mimeType: 'image/png',
+        fileSize: 42,
+        createdAt: new Date().toISOString(),
+        tags: [],
+        generation: {
+          model,
+          resolution: '2k',
+          imageSizeTier: '2K',
+          aspectRatio: '16:9',
+          inputTokens: 1000,
+          outputTokens: 2000,
+        },
+      },
+    };
+    const record = createImageUsageRecordFromAssets([image], 'image_generate');
+    expect(record).toMatchObject({ provider: 'openai', model, category: 'image' });
+    expect(estimateUsageCostUsd(record!, DEFAULT_COST_RATES)).toBeCloseTo(0.065);
+  }
+);
+
 it('uses Astra prices and cache discount', () => {
   const record = createOpenAIUsageRecord('script_generate', {
     model: 'gpt-6-astra',

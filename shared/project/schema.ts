@@ -134,7 +134,7 @@ export type Comment = z.infer<typeof commentSchema>;
 // 使用量記録
 export const usageRecordSchema = z.object({
   id: z.string().uuid(),
-  provider: z.enum(['openai', 'gemini']),
+  provider: z.enum(['openai', 'gemini', 'anthropic']),
   category: z.enum(['text', 'image', 'tts']),
   model: z.string(),
   operation: z.string(),

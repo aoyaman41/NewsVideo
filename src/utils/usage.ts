@@ -1,5 +1,6 @@
 import type { ImageAsset, UsageRecord } from '../schemas';
 import {
+  ANTHROPIC_TEXT_COMPLETION_MODEL,
   DEFAULT_GEMINI_TTS_MODEL,
   DEFAULT_IMAGE_MODEL,
   GEMINI_TEXT_COMPLETION_MODEL,
@@ -19,7 +20,7 @@ type TokenUsage = {
   totalTokens?: number;
   requestCount?: number;
   model?: string;
-  provider?: 'openai' | 'gemini';
+  provider?: 'openai' | 'gemini' | 'anthropic';
 };
 
 type ImageAspectRatio = '16:9' | '1:1' | '9:16';
@@ -48,9 +49,14 @@ export function createOpenAIUsageRecord(
   usage?: TokenUsage | null
 ): UsageRecord | null {
   if (!usage) return null;
-  const provider = usage.provider === 'gemini' ? 'gemini' : 'openai';
+  const provider =
+    usage.provider === 'gemini' || usage.provider === 'anthropic' ? usage.provider : 'openai';
   const defaultModel =
-    provider === 'gemini' ? GEMINI_TEXT_COMPLETION_MODEL : OPENAI_TEXT_COMPLETION_MODEL;
+    provider === 'gemini'
+      ? GEMINI_TEXT_COMPLETION_MODEL
+      : provider === 'anthropic'
+        ? ANTHROPIC_TEXT_COMPLETION_MODEL
+        : OPENAI_TEXT_COMPLETION_MODEL;
   return {
     id: crypto.randomUUID(),
     provider,
