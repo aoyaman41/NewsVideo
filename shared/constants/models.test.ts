@@ -28,6 +28,17 @@ import {
   isClaudeEffort,
   isGeminiTextCompletionModel,
 } from './models';
+// GPT Image 2.5 関連も他の変更と衝突しないよう別の import にまとめる
+import {
+  DEFAULT_IMAGE_MODEL,
+  getImageModelLabel,
+  getImageModelProvider,
+  IMAGE_MODELS,
+  isGeminiImageModel,
+  isImageModel,
+  isOpenAIImageModel,
+  OPENAI_IMAGE_MODELS,
+} from './models';
 
 describe('text completion models', () => {
   it('composes the selector list from OpenAI, Gemini and Anthropic provider lists', () => {
@@ -221,5 +232,42 @@ describe('Gemini TTS models', () => {
         defaultAudioFormat: 'pcm',
       });
     }
+  });
+});
+
+describe('OpenAI image models', () => {
+  it('lists GPT Image 2.5 Sunburst and Flare before GPT Image 2 without date suffixes', () => {
+    expect(OPENAI_IMAGE_MODELS).toEqual([
+      'gpt-image-2.5-sunburst',
+      'gpt-image-2.5-flare',
+      'gpt-image-2',
+    ]);
+    expect(IMAGE_MODELS.slice(0, 3)).toEqual(OPENAI_IMAGE_MODELS);
+  });
+
+  it.each([
+    ['gpt-image-2.5-sunburst', 'GPT Image 2.5 Sunburst'],
+    ['gpt-image-2.5-flare', 'GPT Image 2.5 Flare'],
+    ['gpt-image-2', 'GPT Image 2'],
+  ] as const)('registers %s as a labeled OpenAI image model', (model, label) => {
+    expect(isImageModel(model)).toBe(true);
+    expect(isOpenAIImageModel(model)).toBe(true);
+    expect(isGeminiImageModel(model)).toBe(false);
+    expect(getImageModelProvider(model)).toBe('openai');
+    expect(getImageModelLabel(model)).toBe(label);
+  });
+
+  it('keeps Gemini image models on the Gemini provider and the default unchanged', () => {
+    expect(DEFAULT_IMAGE_MODEL).toBe('gemini-3.1-flash-image-preview');
+    expect(getImageModelProvider('gemini-3.1-flash-image-preview')).toBe('gemini');
+    expect(getImageModelProvider('gemini-3-pro-image-preview')).toBe('gemini');
+    expect(isOpenAIImageModel('gemini-3.1-flash-image-preview')).toBe(false);
+  });
+
+  it('rejects dated snapshots and unknown GPT Image ids', () => {
+    expect(isImageModel('gpt-image-2.5-sunburst-2026-09-08')).toBe(false);
+    expect(isOpenAIImageModel('gpt-image-2.5-flare-2026-09-08')).toBe(false);
+    expect(isOpenAIImageModel('gpt-image-2.5')).toBe(false);
+    expect(isOpenAIImageModel(undefined)).toBe(false);
   });
 });

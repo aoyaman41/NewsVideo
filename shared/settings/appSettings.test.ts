@@ -212,3 +212,11 @@ it('round-trips Astra and GPT Image 2 settings', () => {
   };
   expect(normalizeSettings(parseSettingsUpdate(values))).toMatchObject(values);
 });
+
+it.each(['gpt-image-2.5-sunburst', 'gpt-image-2.5-flare'] as const)(
+  'round-trips the %s image model and keeps the Gemini default for new settings',
+  (imageModel) => {
+    expect(normalizeSettings(parseSettingsUpdate({ imageModel }))).toMatchObject({ imageModel });
+    expect(DEFAULT_SETTINGS.imageModel).toBe('gemini-3.1-flash-image-preview');
+  }
+);

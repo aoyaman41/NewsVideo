@@ -8,7 +8,7 @@ vi.mock('openai', () => ({
   },
 }));
 
-describe('GPT Image 2 requests', () => {
+describe('GPT Image 2 / 2.5 requests', () => {
   beforeEach(() => generate.mockReset());
 
   it('keeps every size within API limits and preserves aspect ratios', () => {
@@ -31,7 +31,13 @@ describe('GPT Image 2 requests', () => {
       data: [{ b64_json: 'png-data' }],
       usage: { input_tokens: 100, output_tokens: 200, total_tokens: 300 },
     });
-    const result = await generateOpenAIImage('test-key', 'test prompt', '9:16', '4k');
+    const result = await generateOpenAIImage(
+      'test-key',
+      'gpt-image-2',
+      'test prompt',
+      '9:16',
+      '4k'
+    );
     expect(generate).toHaveBeenCalledWith({
       model: 'gpt-image-2',
       prompt: 'test prompt',
@@ -49,10 +55,31 @@ describe('GPT Image 2 requests', () => {
     });
   });
 
+  it.each(['gpt-image-2.5-sunburst', 'gpt-image-2.5-flare'] as const)(
+    'sends the selected %s model with the same size and quality as GPT Image 2',
+    async (model) => {
+      generate.mockResolvedValue({
+        data: [{ b64_json: 'png-data' }],
+        usage: { input_tokens: 100, output_tokens: 200, total_tokens: 300 },
+      });
+      const result = await generateOpenAIImage('test-key', model, 'test prompt', '9:16', '4k');
+      expect(generate).toHaveBeenCalledTimes(1);
+      expect(generate).toHaveBeenCalledWith({
+        model,
+        prompt: 'test prompt',
+        n: 1,
+        size: '2160x3840',
+        quality: 'auto',
+        output_format: 'png',
+      });
+      expect(result).toMatchObject({ width: 2160, height: 3840, inputTokens: 100 });
+    }
+  );
+
   it('rejects empty images without fabricating an asset', async () => {
     generate.mockResolvedValue({ data: [] });
-    await expect(generateOpenAIImage('test-key', 'test', '1:1', 'fhd')).rejects.toThrow(
-      '画像データ'
-    );
+    await expect(
+      generateOpenAIImage('test-key', 'gpt-image-2', 'test', '1:1', 'fhd')
+    ).rejects.toThrow('画像データ');
   });
 });

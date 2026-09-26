@@ -48,7 +48,11 @@ export const CLAUDE_EFFORTS = ['default', 'low', 'medium', 'high', 'xhigh', 'max
 export type ClaudeEffort = (typeof CLAUDE_EFFORTS)[number];
 export type SelectableClaudeEffort = Exclude<ClaudeEffort, 'default'>;
 
-export const OPENAI_IMAGE_MODELS = ['gpt-image-2'] as const;
+export const OPENAI_IMAGE_MODELS = [
+  'gpt-image-2.5-sunburst',
+  'gpt-image-2.5-flare',
+  'gpt-image-2',
+] as const;
 export const GEMINI_IMAGE_MODELS = [
   'gemini-3.1-flash-image-preview',
   'gemini-3-pro-image-preview',
@@ -79,6 +83,8 @@ export const TEXT_COMPLETION_MODEL_LABELS: Record<TextCompletionModel, string> =
 };
 
 export const IMAGE_MODEL_LABELS: Record<ImageModel, string> = {
+  'gpt-image-2.5-sunburst': 'GPT Image 2.5 Sunburst',
+  'gpt-image-2.5-flare': 'GPT Image 2.5 Flare',
   'gpt-image-2': 'GPT Image 2',
   'gemini-3.1-flash-image-preview': 'Gemini 3.1 Flash Image',
   'gemini-3-pro-image-preview': 'Gemini 3 Pro Image',

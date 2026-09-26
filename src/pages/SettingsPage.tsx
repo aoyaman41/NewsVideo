@@ -35,6 +35,7 @@ import {
   type SelectableOpenAIReasoningEffort,
   isAnthropicTextCompletionModel,
   isGeminiTextCompletionModel,
+  isOpenAIImageModel,
   isOpenAITextCompletionModel,
   type TextCompletionModel,
 } from '../../shared/constants/models';
@@ -336,7 +337,7 @@ export function SettingsPage() {
   const serviceLabels: Record<ApiKeyService, { name: string; description: string; url: string }> = {
     openai: {
       name: 'OpenAI',
-      description: 'OpenAI系の文章生成とGPT Image 2の画像生成に使用します',
+      description: 'OpenAI系の文章生成とGPT Image 2 / 2.5の画像生成に使用します',
       url: 'https://platform.openai.com/',
     },
     google_ai: {
@@ -1191,7 +1192,7 @@ export function SettingsPage() {
                       ))}
                     </select>
                     <p className="mt-1 text-xs text-slate-600">モデルID: {settings.imageModel}</p>
-                    {settings.imageModel === 'gpt-image-2' && (
+                    {isOpenAIImageModel(settings.imageModel) && (
                       <p className="mt-1 text-xs text-slate-600">
                         OpenAI APIキーを使用します。横長・縦長のFull
                         HD相当は1792×1008、正方形の4K相当は2880×2880です。2Kを超える画素数の出力は実験的対応です。
@@ -1223,7 +1224,7 @@ export function SettingsPage() {
                       ))}
                     </select>
                     <p className="mt-1 text-xs text-slate-600">
-                      GPT Image 2
+                      GPT Image 2 / 2.5
                       では指定解像度を優先し、API制約に応じて近いサイズへ自動調整します。
                     </p>
                   </div>

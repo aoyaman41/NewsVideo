@@ -155,7 +155,22 @@ const DEFAULT_ANTHROPIC_TEXT_RATES: Record<string, TokenRate> = {
   },
 };
 
+// GPT Image 2.5 Sunburst / Flare は GPT Image 2 と同額
 const DEFAULT_OPENAI_IMAGE_RATES: Record<string, OpenAIImageRate> = {
+  'gpt-image-2.5-sunburst': {
+    inputPer1MTokensUsd: 5.0,
+    cachedInputPer1MTokensUsd: 1.25,
+    imageInputPer1MTokensUsd: 8.0,
+    imageCachedInputPer1MTokensUsd: 2.0,
+    outputPer1MTokensUsd: 30.0,
+  },
+  'gpt-image-2.5-flare': {
+    inputPer1MTokensUsd: 5.0,
+    cachedInputPer1MTokensUsd: 1.25,
+    imageInputPer1MTokensUsd: 8.0,
+    imageCachedInputPer1MTokensUsd: 2.0,
+    outputPer1MTokensUsd: 30.0,
+  },
   'gpt-image-2': {
     inputPer1MTokensUsd: 5.0,
     cachedInputPer1MTokensUsd: 1.25,

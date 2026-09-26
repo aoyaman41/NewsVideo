@@ -1,9 +1,12 @@
 import { beforeEach, expect, it, vi } from 'vitest';
+import { createImageUsageRecordFromAssets } from '../../src/utils/usage';
+import type { ImageAsset } from '../../src/schemas';
 
 const mocks = vi.hoisted(() => ({
   handlers: new Map<string, (...args: unknown[]) => Promise<unknown>>(),
   generate: vi.fn(),
   secrets: { openai: 'test-openai' } as Record<string, string>,
+  imageModel: 'gpt-image-2',
 }));
 vi.mock('electron', () => ({
   ipcMain: {
@@ -29,7 +32,7 @@ vi.mock('openai', () => ({
 vi.mock('node:fs/promises', () => ({
   readFile: vi.fn(async (path: string) => {
     if (path.endsWith('settings.json'))
-      return JSON.stringify({ imageModel: 'gpt-image-2', imageResolution: '2k' });
+      return JSON.stringify({ imageModel: mocks.imageModel, imageResolution: '2k' });
     if (path.endsWith('project.json')) return JSON.stringify({ id: 'project' });
     return Buffer.from('encrypted');
   }),
@@ -42,6 +45,7 @@ vi.mock('node:fs/promises', () => ({
 beforeEach(async () => {
   mocks.generate.mockReset();
   mocks.secrets = { openai: 'test-openai' };
+  mocks.imageModel = 'gpt-image-2';
   await import('./image');
   mocks.generate.mockResolvedValue({
     data: [{ b64_json: 'aW1hZ2U=' }],
@@ -95,3 +99,71 @@ it('reports the OpenAI key requirement before generating', async () => {
   ).rejects.toThrow('OpenAI APIキー');
   expect(mocks.generate).not.toHaveBeenCalled();
 });
+
+const ipcEvent = { senderFrame: { url: 'http://localhost:5173', parent: null } };
+
+it.each(['gpt-image-2.5-sunburst', 'gpt-image-2.5-flare'] as const)(
+  'generates with %s through OpenAI and records that model in metadata and usage',
+  async (model) => {
+    mocks.imageModel = model;
+    const asset = (await mocks.handlers.get('image:generate')!(
+      ipcEvent,
+      prompt,
+      'project'
+    )) as ImageAsset;
+    expect(mocks.generate).toHaveBeenCalledTimes(1);
+    // サイズ・品質・形式は GPT Image 2 と同じ(2K: 2560x1440 / medium / png)
+    expect(mocks.generate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        model,
+        size: '2560x1440',
+        quality: 'medium',
+        output_format: 'png',
+      })
+    );
+    expect(asset).toMatchObject({
+      metadata: {
+        width: 2560,
+        height: 1440,
+        generation: { model, resolution: '2k', inputTokens: 10, outputTokens: 20 },
+      },
+    });
+    expect(createImageUsageRecordFromAssets([asset], 'image_generate')).toMatchObject({
+      provider: 'openai',
+      category: 'image',
+      model,
+      inputTokens: 10,
+      outputTokens: 20,
+      imageCount: 1,
+    });
+  }
+);
+
+it('uses the selected GPT Image 2.5 model for every batch request', async () => {
+  mocks.imageModel = 'gpt-image-2.5-flare';
+  const result = (await mocks.handlers.get('image:generateBatch')!(
+    ipcEvent,
+    [prompt, { ...prompt, id: 'second' }],
+    'project'
+  )) as { images: ImageAsset[] };
+  expect(mocks.generate).toHaveBeenCalledTimes(2);
+  for (const [request] of mocks.generate.mock.calls) {
+    expect(request).toMatchObject({ model: 'gpt-image-2.5-flare' });
+  }
+  expect(result.images.map((image) => image.metadata.generation?.model)).toEqual([
+    'gpt-image-2.5-flare',
+    'gpt-image-2.5-flare',
+  ]);
+});
+
+it.each(['gpt-image-2.5-sunburst', 'gpt-image-2.5-flare'] as const)(
+  'reports the OpenAI key requirement for %s before generating',
+  async (model) => {
+    mocks.imageModel = model;
+    mocks.secrets = { google_ai: 'test-google' };
+    await expect(
+      mocks.handlers.get('image:generate')!(ipcEvent, prompt, 'project')
+    ).rejects.toThrow('OpenAI APIキー');
+    expect(mocks.generate).not.toHaveBeenCalled();
+  }
+);

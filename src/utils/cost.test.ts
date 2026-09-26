@@ -492,3 +492,68 @@ describe('Gemini TTS cost', () => {
     });
   });
 });
+
+describe('GPT Image 2.5 cost', () => {
+  const imageRecord = (model: string) =>
+    buildUsageRecord({
+      provider: 'openai',
+      category: 'image',
+      model,
+      inputTokens: 1_560,
+      textInputTokens: 1_000,
+      imageInputTokens: 560,
+      outputTokens: 1_120,
+      imageCount: 1,
+      imageSizeTier: '1K',
+    });
+
+  it.each(['gpt-image-2.5-sunburst', 'gpt-image-2.5-flare'])(
+    'prices %s at the same token rates as GPT Image 2',
+    (model) => {
+      expect(DEFAULT_COST_RATES.openai.imageRatesByModel[model]).toEqual({
+        inputPer1MTokensUsd: 5,
+        cachedInputPer1MTokensUsd: 1.25,
+        imageInputPer1MTokensUsd: 8,
+        imageCachedInputPer1MTokensUsd: 2,
+        outputPer1MTokensUsd: 30,
+      });
+      expect(DEFAULT_COST_RATES.openai.imageRatesByModel[model]).toEqual(
+        DEFAULT_COST_RATES.openai.imageRatesByModel['gpt-image-2']
+      );
+      const cost = estimateUsageCostUsd(imageRecord(model), DEFAULT_COST_RATES);
+      expect(cost).toBeCloseTo(0.04308, 10);
+      expect(cost).toBeCloseTo(
+        estimateUsageCostUsd(imageRecord('gpt-image-2'), DEFAULT_COST_RATES),
+        10
+      );
+    }
+  );
+
+  it('keeps GPT Image 2 as the fallback for OpenAI image records without a model', () => {
+    expect(DEFAULT_COST_RATES.openai.imageModel).toBe('gpt-image-2');
+  });
+
+  it('adds the 2.5 rates to saved cost settings that predate them', () => {
+    const rates = normalizeCostRates({
+      openai: {
+        imageModel: 'gpt-image-2',
+        imageRatesByModel: {
+          'gpt-image-2': {
+            inputPer1MTokensUsd: 5,
+            cachedInputPer1MTokensUsd: 1.25,
+            imageInputPer1MTokensUsd: 8,
+            imageCachedInputPer1MTokensUsd: 2,
+            outputPer1MTokensUsd: 30,
+          },
+        },
+      },
+    });
+    for (const model of ['gpt-image-2.5-sunburst', 'gpt-image-2.5-flare']) {
+      expect(rates.openai.imageRatesByModel[model]).toMatchObject({
+        inputPer1MTokensUsd: 5,
+        outputPer1MTokensUsd: 30,
+      });
+      expect(estimateUsageCostUsd(imageRecord(model), rates)).toBeCloseTo(0.04308, 10);
+    }
+  });
+});
