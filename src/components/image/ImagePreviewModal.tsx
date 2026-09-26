@@ -1,6 +1,7 @@
 import { useModalFocus } from '../../hooks/useModalFocus';
 import type { ImageAsset } from '../../schemas';
 import { toLocalFileUrl } from '../../utils/toLocalFileUrl';
+import { Button } from '../ui';
 
 interface ImagePreviewModalProps {
   image: ImageAsset | null;
@@ -15,35 +16,31 @@ export function ImagePreviewModal({ image, open, onClose }: ImagePreviewModalPro
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-[var(--nv-color-text)]/60 p-4"
       onClick={onClose}
       role="dialog"
       aria-modal="true"
-      aria-label="画像プレビュー"
+      aria-label="画像の拡大表示"
       ref={ref}
       tabIndex={-1}
     >
       <div
-        className="bg-white rounded-lg shadow-xl max-w-5xl w-[92vw] max-h-[90vh] overflow-hidden"
+        className="nv-surface flex max-h-[90vh] w-[92vw] max-w-5xl flex-col overflow-hidden shadow-[var(--nv-shadow-md)]"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200">
-          <div className="text-sm text-gray-600">
-            {image.sourceType === 'generated' ? 'AI生成' : 'インポート'} / {image.metadata.width}×
-            {image.metadata.height}
+        <div className="flex items-center justify-between gap-3 border-b border-[var(--nv-color-border)] px-4 py-2">
+          <div className="text-sm text-[var(--nv-color-muted)]">
+            {image.sourceType === 'generated' ? 'AI で作成' : '取り込み画像'}
           </div>
-          <button
-            onClick={onClose}
-            className="px-3 py-1.5 text-sm text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-md"
-          >
+          <Button size="sm" variant="ghost" onClick={onClose}>
             閉じる
-          </button>
+          </Button>
         </div>
-        <div className="bg-black flex items-center justify-center p-3">
+        <div className="flex min-h-0 flex-1 items-center justify-center bg-black p-3">
           <img
             src={toLocalFileUrl(image.filePath)}
-            alt="選択した素材画像"
-            className="max-h-[80vh] max-w-full object-contain"
+            alt="拡大した画像"
+            className="max-h-[78vh] max-w-full object-contain"
           />
         </div>
       </div>

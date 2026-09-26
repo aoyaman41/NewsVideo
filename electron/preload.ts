@@ -104,7 +104,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('video:render', project, options, outputPath),
     preview: (partId: string, intended?: unknown) =>
       ipcRenderer.invoke('video:preview', partId, intended),
-    cancelRender: () => ipcRenderer.invoke('video:cancelRender'),
+    cancelRender: (projectId?: string) => ipcRenderer.invoke('video:cancelRender', projectId),
   },
 
   // ファイル操作

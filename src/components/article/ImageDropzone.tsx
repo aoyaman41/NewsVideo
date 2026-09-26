@@ -94,21 +94,23 @@ export function ImageDropzone({
   return (
     <div className="space-y-4">
       {importError && (
-        <p role="alert" className="text-sm text-red-700">
+        <p role="alert" className="text-sm text-[var(--nv-color-danger)]">
           {importError}
         </p>
       )}
       {/* ドロップゾーン */}
       <div
         {...getRootProps()}
-        className={`border-2 border-dashed rounded-lg p-8 text-center cursor-pointer transition-colors ${
-          isDragActive ? 'border-blue-500 bg-blue-50' : 'border-gray-300 hover:border-gray-400'
+        className={`nv-focus-ring cursor-pointer rounded-[var(--nv-radius-md)] border-2 border-dashed p-6 text-center transition-colors ${
+          isDragActive
+            ? 'border-[var(--nv-color-accent)] bg-[var(--nv-color-canvas)]'
+            : 'border-[var(--nv-color-border)] hover:border-[var(--nv-color-accent)]'
         }`}
       >
         <input {...getInputProps()} />
-        <div className="text-gray-500">
+        <div className="text-[var(--nv-color-muted)]">
           <svg
-            className="w-12 h-12 mx-auto mb-4 text-gray-400"
+            className="mx-auto mb-3 h-10 w-10 text-[var(--nv-color-muted)]"
             fill="none"
             stroke="currentColor"
             viewBox="0 0 24 24"
@@ -124,8 +126,10 @@ export function ImageDropzone({
             <p>ここにドロップしてください</p>
           ) : (
             <>
-              <p className="mb-1">画像をドラッグ&ドロップ</p>
-              <p className="text-sm">または クリックして選択</p>
+              <p className="mb-1 text-sm font-semibold text-[var(--nv-color-text)]">
+                写真をここにドラッグ&ドロップ
+              </p>
+              <p className="text-xs">またはクリックして選択(PNG・JPEG・GIF・WebP)</p>
             </>
           )}
         </div>
@@ -137,8 +141,10 @@ export function ImageDropzone({
           {images.map((image) => (
             <div
               key={image.id}
-              className={`relative group bg-gray-100 rounded-lg overflow-hidden border-2 transition-colors ${
-                selectedImageId === image.id ? 'border-blue-500' : 'border-transparent'
+              className={`group relative overflow-hidden rounded-[var(--nv-radius-sm)] border-2 bg-[var(--nv-color-canvas)] transition-colors ${
+                selectedImageId === image.id
+                  ? 'border-[var(--nv-color-accent)]'
+                  : 'border-[var(--nv-color-border)]'
               }`}
               onClick={() => setSelectedImageId(selectedImageId === image.id ? null : image.id)}
             >
@@ -152,11 +158,14 @@ export function ImageDropzone({
               </div>
               {/* 削除ボタン */}
               <button
+                type="button"
+                aria-label="この写真を外す"
+                title="この写真を外す"
                 onClick={(e) => {
                   e.stopPropagation();
                   onImageRemoved(image.id);
                 }}
-                className="absolute top-2 right-2 p-1 bg-red-500 text-white rounded-full opacity-0 group-hover:opacity-100 transition-opacity"
+                className="nv-focus-ring absolute top-2 right-2 rounded-full bg-[var(--nv-color-danger)] p-1 text-white opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100"
               >
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path
@@ -168,8 +177,8 @@ export function ImageDropzone({
                 </svg>
               </button>
               {/* メタ情報 */}
-              <div className="p-2 bg-white">
-                <div className="text-xs text-gray-500 mb-1">
+              <div className="bg-[var(--nv-color-surface)] p-2">
+                <div className="mb-1 text-xs text-[var(--nv-color-muted)]">
                   {image.metadata.width} x {image.metadata.height}
                 </div>
                 {/* タグエディタ */}

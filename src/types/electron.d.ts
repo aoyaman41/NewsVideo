@@ -172,7 +172,11 @@ interface ElectronAPI {
     ) => Promise<{ outputPath: string }>;
     /** intended を渡すと、Main 側でそのパートの内容が保存済みの最新と一致するかを確かめてから作る */
     preview: (partId: string, intended?: Project) => Promise<{ previewPath: string }>;
-    cancelRender: () => Promise<{ success: boolean }>;
+    /**
+     * 画面から依頼した書き出し・プレビューを止める(projectId を渡すとそのプロジェクトのものだけ)。
+     * 自動生成ジョブの書き出しは止めない(ジョブの停止 jobs.cancel で止める)
+     */
+    cancelRender: (projectId?: string) => Promise<{ success: boolean }>;
   };
 
   file: {

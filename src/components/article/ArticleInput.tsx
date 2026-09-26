@@ -1,31 +1,38 @@
-import { useEffect } from 'react';
+import { useEffect, type ReactNode } from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { articleInputSchema, type ArticleInput as ArticleInputType } from '../../schemas';
 import { Button } from '../ui';
+import type { ButtonVariant } from '../ui/Button';
+
+export type ArticleAction = {
+  key: string;
+  label: string;
+  variant?: ButtonVariant;
+  disabled?: boolean;
+  /** 入力内容を確かめてから呼ぶ */
+  onClick: (data: ArticleInputType) => void;
+};
 
 interface ArticleInputProps {
+  /** 読み込み時の値。入力中は変えない(入力位置が飛ばないように) */
   defaultValues?: Partial<ArticleInputType>;
   onChange?: (data: ArticleInputType) => void;
-  onSaveDraft?: () => void;
-  onSubmit: (data: ArticleInputType) => void;
-  onAutoSubmit?: (data: ArticleInputType) => void;
-  onAutoRestart?: (data: ArticleInputType) => void;
-  onAutoCancel?: () => void;
-  isLoading?: boolean;
-  isAutoLoading?: boolean;
+  /** 本文の文字数(表示用) */
+  bodyLength?: number;
+  /** ボタンの上に出す内容(費用の目安や案内) */
+  footer?: ReactNode;
+  /** 右から順に大きく見せたいボタンを最後に置く */
+  actions: ArticleAction[];
 }
 
+/** 記事の入力欄。タイトルと本文を主にし、出典は控えめに置く。入力は自動で保存される */
 export function ArticleInput({
   defaultValues,
-  onSubmit,
   onChange,
-  onSaveDraft,
-  onAutoSubmit,
-  onAutoRestart,
-  onAutoCancel,
-  isLoading,
-  isAutoLoading,
+  bodyLength,
+  footer,
+  actions,
 }: ArticleInputProps) {
   const {
     register,
@@ -51,88 +58,98 @@ export function ArticleInput({
   }, [defaultValues?.bodyText, defaultValues?.source, defaultValues?.title, reset]);
 
   return (
-    <form
-      onChange={() => onChange?.(getValues())}
-      onSubmit={handleSubmit(onSubmit)}
-      className="space-y-4"
-    >
-      <div>
-        <label htmlFor="title" className="mb-1 block text-sm font-medium text-slate-700">
-          記事タイトル <span className="text-red-500">*</span>
-        </label>
-        <input
-          id="title"
-          type="text"
-          {...register('title')}
-          placeholder="記事のタイトルを入力"
-          className="nv-input"
-        />
-        {errors.title && <p className="mt-1 text-sm text-red-600">{errors.title.message}</p>}
-      </div>
-
-      <div>
-        <label htmlFor="source" className="mb-1 block text-sm font-medium text-slate-700">
-          出典（任意）
-        </label>
-        <input
-          id="source"
-          type="text"
-          {...register('source')}
-          placeholder="出典元を入力（例：〇〇新聞、△△ニュース）"
-          className="nv-input"
-        />
-        {errors.source && <p className="mt-1 text-sm text-red-600">{errors.source.message}</p>}
-      </div>
-
-      <div>
-        <label htmlFor="bodyText" className="mb-1 block text-sm font-medium text-slate-700">
-          記事本文 <span className="text-red-500">*</span>
-        </label>
-        <textarea
-          id="bodyText"
-          {...register('bodyText')}
-          rows={15}
-          placeholder="記事の本文を入力またはファイルからインポート"
-          className="nv-input resize-y font-mono text-sm"
-        />
-        {errors.bodyText && <p className="mt-1 text-sm text-red-600">{errors.bodyText.message}</p>}
-      </div>
-
-      <div className="flex flex-wrap justify-end gap-2">
-        {onSaveDraft && (
-          <Button type="button" variant="secondary" onClick={onSaveDraft}>
-            下書きを保存
-          </Button>
-        )}
-        {onAutoSubmit && (
-          <Button
-            type="button"
-            onClick={handleSubmit(onAutoSubmit)}
-            disabled={isLoading || isAutoLoading}
-            variant="success"
+    <div className="space-y-4">
+      <form
+        onChange={() => onChange?.(getValues())}
+        onSubmit={(event) => event.preventDefault()}
+        className="space-y-4"
+        noValidate
+      >
+        <div>
+          <label
+            htmlFor="article-title"
+            className="mb-1 block text-sm font-semibold text-[var(--nv-color-text)]"
           >
-            {isAutoLoading ? '自動生成中...' : '続きから自動生成'}
-          </Button>
-        )}
-        {onAutoRestart && (
-          <Button
-            type="button"
-            onClick={handleSubmit(onAutoRestart)}
-            disabled={isLoading || isAutoLoading}
-            variant="secondary"
+            タイトル
+          </label>
+          <input
+            id="article-title"
+            type="text"
+            {...register('title')}
+            placeholder="記事のタイトルを貼り付け"
+            className="nv-input"
+            aria-invalid={Boolean(errors.title)}
+          />
+          {errors.title && (
+            <p className="mt-1 text-sm text-[var(--nv-color-danger)]">{errors.title.message}</p>
+          )}
+        </div>
+
+        <div>
+          <div className="mb-1 flex items-baseline justify-between gap-2">
+            <label
+              htmlFor="article-body"
+              className="block text-sm font-semibold text-[var(--nv-color-text)]"
+            >
+              本文
+            </label>
+            {typeof bodyLength === 'number' && (
+              <span className="text-xs text-[var(--nv-color-muted)]">
+                {bodyLength.toLocaleString('ja-JP')} 文字
+              </span>
+            )}
+          </div>
+          <textarea
+            id="article-body"
+            {...register('bodyText')}
+            rows={14}
+            placeholder="記事の本文を貼り付け"
+            className="nv-input resize-y text-sm leading-relaxed"
+            aria-invalid={Boolean(errors.bodyText)}
+          />
+          {errors.bodyText && (
+            <p className="mt-1 text-sm text-[var(--nv-color-danger)]">{errors.bodyText.message}</p>
+          )}
+        </div>
+
+        <div>
+          <label
+            htmlFor="article-source"
+            className="mb-1 block text-xs font-semibold text-[var(--nv-color-muted)]"
           >
-            {isAutoLoading ? '自動生成中...' : '最初から自動生成'}
-          </Button>
-        )}
-        {onAutoCancel && isAutoLoading && (
-          <Button type="button" onClick={onAutoCancel} variant="secondary">
-            停止
-          </Button>
-        )}
-        <Button type="submit" disabled={isLoading || isAutoLoading}>
-          {isLoading ? 'スクリプト生成中...' : 'スクリプトを生成'}
-        </Button>
-      </div>
-    </form>
+            出典(任意・動画の最後に表示できます)
+          </label>
+          <input
+            id="article-source"
+            type="text"
+            {...register('source')}
+            placeholder="例: 〇〇新聞 2026年9月26日"
+            className="nv-input text-sm"
+          />
+          {errors.source && (
+            <p className="mt-1 text-sm text-[var(--nv-color-danger)]">{errors.source.message}</p>
+          )}
+        </div>
+      </form>
+
+      {footer}
+
+      {actions.length > 0 && (
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          {actions.map((action) => (
+            <Button
+              key={action.key}
+              type="button"
+              size="lg"
+              variant={action.variant ?? 'primary'}
+              disabled={action.disabled}
+              onClick={handleSubmit(action.onClick)}
+            >
+              {action.label}
+            </Button>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }

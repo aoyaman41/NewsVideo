@@ -1,134 +1,79 @@
 import type { ImageAsset } from '../../schemas';
 import { toLocalFileUrl } from '../../utils/toLocalFileUrl';
+import { cx } from '../../utils/cx';
+import { Button } from '../ui';
 
 interface ImageCardProps {
   image: ImageAsset;
+  /** 選択中(使用中)として強調する */
   isSelected?: boolean;
   onSelect?: () => void;
   onDelete?: () => void;
-  isDraggable?: boolean;
   onPreview?: () => void;
   selectLabel?: string;
   selectTone?: 'primary' | 'ghost';
-  clickMode?: 'preview' | 'select';
+  /** 画像の上に出す短いラベル(「使用中」など) */
+  badge?: string;
+  selectDisabled?: boolean;
 }
+
+const FALLBACK_IMAGE =
+  'data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" width="160" height="90" viewBox="0 0 160 90"%3E%3Crect fill="%23f2f4f7" width="160" height="90"/%3E%3Ctext fill="%23475569" font-family="sans-serif" font-size="11" x="50%25" y="50%25" text-anchor="middle" dy=".3em"%3E%E7%94%BB%E5%83%8F%E3%81%8C%E3%81%82%E3%82%8A%E3%81%BE%E3%81%9B%E3%82%93%3C/text%3E%3C/svg%3E';
 
 export function ImageCard({
   image,
   isSelected = false,
   onSelect,
   onDelete,
-  isDraggable = false,
   onPreview,
   selectLabel,
   selectTone = 'ghost',
-  clickMode,
+  badge,
+  selectDisabled = false,
 }: ImageCardProps) {
-  const effectiveClickMode: 'preview' | 'select' = clickMode ?? (onPreview ? 'preview' : 'select');
-  const handleCardClick = () => {
-    if (effectiveClickMode === 'select') {
-      onSelect?.();
-      return;
-    }
-    onPreview?.();
-  };
-
-  const canPreview = Boolean(onPreview);
-  const hasActionButtons = canPreview || Boolean(onDelete) || isSelected;
+  const sourceLabel = image.sourceType === 'generated' ? 'AI で作成' : '取り込み画像';
 
   return (
     <div
-      className={`relative group bg-gray-100 rounded-lg overflow-hidden border-2 transition-colors ${
+      className={cx(
+        'group relative overflow-hidden rounded-[var(--nv-radius-sm)] border bg-white transition-colors',
         isSelected
-          ? 'border-blue-500 ring-2 ring-blue-200'
-          : 'border-transparent hover:border-gray-300'
-      } ${isDraggable ? 'cursor-grab active:cursor-grabbing' : ''} ${
-        effectiveClickMode === 'preview' ? 'cursor-zoom-in' : 'cursor-pointer'
-      }`}
-      onClick={handleCardClick}
+          ? 'border-[var(--nv-color-accent)] ring-2 ring-[var(--nv-color-accent)]/25'
+          : 'border-[var(--nv-color-border)] hover:border-[var(--nv-color-muted)]/40'
+      )}
     >
-      {/* 画像 */}
-      <div className="aspect-video">
+      <button
+        type="button"
+        onClick={onPreview ?? onSelect}
+        disabled={!onPreview && !onSelect}
+        className="nv-focus-ring block aspect-video w-full cursor-zoom-in bg-[var(--nv-color-canvas)] disabled:cursor-default"
+        aria-label={onPreview ? `${sourceLabel}を拡大して見る` : sourceLabel}
+      >
         <img
           src={toLocalFileUrl(image.filePath)}
           alt=""
-          className="w-full h-full object-contain"
+          className="h-full w-full object-contain"
           onError={(e) => {
-            // 画像読み込みエラー時のフォールバック
-            (e.target as HTMLImageElement).src =
-              'data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" width="100" height="100" viewBox="0 0 100 100"%3E%3Crect fill="%23f3f4f6" width="100" height="100"/%3E%3Ctext fill="%239ca3af" font-family="Arial" font-size="12" x="50%" y="50%" text-anchor="middle" dy=".3em"%3ENo Image%3C/text%3E%3C/svg%3E';
+            (e.target as HTMLImageElement).src = FALLBACK_IMAGE;
           }}
         />
-      </div>
+      </button>
 
-      {/* ソースタイプバッジ */}
-      <div className="absolute top-2 left-2">
-        <span
-          className={`text-xs px-2 py-0.5 rounded-full ${
-            image.sourceType === 'generated'
-              ? 'bg-blue-100 text-blue-700'
-              : 'bg-green-100 text-green-700'
-          }`}
-        >
-          {image.sourceType === 'generated' ? 'AI生成' : 'インポート'}
+      {badge && (
+        <span className="pointer-events-none absolute left-2 top-2 rounded-full bg-[var(--nv-color-accent)] px-2 py-0.5 text-xs font-semibold text-white">
+          {badge}
         </span>
-      </div>
-
-      {/* プレビュー */}
-      {canPreview && (
-        <button
-          onClick={(e) => {
-            e.stopPropagation();
-            onPreview?.();
-          }}
-          className={`absolute top-2 ${
-            onDelete ? 'right-10' : 'right-2'
-          } p-1.5 rounded-full bg-slate-900/60 text-white ${
-            hasActionButtons ? 'opacity-0 group-hover:opacity-100' : ''
-          } transition-opacity`}
-          title="プレビュー"
-        >
-          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              strokeWidth={2}
-              d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"
-            />
-            <path
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              strokeWidth={2}
-              d="M2.458 12C3.732 7.943 7.523 5 12 5s8.268 2.943 9.542 7c-1.274 4.057-5.065 7-9.542 7S3.732 16.057 2.458 12z"
-            />
-          </svg>
-        </button>
       )}
 
-      {/* 選択チェックマーク */}
-      {isSelected && (
-        <div
-          className={`absolute top-2 ${
-            onDelete || canPreview ? 'right-[4.5rem]' : 'right-2'
-          } w-6 h-6 bg-blue-500 rounded-full flex items-center justify-center`}
-        >
-          <svg className="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-          </svg>
-        </div>
-      )}
-
-      {/* 削除ボタン */}
       {onDelete && (
         <button
-          onClick={(e) => {
-            e.stopPropagation();
-            onDelete();
-          }}
-          className="absolute top-2 right-2 p-1.5 bg-red-500 text-white rounded-full opacity-0 group-hover:opacity-100 transition-opacity hover:bg-red-600"
-          title="削除"
+          type="button"
+          onClick={onDelete}
+          className="nv-focus-ring absolute right-2 top-2 rounded-full bg-[var(--nv-color-danger)] p-1.5 text-white opacity-0 transition-opacity hover:opacity-100 focus-visible:opacity-100 group-hover:opacity-90 group-focus-within:opacity-90"
+          aria-label="この画像を削除"
+          title="この画像を削除"
         >
-          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path
               strokeLinecap="round"
               strokeLinejoin="round"
@@ -139,33 +84,18 @@ export function ImageCard({
         </button>
       )}
 
-      {/* メタ情報 + 操作 */}
-      <div className="border-t bg-white p-2">
-        <div className="flex items-start justify-between gap-2 text-xs text-gray-500">
-          <span className="min-w-0 leading-5">
-            {image.metadata.width} x {image.metadata.height}
-          </span>
-          <div className="flex shrink-0 items-center gap-2">
-            {image.metadata.tags.length > 0 && (
-              <span className="text-blue-600 whitespace-nowrap">{image.metadata.tags.length}タグ</span>
-            )}
-            {onSelect && (
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onSelect();
-                }}
-                className={`whitespace-nowrap px-3 py-1.5 text-xs font-semibold rounded-md border transition-colors ${
-                  selectTone === 'primary'
-                    ? 'bg-blue-600 text-white border-blue-600 hover:bg-blue-700'
-                    : 'bg-white text-gray-700 border-gray-200 hover:bg-gray-50'
-                }`}
-              >
-                {selectLabel || '選択'}
-              </button>
-            )}
-          </div>
-        </div>
+      <div className="flex items-center justify-between gap-2 border-t border-[var(--nv-color-border)] px-2 py-1.5">
+        <span className="truncate text-xs text-[var(--nv-color-muted)]">{sourceLabel}</span>
+        {onSelect && (
+          <Button
+            size="sm"
+            variant={selectTone === 'primary' ? 'primary' : 'secondary'}
+            onClick={onSelect}
+            disabled={selectDisabled}
+          >
+            {selectLabel || '選ぶ'}
+          </Button>
+        )}
       </div>
     </div>
   );

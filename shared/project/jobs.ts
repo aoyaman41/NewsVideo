@@ -21,6 +21,14 @@ export const jobProgressSchema = z.object({
 });
 export type JobProgress = z.infer<typeof jobProgressSchema>;
 
+// 実行中(料金が発生しうる)の処理。再起動時に、結果を受け取れなかった処理を「料金未確定」として数える
+export const pendingOperationSchema = z.object({
+  step: z.string(),
+  kind: z.enum(['script', 'prompt', 'image', 'audio']),
+  estimatedUsd: z.number(),
+});
+export type PendingOperation = z.infer<typeof pendingOperationSchema>;
+
 export const jobSchema = z.object({
   id: z.string().uuid(),
   status: z.enum([
@@ -38,13 +46,10 @@ export const jobSchema = z.object({
   startedAt: z.string(),
   updatedAt: z.string(),
   completed: z.array(z.string()),
-  pendingOperation: z
-    .object({
-      step: z.string(),
-      kind: z.enum(['script', 'prompt', 'image', 'audio']),
-      estimatedUsd: z.number(),
-    })
-    .optional(),
+  /** 旧形式(1 件だけ記録していたころ)。読み込みのためだけに残す。新しいジョブは pendingOperations に書く */
+  pendingOperation: pendingOperationSchema.optional(),
+  /** 並列に実行中の処理。予算の判定では、これらの見込み額を予約済みとして数える */
+  pendingOperations: z.array(pendingOperationSchema).optional(),
   outputs: z
     .array(z.object({ step: z.string(), payload: z.unknown(), createdAt: z.string() }))
     .default([]),
@@ -59,6 +64,16 @@ export const jobSchema = z.object({
   progress: jobProgressSchema.optional(),
 });
 export type GenerationJob = z.infer<typeof jobSchema>;
+
+/** 実行中の処理の一覧(旧形式の単一の記録も含める) */
+export function pendingOperationsOf(
+  job: Pick<GenerationJob, 'pendingOperation' | 'pendingOperations'>
+): PendingOperation[] {
+  return [
+    ...(job.pendingOperation ? [job.pendingOperation] : []),
+    ...(job.pendingOperations ?? []),
+  ];
+}
 
 export function classifyGenerationError(error: unknown) {
   const status = Number((error as { status?: number })?.status);

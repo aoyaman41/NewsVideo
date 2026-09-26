@@ -9,3 +9,5 @@ export { Skeleton } from './Skeleton';
 export { Toast } from './Toast';
 export { ConfirmDialog } from './ConfirmDialog';
 export { FeedbackProvider, useToast, useConfirm } from './FeedbackProvider';
+export { Details } from './Details';
+export { Checkbox } from './Checkbox';

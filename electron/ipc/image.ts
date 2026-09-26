@@ -1,6 +1,6 @@
 import { imageRequestSchema } from '../../shared/project/generationRequests';
 import { fileAccess } from '../utils/fileAccess';
-import { retryTransient, limitedOpenAIFetch } from '../utils/generationPolicy';
+import { concurrencyFor, limitedOpenAIImageFetch, retryTransient } from '../utils/generationPolicy';
 import { generationSettings } from '../utils/generationContext';
 import { registerOperation } from './operations';
 import { app, safeStorage, nativeImage } from 'electron';
@@ -94,7 +94,9 @@ async function readImageGenerationSettings(): Promise<{
     imageResolution,
   };
 }
-const withRetry = retryTransient;
+// Gemini の画像生成は、テキスト・音声とは別の「画像」の枠で同時実行数を制御する
+const withRetry = <T>(operation: () => Promise<T>) =>
+  retryTransient(operation, 3, 1000, 'gemini:image');
 
 // 画像プロンプトの型
 interface ImagePrompt {
@@ -146,7 +148,8 @@ function resolvePromptBody(prompt: ImagePrompt): string {
 const MAX_USER_PROMPT_CHARS = 12000;
 const MAX_NEGATIVE_PROMPT_CHARS = 4000;
 const MAX_MODEL_INPUT_PROMPT_CHARS = 20000;
-const IMAGE_BATCH_CONCURRENCY = 3;
+// 一括生成の並列数は画像の枠と揃える(実際の同時実行数と 1 分あたりの枚数は generationPolicy が制御する)
+const IMAGE_BATCH_CONCURRENCY = concurrencyFor('image');
 
 type ImageBatchRunState = {
   cancelRequested: boolean;
@@ -783,7 +786,7 @@ registerOperation(
       imageResolution,
       googleGenAI: googleApiKey ? new GoogleGenAI({ apiKey: googleApiKey }) : undefined,
       openai: openaiApiKey
-        ? new OpenAI({ apiKey: openaiApiKey, fetch: limitedOpenAIFetch })
+        ? new OpenAI({ apiKey: openaiApiKey, fetch: limitedOpenAIImageFetch })
         : undefined,
       styleReferenceImages,
     });
@@ -824,7 +827,7 @@ registerOperation(
 
     const projectPath = await getProjectPath(projectId);
     const openai = openaiApiKey
-      ? new OpenAI({ apiKey: openaiApiKey, fetch: limitedOpenAIFetch })
+      ? new OpenAI({ apiKey: openaiApiKey, fetch: limitedOpenAIImageFetch })
       : undefined;
     const genAI = googleApiKey ? new GoogleGenAI({ apiKey: googleApiKey }) : undefined;
     const runState: ImageBatchRunState = { cancelRequested: false };

@@ -2,7 +2,7 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type Anthropic from '@anthropic-ai/sdk';
 import { DEFAULT_SETTINGS, type AppSettings } from '../../shared/settings/appSettings';
 import { generationSettings } from '../utils/generationContext';
-import { limitedAnthropicFetch } from '../utils/generationPolicy';
+import { configureProviderConcurrency, limitedAnthropicFetch } from '../utils/generationPolicy';
 
 type Handler = (event: unknown, ...args: unknown[]) => Promise<unknown>;
 
@@ -200,7 +200,9 @@ describe('Claude script generation', () => {
     });
     const fetchStub = vi.fn(async () => new Response('{}'));
     vi.stubGlobal('fetch', fetchStub);
-    const settings = { ...CLAUDE_SETTINGS, generationConcurrency: 1 };
+    const settings = CLAUDE_SETTINGS;
+    // テキスト(Anthropic)の枠を 1 にして、ストリーム全体が 1 つの枠を持ち続けることを確かめる
+    configureProviderConcurrency({ text: 1 });
     try {
       const generation = runWithSettings(settings, () =>
         handler('ai:generateScript')(undefined, article, {})
@@ -217,6 +219,7 @@ describe('Claude script generation', () => {
       await otherRequest;
       expect(fetchStub).toHaveBeenCalledTimes(1);
     } finally {
+      configureProviderConcurrency();
       vi.unstubAllGlobals();
     }
   });

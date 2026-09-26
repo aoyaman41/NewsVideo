@@ -1,67 +1,107 @@
 import { PURPOSES } from '../../shared/project/purposes';
 import { toLocalFileUrl } from '../utils/toLocalFileUrl';
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Header } from '../components/layout';
+import { nextStepHint } from '../components/layout/workflowLabels';
+import { FriendlyError } from '../components/errors/FriendlyError';
+import { isJobActive } from '../components/job/jobDisplay';
+import { MoreMenu } from '../components/project/MoreMenu';
 import {
-  Badge,
   Button,
   Card,
   EmptyState,
-  ProgressBar,
   Skeleton,
   StatusChip,
   useConfirm,
   useToast,
 } from '../components/ui';
-import type { ProjectListItem } from '../types/ui';
-import { nextActionLabel, stageLabel } from '../utils/projectHealth';
+import { useJobFeed } from '../stores/jobStore';
+import type { ProjectListItem, Tone } from '../types/ui';
+import { cx } from '../utils/cx';
+
+type Purpose = (typeof PURPOSES)[number]['id'];
+
+const PURPOSE_DETAILS: Record<Purpose, string> = {
+  news: '横長・約 90 秒・3 シーン。定期ニュース向け',
+  explain: '横長・約 3 分・6 シーン。じっくり解説したいとき',
+  short: '縦長・約 60 秒・3 シーン。SNS のショート動画向け',
+};
+
+// 一覧で最初に選ばれている種類を先頭にする
+const PURPOSE_ORDER: Purpose[] = ['news', 'explain', 'short'];
+
+function formatDate(value: string): string {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime())
+    ? ''
+    : date.toLocaleString('ja-JP', {
+        year: 'numeric',
+        month: 'numeric',
+        day: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+      });
+}
 
 export function ProjectListPage() {
   const navigate = useNavigate();
   const { confirm } = useConfirm();
   const toast = useToast();
+  const feed = useJobFeed();
   const [projects, setProjects] = useState<ProjectListItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
-  const [newProjectName, setNewProjectName] = useState('');
+  const [loadError, setLoadError] = useState<unknown>(null);
   const [isCreating, setIsCreating] = useState(false);
-  const [purpose, setPurpose] = useState<'short' | 'explain' | 'news'>('news');
+  const [showCreate, setShowCreate] = useState(false);
+  const [purpose, setPurpose] = useState<Purpose>('news');
   const [openingProjectId, setOpeningProjectId] = useState<string | null>(null);
   const [search, setSearch] = useState('');
   const [showArchived, setShowArchived] = useState(false);
-  const [trash, setTrash] = useState<Array<{ key: string; name: string }>>([]);
-  const manage = async (request: Parameters<typeof window.electronAPI.project.manage>[0]) => {
+  const [trash, setTrash] = useState<Array<{ key: string; name: string }> | null>(null);
+
+  const loadProjects = useCallback(async () => {
+    setIsLoading(true);
     try {
-      const result = await window.electronAPI.project.manage(request);
-      if (request.action === 'trash') setTrash(result as Array<{ key: string; name: string }>);
-      else {
-        await loadProjects();
-        setTrash([]);
-        if (result)
-          toast.success(
-            request.action === 'export'
-              ? `バックアップを保存しました: ${result}`
-              : 'プロジェクトを更新しました'
-          );
-      }
+      setProjects(await window.electronAPI.project.list());
+      setLoadError(null);
     } catch (error) {
-      toast.error(String(error));
+      console.error('Failed to load projects:', error);
+      setLoadError(error);
+    } finally {
+      setIsLoading(false);
     }
-  };
+  }, []);
 
   useEffect(() => {
     void loadProjects();
-  }, []);
+  }, [loadProjects]);
 
-  const loadProjects = async () => {
-    setIsLoading(true);
+  const manage = async (request: Parameters<typeof window.electronAPI.project.manage>[0]) => {
     try {
-      const list = await window.electronAPI.project.list();
-      setProjects(list);
+      const result = await window.electronAPI.project.manage(request);
+      if (request.action === 'trash') {
+        setTrash((result as Array<{ key: string; name: string }>) ?? []);
+        return;
+      }
+      await loadProjects();
+      if (request.action === 'restore') {
+        setTrash((previous) => previous?.filter((item) => item.key !== request.key) ?? null);
+        toast.success('プロジェクトを元に戻しました');
+        return;
+      }
+      if (!result) return; // ダイアログを閉じたとき
+      const messages: Partial<Record<typeof request.action, string>> = {
+        clone: 'プロジェクトを複製しました',
+        archive: request.archived ? 'アーカイブしました' : 'アーカイブから戻しました',
+        export: 'バックアップを保存しました',
+        import: 'バックアップから復元しました',
+      };
+      toast.success(messages[request.action] ?? 'プロジェクトを更新しました');
     } catch (error) {
-      console.error('Failed to load projects:', error);
-    } finally {
-      setIsLoading(false);
+      toast.error(
+        String(error).replace(/^Error invoking remote method '[^']*':\s*(Error:\s*)?/, '')
+      );
     }
   };
 
@@ -69,17 +109,17 @@ export function ProjectListPage() {
     setIsCreating(true);
     try {
       const created = await window.electronAPI.project.create({
-        name: newProjectName.trim() || '新しい動画',
+        name: sample ? 'サンプル' : '新しい動画',
         purpose,
         sample,
       });
       navigate(`/projects/${created.id}/${sample ? 'video' : 'article'}`);
-      setNewProjectName('');
-      await loadProjects();
-      toast.success('プロジェクトを作成しました');
     } catch (error) {
       console.error('Failed to create project:', error);
-      toast.error(error instanceof Error ? error.message : '不明なエラー', '作成に失敗しました');
+      toast.error(
+        error instanceof Error ? error.message : '不明なエラー',
+        sample ? 'サンプルを開けませんでした' : '作成できませんでした'
+      );
     } finally {
       setIsCreating(false);
     }
@@ -87,9 +127,9 @@ export function ProjectListPage() {
 
   const handleDeleteProject = async (project: ProjectListItem) => {
     const accepted = await confirm({
-      title: 'プロジェクトを削除しますか？',
-      description: `「${project.name}」を削除します。ゴミ箱へ移動します。`,
-      confirmLabel: '削除',
+      title: 'ごみ箱へ移動しますか？',
+      description: `「${project.name}」をごみ箱へ移動します。一覧の「…」メニューの「ごみ箱を開く」から元に戻せます。`,
+      confirmLabel: 'ごみ箱へ移動',
       confirmVariant: 'danger',
     });
     if (!accepted) return;
@@ -97,10 +137,13 @@ export function ProjectListPage() {
     try {
       await window.electronAPI.project.delete(project.id);
       await loadProjects();
-      toast.success('プロジェクトを削除しました');
+      toast.success('ごみ箱へ移動しました');
     } catch (error) {
       console.error('Failed to delete project:', error);
-      toast.error(error instanceof Error ? error.message : '不明なエラー', '削除に失敗しました');
+      toast.error(
+        error instanceof Error ? error.message : '不明なエラー',
+        'ごみ箱へ移動できませんでした'
+      );
     }
   };
 
@@ -149,338 +192,308 @@ export function ProjectListPage() {
     });
   }, [projects, search, showArchived]);
 
-  const formatDate = (dateString: string) => {
-    return new Date(dateString).toLocaleString('ja-JP');
+  const hasProjects = projects.length > 0;
+  const createOpen = showCreate || (!isLoading && !hasProjects && !loadError);
+
+  const statusOf = (project: ProjectListItem): { tone: Tone; label: string } => {
+    if (project.storageError) return { tone: 'danger', label: '読み込めません' };
+    if (isJobActive(feed.jobs.get(project.id)?.job)) return { tone: 'info', label: '生成中' };
+    if (!project.summary) return { tone: 'neutral', label: '旧データ' };
+    if (project.summary.hasVideoOutput) return { tone: 'success', label: '完成' };
+    return { tone: 'neutral', label: '作成途中' };
   };
+
+  const createPanel = (
+    <Card
+      title="新しい動画を作る"
+      subtitle="どんな動画にするかを選んでください。あとから変えられます。"
+    >
+      <div className="space-y-4">
+        <div role="radiogroup" aria-label="動画の種類" className="grid gap-2 sm:grid-cols-3">
+          {PURPOSE_ORDER.map((id) => {
+            const item = PURPOSES.find((entry) => entry.id === id)!;
+            const selected = purpose === id;
+            return (
+              <button
+                key={id}
+                type="button"
+                role="radio"
+                aria-checked={selected}
+                onClick={() => setPurpose(id)}
+                className={cx(
+                  'nv-focus-ring rounded-[var(--nv-radius-sm)] border p-3 text-left transition-colors duration-[var(--nv-duration-fast)]',
+                  selected
+                    ? 'border-[var(--nv-color-accent)] bg-[var(--nv-color-canvas)]'
+                    : 'border-[var(--nv-color-border)] hover:bg-[var(--nv-color-canvas)]'
+                )}
+              >
+                <span className="block text-sm font-semibold text-[var(--nv-color-text)]">
+                  {selected ? '● ' : '○ '}
+                  {item.label}
+                </span>
+                <span className="mt-1 block text-xs text-[var(--nv-color-muted)]">
+                  {PURPOSE_DETAILS[id]}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <p className="text-xs text-[var(--nv-color-muted)]">
+            次の画面で記事を貼り付けます。名前は記事のタイトルから自動で付きます。
+          </p>
+          <div className="flex gap-2">
+            {hasProjects && (
+              <Button variant="secondary" onClick={() => setShowCreate(false)}>
+                キャンセル
+              </Button>
+            )}
+            <Button size="lg" onClick={() => void handleCreateProject()} disabled={isCreating}>
+              {isCreating ? '作成しています…' : '作成して記事を入力する'}
+            </Button>
+          </div>
+        </div>
+        <div className="flex flex-wrap items-center justify-between gap-3 border-t border-[var(--nv-color-border)] pt-3">
+          <p className="text-xs text-[var(--nv-color-muted)]">
+            API キーがなくても、完成したサンプルを開いて操作を試せます。
+          </p>
+          <Button
+            variant="secondary"
+            size="sm"
+            disabled={isCreating}
+            onClick={() => void handleCreateProject(true)}
+          >
+            サンプルを開く
+          </Button>
+        </div>
+      </div>
+    </Card>
+  );
 
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-      <Header title="プロジェクト" subtitle="新規作成と作業再開" />
+      <Header
+        title="プロジェクト"
+        actions={
+          <>
+            {hasProjects && !createOpen && (
+              <Button onClick={() => setShowCreate(true)}>新しい動画を作る</Button>
+            )}
+            <MoreMenu
+              label="プロジェクト一覧のその他の操作"
+              items={[
+                {
+                  key: 'archived',
+                  label: showArchived ? 'アーカイブを隠す' : 'アーカイブしたものを表示',
+                  onSelect: () => setShowArchived((value) => !value),
+                },
+                {
+                  key: 'import',
+                  label: 'バックアップから復元',
+                  onSelect: () => void manage({ action: 'import' }),
+                },
+                {
+                  key: 'trash',
+                  label: 'ごみ箱を開く',
+                  onSelect: () => void manage({ action: 'trash' }),
+                },
+                {
+                  key: 'sample',
+                  label: 'サンプルを開く',
+                  disabled: isCreating,
+                  onSelect: () => void handleCreateProject(true),
+                },
+              ]}
+            />
+          </>
+        }
+      />
 
       <div className="flex-1 overflow-auto p-5">
-        <div className="mx-auto flex w-full max-w-6xl flex-col gap-4">
-          <details open={projects.length === 0} className="space-y-3">
-            <summary className="cursor-pointer text-base font-semibold text-slate-800">
-              新しく制作する・サンプルを試す
-            </summary>
-            <Card title="新規プロジェクト" subtitle="用途を選び、記事から制作を始めましょう">
-              <div className="space-y-3">
-                <div className="grid gap-2 sm:grid-cols-3">
-                  {PURPOSES.map((item) => (
-                    <button
-                      key={item.id}
-                      aria-pressed={purpose === item.id}
-                      onClick={() => setPurpose(item.id)}
-                      className={`rounded-lg border p-3 text-left text-sm ${purpose === item.id ? 'border-blue-700 bg-blue-50 font-semibold' : 'border-slate-300'}`}
-                    >
-                      {item.label}
-                      <span className="mt-1 block text-xs">
-                        {item.profile.aspectRatio} · {item.parts}シーン
-                      </span>
-                    </button>
-                  ))}
-                </div>
-                <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_auto]">
-                  <input
-                    aria-label="新規プロジェクト名"
-                    type="text"
-                    value={newProjectName}
-                    onChange={(e) => setNewProjectName(e.target.value)}
-                    placeholder="例: 日米金利差と為替の関係"
-                    className="nv-input"
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') {
-                        e.preventDefault();
-                        void handleCreateProject();
-                      }
-                    }}
-                  />
-                  <Button
-                    onClick={() => void handleCreateProject()}
-                    disabled={isCreating}
-                    variant="primary"
-                  >
-                    {isCreating ? '作成中...' : '作成'}
-                  </Button>
-                </div>
-                <div className="text-xs text-slate-600">
-                  名前は省略できます。記事タイトルを入力すると名前に反映します。声と見た目は制作画面で調整できます。
-                </div>
-              </div>
-            </Card>
+        <div className="mx-auto flex w-full max-w-5xl flex-col gap-4">
+          {loadError !== null && (
+            <FriendlyError error={loadError} onRetry={() => void loadProjects()} />
+          )}
 
+          {createOpen && createPanel}
+
+          {trash && (
             <Card
-              title="APIキーなしで試す"
-              subtitle="完成サンプルをローカルで作り、原稿・画像・カットを編集できます"
+              title="ごみ箱"
+              subtitle="元に戻すと一覧に表示されます"
+              actions={
+                <Button size="sm" variant="ghost" onClick={() => setTrash(null)}>
+                  閉じる
+                </Button>
+              }
             >
-              <Button
-                variant="secondary"
-                disabled={isCreating}
-                onClick={() => void handleCreateProject(true)}
-              >
-                {isCreating ? '準備しています…' : '編集サンプルを開く'}
-              </Button>
-              <p className="mt-2 text-sm text-slate-600">
-                macOSの音声と同梱の図形を使います。AIで新しく生成する場合だけ、選択したサービスのキーが必要です。
-              </p>
-            </Card>
-          </details>
-          {projects.length > 0 && (
-            <Card title="検索と再開" subtitle="プロジェクト名や記事タイトルで絞り込み">
-              <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_auto] md:items-center">
-                <input
-                  aria-label="プロジェクト検索"
-                  type="text"
-                  value={search}
-                  onChange={(e) => setSearch(e.target.value)}
-                  placeholder="検索（プロジェクト名 / 記事タイトル）"
-                  className="nv-input"
-                />
-                <div className="flex items-center gap-2 text-xs text-slate-600">
-                  <Badge tone="info">{filteredProjects.length}件</Badge>
-                  {search.trim() ? (
-                    <span>「{search.trim()}」で絞り込み中</span>
-                  ) : (
-                    <span>全プロジェクトを表示</span>
-                  )}
-                </div>
-              </div>
+              {trash.length === 0 ? (
+                <p className="text-sm text-[var(--nv-color-muted)]">ごみ箱は空です。</p>
+              ) : (
+                <ul className="divide-y divide-[var(--nv-color-border)]">
+                  {trash.map((item) => (
+                    <li
+                      key={item.key}
+                      className="flex items-center justify-between gap-2 py-2 text-sm"
+                    >
+                      <span className="truncate text-[var(--nv-color-text)]">{item.name}</span>
+                      <Button
+                        size="sm"
+                        variant="secondary"
+                        onClick={() => void manage({ action: 'restore', key: item.key })}
+                      >
+                        元に戻す
+                      </Button>
+                    </li>
+                  ))}
+                </ul>
+              )}
             </Card>
           )}
 
-          <div className="flex flex-wrap items-center gap-3">
-            <label className="text-sm">
-              <input
-                type="checkbox"
-                checked={showArchived}
-                onChange={(e) => setShowArchived(e.target.checked)}
-              />{' '}
-              アーカイブを表示
-            </label>
-            <Button variant="secondary" size="sm" onClick={() => void manage({ action: 'import' })}>
-              バックアップから復元
-            </Button>
-            <Button variant="ghost" size="sm" onClick={() => void manage({ action: 'trash' })}>
-              ごみ箱
-            </Button>
-          </div>
-          {trash.map((item) => (
-            <div
-              key={item.key}
-              className="flex items-center justify-between gap-2 rounded border p-3 text-sm"
-            >
-              <span>{item.name}</span>
-              <Button size="sm" onClick={() => void manage({ action: 'restore', key: item.key })}>
-                復元
+          {showArchived && (
+            <div className="flex items-center justify-between gap-2 text-sm text-[var(--nv-color-muted)]">
+              <span>アーカイブしたプロジェクトを表示しています。</span>
+              <Button size="sm" variant="ghost" onClick={() => setShowArchived(false)}>
+                通常の一覧に戻る
               </Button>
             </div>
-          ))}
-          {projects.length > 0 && (
-            <details className="rounded-lg border bg-white p-3">
-              <summary className="cursor-pointer text-sm font-semibold">
-                このMacの制作記録（外部送信なし）
-              </summary>
-              <div className="mt-3 overflow-auto">
-                <table className="w-full text-left text-sm">
-                  <thead>
-                    <tr>
-                      <th>制作</th>
-                      <th>初回出力まで</th>
-                      <th>台本編集率</th>
-                      <th>生成要求</th>
-                      <th>再開・停止</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {projects
-                      .filter((item) => item.metrics)
-                      .map((item) => (
-                        <tr key={item.id} className="border-t">
-                          <td className="py-2">{item.name}</td>
-                          <td>
-                            {item.metrics!.elapsedToOutputSec === null
-                              ? '未計測'
-                              : `${Math.round(item.metrics!.elapsedToOutputSec!)}秒`}
-                          </td>
-                          <td>
-                            {item.metrics!.editedSceneRatio === null
-                              ? '未計測'
-                              : `${Math.round(item.metrics!.editedSceneRatio! * 100)}%`}
-                          </td>
-                          <td>{item.metrics!.generationRequests}</td>
-                          <td>
-                            {item.metrics!.restarts} / {item.metrics!.stops}
-                          </td>
-                        </tr>
-                      ))}
-                  </tbody>
-                </table>
-              </div>
-              <p className="mt-2 text-xs text-slate-600">
-                経過時間には待機・中断時間を含みます。旧版の未記録値は0として比較せず、未計測として扱います。
-              </p>
-            </details>
           )}
-          <Card title="プロジェクト一覧" subtitle={`${filteredProjects.length}件`}>
+
+          {hasProjects && (
+            <input
+              aria-label="プロジェクトを検索"
+              type="search"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="名前や記事のタイトルで探す"
+              className="nv-input"
+            />
+          )}
+
+          {isLoading && (
             <div className="space-y-2">
-              {isLoading && (
-                <div className="space-y-2">
-                  <Skeleton className="h-24 w-full" />
-                  <Skeleton className="h-24 w-full" />
-                </div>
-              )}
-
-              {!isLoading && filteredProjects.length === 0 && (
-                <EmptyState
-                  title="表示できるプロジェクトがありません"
-                  description="新規プロジェクトを作成するか、検索条件を変更してください。"
-                />
-              )}
-
-              {!isLoading &&
-                filteredProjects.map((project) => {
-                  const summary = project.summary;
-                  const isOpening = openingProjectId === project.id;
-                  const blockers = summary
-                    ? [
-                        summary.missingPrompts > 0 ? `プロンプト ${summary.missingPrompts}` : null,
-                        summary.missingImages > 0 ? `画像 ${summary.missingImages}` : null,
-                        summary.missingAudio > 0 ? `音声 ${summary.missingAudio}` : null,
-                      ].filter((value): value is string => value != null)
-                    : [];
-
-                  return (
-                    <div key={project.id} className="nv-surface-muted px-4 py-4">
-                      <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-                        <div className="min-w-0 flex-1">
-                          {project.thumbnailPath && (
-                            <img
-                              src={toLocalFileUrl(project.thumbnailPath)}
-                              alt="先頭シーン"
-                              className="mb-2 h-24 w-40 rounded object-cover"
-                            />
-                          )}
-                          <div className="flex flex-wrap items-center gap-2">
-                            <h3 className="truncate text-sm font-semibold text-slate-900">
-                              {project.name}
-                              {project.template ? '（テンプレート）' : ''}
-                            </h3>
-                            {summary ? (
-                              <StatusChip
-                                tone={summary.hasVideoOutput ? 'success' : 'info'}
-                                label={
-                                  summary.hasVideoOutput
-                                    ? '完成'
-                                    : `次: ${stageLabel(summary.stage)}`
-                                }
-                              />
-                            ) : (
-                              <Badge tone={project.storageError ? 'danger' : 'neutral'}>
-                                {project.storageError ? '読み込みに問題があります' : '旧データ'}
-                              </Badge>
-                            )}
-                          </div>
-
-                          <div className="mt-1 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-slate-600">
-                            <span>更新: {formatDate(project.updatedAt)}</span>
-                            <span>
-                              完成尺:{' '}
-                              {project.durationSec === undefined
-                                ? '未計測'
-                                : `${Math.round(project.durationSec)}秒`}
-                            </span>
-                            <span>最終出力: {project.lastVideoPath ? 'あり' : '未出力'}</span>
-                            {project.articleTitle && (
-                              <span className="truncate">記事: {project.articleTitle}</span>
-                            )}
-                          </div>
-
-                          {project.storageError && (
-                            <p role="alert" className="mt-2 text-sm text-red-700">
-                              {project.storageError}
-                            </p>
-                          )}
-                          {summary && (
-                            <div className="mt-3 space-y-2">
-                              <ProgressBar
-                                value={summary.completedSteps}
-                                max={summary.totalSteps}
-                                label={`進捗 ${summary.completedSteps}/${summary.totalSteps}`}
-                                tone={summary.hasVideoOutput ? 'success' : 'accent'}
-                              />
-                              <div className="flex flex-wrap items-center gap-2 text-xs text-slate-600">
-                                <span>次の一手: {nextActionLabel(summary)}</span>
-                                {blockers.length > 0 && <span>不足: {blockers.join(' / ')}</span>}
-                              </div>
-                            </div>
-                          )}
-                        </div>
-
-                        <div className="flex shrink-0 flex-wrap items-center gap-2">
-                          <Button
-                            variant="primary"
-                            onClick={() => handleOpenProject(project.id)}
-                            disabled={isOpening || Boolean(project.storageError)}
-                          >
-                            {isOpening ? '開いています...' : '再開'}
-                          </Button>
-                          <details className="relative text-sm">
-                            <summary className="cursor-pointer rounded border px-3 py-2">
-                              管理
-                            </summary>
-                            <div className="mt-2 flex flex-col gap-2">
-                              <Button
-                                size="sm"
-                                variant="secondary"
-                                onClick={() => void manage({ action: 'clone', id: project.id })}
-                              >
-                                複製
-                              </Button>
-                              <Button
-                                size="sm"
-                                variant="secondary"
-                                onClick={() =>
-                                  void manage({ action: 'clone', id: project.id, template: true })
-                                }
-                              >
-                                用途・ブランドをテンプレート保存
-                              </Button>
-                              <Button
-                                size="sm"
-                                variant="secondary"
-                                onClick={() =>
-                                  void manage({
-                                    action: 'archive',
-                                    id: project.id,
-                                    archived: !project.archived,
-                                  })
-                                }
-                              >
-                                {project.archived ? 'アーカイブを戻す' : 'アーカイブ'}
-                              </Button>
-                              <Button
-                                size="sm"
-                                variant="secondary"
-                                onClick={() => void manage({ action: 'export', id: project.id })}
-                              >
-                                素材込みバックアップ
-                              </Button>
-                            </div>
-                          </details>
-                          <Button
-                            variant="secondary"
-                            disabled={Boolean(project.storageError)}
-                            onClick={() => void handleDeleteProject(project)}
-                          >
-                            削除
-                          </Button>
-                        </div>
-                      </div>
-                    </div>
-                  );
-                })}
+              <Skeleton className="h-20 w-full" />
+              <Skeleton className="h-20 w-full" />
             </div>
-          </Card>
+          )}
+
+          {!isLoading && hasProjects && filteredProjects.length === 0 && (
+            <EmptyState
+              title={
+                search.trim() ? '見つかりませんでした' : 'ここにはまだプロジェクトがありません'
+              }
+              description={search.trim() ? '別の言葉で探してください。' : undefined}
+            />
+          )}
+
+          {!isLoading && filteredProjects.length > 0 && (
+            <ul className="space-y-2" aria-label="プロジェクト">
+              {filteredProjects.map((project) => {
+                const status = statusOf(project);
+                const isOpening = openingProjectId === project.id;
+                const meta = [
+                  project.summary && !project.storageError ? nextStepHint(project.summary) : null,
+                  `更新 ${formatDate(project.updatedAt)}`,
+                  project.durationSec !== undefined
+                    ? `${Math.round(project.durationSec)} 秒`
+                    : null,
+                ].filter(Boolean);
+                return (
+                  <li key={project.id} className="nv-surface flex items-center gap-4 p-3">
+                    {project.thumbnailPath ? (
+                      <img
+                        src={toLocalFileUrl(project.thumbnailPath)}
+                        alt=""
+                        className="h-16 w-28 shrink-0 rounded-[var(--nv-radius-sm)] border border-[var(--nv-color-border)] object-cover"
+                      />
+                    ) : (
+                      <div
+                        aria-hidden="true"
+                        className="h-16 w-28 shrink-0 rounded-[var(--nv-radius-sm)] border border-[var(--nv-color-border)] bg-[var(--nv-color-canvas)]"
+                      />
+                    )}
+                    <div className="min-w-0 flex-1">
+                      <div className="flex min-w-0 items-center gap-2">
+                        <h3 className="truncate text-sm font-semibold text-[var(--nv-color-text)]">
+                          {project.name}
+                          {project.template ? '(テンプレート)' : ''}
+                        </h3>
+                        <StatusChip tone={status.tone} label={status.label} className="shrink-0" />
+                      </div>
+                      {project.articleTitle && project.articleTitle !== project.name && (
+                        <p className="mt-0.5 truncate text-xs text-[var(--nv-color-muted)]">
+                          記事: {project.articleTitle}
+                        </p>
+                      )}
+                      <p className="mt-0.5 text-xs text-[var(--nv-color-muted)]">
+                        {meta.join(' ・ ')}
+                      </p>
+                      {project.storageError && (
+                        <details className="mt-1 text-xs text-[var(--nv-color-danger)]">
+                          <summary className="nv-focus-ring w-fit cursor-pointer rounded-[var(--nv-radius-sm)]">
+                            保存データを読み込めませんでした
+                          </summary>
+                          <p className="mt-1 break-all text-[var(--nv-color-muted)]">
+                            {project.storageError}
+                          </p>
+                        </details>
+                      )}
+                    </div>
+                    <div className="flex shrink-0 items-center gap-2">
+                      <Button
+                        onClick={() => void handleOpenProject(project.id)}
+                        disabled={isOpening || Boolean(project.storageError)}
+                      >
+                        {isOpening ? '開いています…' : '開く'}
+                      </Button>
+                      <MoreMenu
+                        label={`「${project.name}」のその他の操作`}
+                        items={[
+                          {
+                            key: 'clone',
+                            label: '複製',
+                            disabled: Boolean(project.storageError),
+                            onSelect: () => void manage({ action: 'clone', id: project.id }),
+                          },
+                          {
+                            key: 'template',
+                            label: 'テンプレートとして複製(記事なし・見た目と設定だけ)',
+                            disabled: Boolean(project.storageError),
+                            onSelect: () =>
+                              void manage({ action: 'clone', id: project.id, template: true }),
+                          },
+                          {
+                            key: 'archive',
+                            label: project.archived ? 'アーカイブから戻す' : 'アーカイブする',
+                            onSelect: () =>
+                              void manage({
+                                action: 'archive',
+                                id: project.id,
+                                archived: !project.archived,
+                              }),
+                          },
+                          {
+                            key: 'export',
+                            label: 'バックアップを保存(素材ごと)',
+                            disabled: Boolean(project.storageError),
+                            onSelect: () => void manage({ action: 'export', id: project.id }),
+                          },
+                          {
+                            key: 'delete',
+                            label: 'ごみ箱へ移動',
+                            danger: true,
+                            disabled: Boolean(project.storageError),
+                            onSelect: () => void handleDeleteProject(project),
+                          },
+                        ]}
+                      />
+                    </div>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
         </div>
       </div>
     </div>

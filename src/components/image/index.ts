@@ -1,5 +1,4 @@
 export { ImageCard } from './ImageCard';
 export { ImageGallery } from './ImageGallery';
-export { ImageAssignment } from './ImageAssignment';
-export { PromptEditor } from './PromptEditor';
+export { SceneImages } from './SceneImages';
 export { ImagePreviewModal } from './ImagePreviewModal';

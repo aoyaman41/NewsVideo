@@ -5,7 +5,7 @@ import {
   limitedOpenAIFetch,
   withProviderSlot,
 } from '../utils/generationPolicy';
-import { generationSettings } from '../utils/generationContext';
+import { generationSettings, jobOperationContext } from '../utils/generationContext';
 import { registerOperation } from './operations';
 import { app, safeStorage } from 'electron';
 import { createHash } from 'crypto';
@@ -407,13 +407,17 @@ async function generateClaudeTextContent(params: {
     );
   }
 
+  // 自動生成ジョブが応答の開始を待っている場合(同じ記事への画像プロンプトで、1 本目がキャッシュを書き込む
+  // まで残りを送らないため)は、ストリーミングで受け取り、最初のイベントで開始を知らせる
+  const onResponseStart = jobOperationContext.getStore()?.onResponseStart;
+  const streaming = Boolean(params.stream || onResponseStart);
   // 環境変数の ANTHROPIC_AUTH_TOKEN が混ざらないよう authToken は明示的に無効化する。
   // ストリーミングは応答ヘッダーの受信時点で fetch が返り、fetch 単位の枠では生成中の同時実行数を
   // 制御できないため、通常の fetch を使ってストリーム全体(SDK 内蔵リトライを含む)を 1 つの枠で包む
   const client = new Anthropic({
     apiKey,
     authToken: null,
-    ...(params.stream ? {} : { fetch: limitedAnthropicFetch }),
+    ...(streaming ? {} : { fetch: limitedAnthropicFetch }),
   });
   const effort = resolveClaudeEffort(params.effort);
   const outputConfig: Anthropic.Messages.OutputConfig = {
@@ -441,8 +445,12 @@ async function generateClaudeTextContent(params: {
     ],
     ...(Object.keys(outputConfig).length > 0 ? { output_config: outputConfig } : {}),
   };
-  const message = params.stream
-    ? await withProviderSlot('anthropic', () => client.messages.stream(request).finalMessage())
+  const message = streaming
+    ? await withProviderSlot('anthropic:text', () => {
+        const stream = client.messages.stream(request);
+        if (onResponseStart) stream.once('streamEvent', () => onResponseStart());
+        return stream.finalMessage();
+      })
     : await client.messages.create(request);
 
   assertClaudeMessageCompleted(message);
@@ -1407,8 +1415,9 @@ registerOperation(
     const generationConfig = await readTextGenerationConfig('image_prompt');
     // 記事ブロックのキャッシュ指定は、パートが 1 件のときも含めて常に付ける。
     // 注意: キャッシュは 1 本目の応答が始まってから読めるようになるため、最大 10 並列で同時に送ると
-    // 最初の応答が始まる前に送ったリクエストはキャッシュを読めない。確実に効かせるには、1 本目の応答が
-    // 始まってから残りを送る。ジョブ側の並列化(M2)でこの順序を組み込む
+    // 最初の応答が始まる前に送ったリクエストはキャッシュを読めない。自動生成ジョブ
+    // (ai:generateImagePromptForTarget)では、Claude のとき 1 本目の応答の開始を待ってから残りを送る
+    // (electron/jobs/engine.ts)。この画面向けの一括生成は従来どおり同時に送る
     const extractionResults = await runWithConcurrency(parts, 10, (part, index) =>
       extractSlideDesign({
         article: articleBlock,

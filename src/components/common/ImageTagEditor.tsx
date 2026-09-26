@@ -52,16 +52,22 @@ export function ImageTagEditor({ image, onTagsUpdate, suggestedTags = [] }: Imag
         {image.metadata.tags.map((tag) => (
           <span
             key={tag}
-            className="inline-flex items-center gap-1 px-2 py-0.5 bg-blue-100 text-blue-800 text-xs rounded-full"
+            className="inline-flex items-center gap-1 rounded-full bg-[var(--nv-color-accent)]/10 px-2 py-0.5 text-xs text-[var(--nv-color-accent)]"
           >
             {tag}
             <button
               onClick={() => removeTag(tag)}
-              className="text-blue-600 hover:text-blue-800"
+              className="nv-focus-ring rounded-full hover:text-[var(--nv-color-text)]"
               type="button"
+              aria-label={`タグ「${tag}」を外す`}
             >
               <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M6 18L18 6M6 6l12 12"
+                />
               </svg>
             </button>
           </span>
@@ -69,11 +75,16 @@ export function ImageTagEditor({ image, onTagsUpdate, suggestedTags = [] }: Imag
         {!isEditing && (
           <button
             onClick={() => setIsEditing(true)}
-            className="inline-flex items-center gap-1 px-2 py-0.5 bg-gray-100 text-gray-600 text-xs rounded-full hover:bg-gray-200"
+            className="nv-focus-ring inline-flex items-center gap-1 rounded-full border border-[var(--nv-color-border)] bg-white px-2 py-0.5 text-xs text-[var(--nv-color-muted)] hover:bg-[var(--nv-color-canvas)]"
             type="button"
           >
             <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={2}
+                d="M12 4v16m8-8H4"
+              />
             </svg>
             タグ追加
           </button>
@@ -93,12 +104,13 @@ export function ImageTagEditor({ image, onTagsUpdate, suggestedTags = [] }: Imag
               setIsEditing(false);
             }}
             placeholder="タグを入力..."
-            className="w-full px-2 py-1 text-sm border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500"
+            aria-label="追加するタグ"
+            className="nv-input px-2 py-1 text-sm"
             autoFocus
           />
           {/* サジェスト */}
           {availableSuggestions.length > 0 && inputValue && (
-            <div className="absolute z-10 w-full mt-1 bg-white border border-gray-200 rounded-md shadow-lg max-h-32 overflow-auto">
+            <div className="absolute z-10 mt-1 max-h-32 w-full overflow-auto rounded-[var(--nv-radius-sm)] border border-[var(--nv-color-border)] bg-white shadow-[var(--nv-shadow-md)]">
               {availableSuggestions.slice(0, 5).map((tag) => (
                 <button
                   key={tag}
@@ -106,7 +118,7 @@ export function ImageTagEditor({ image, onTagsUpdate, suggestedTags = [] }: Imag
                     e.preventDefault();
                     addTag(tag);
                   }}
-                  className="w-full px-3 py-1 text-sm text-left hover:bg-gray-100"
+                  className="nv-focus-ring w-full px-3 py-1 text-left text-sm text-[var(--nv-color-text)] hover:bg-[var(--nv-color-canvas)]"
                   type="button"
                 >
                   {tag}

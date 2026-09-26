@@ -177,7 +177,9 @@ function buildSsmlWithMarks(segments: string[]): string {
   const body = segments.map((seg, i) => `<mark name="m${i}"/>${escapeSsmlText(seg)}`).join('');
   return `<speak>${body}</speak>`;
 }
-const withRetry = retryTransient;
+// 音声合成は、テキスト・画像とは別の「音声」の枠で同時実行数を制御する
+const withRetry = <T>(operation: () => Promise<T>, maxAttempts?: number, baseDelay?: number) =>
+  retryTransient(operation, maxAttempts, baseDelay, 'gemini:tts');
 
 async function synthesizeGoogleTts(
   text: string,

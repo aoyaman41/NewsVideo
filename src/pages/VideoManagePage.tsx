@@ -1,11 +1,8 @@
 import { useScrollMemory } from '../hooks/useScrollMemory';
 import { useSceneSelection, rememberedScene } from '../stores/sceneSelection';
 import { resolutionForAspect, type RenderOptions } from '../../shared/project/videoFormat';
-import {
-  renderConflictMessage,
-  stripRenderConflictMarker,
-} from '../../shared/project/renderIntent';
-import { inputFingerprint } from '../../shared/project/integrity';
+import { renderConflictMessage } from '../../shared/project/renderIntent';
+import { inputFingerprint, isVideoCurrent, partFreshness } from '../../shared/project/integrity';
 import { withRenderConflictRetry } from '../utils/renderRetry';
 import { projectClient, useProjectState } from '../stores/projectStore';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -15,20 +12,32 @@ import {
   Badge,
   Button,
   Card,
+  Checkbox,
+  Details,
   EmptyState,
-  ErrorDetailPanel,
   ProgressBar,
-  StatusChip,
+  useConfirm,
   useToast,
 } from '../components/ui';
+import { SceneList } from '../components/common/SceneList';
+import { ErrorNotice } from '../components/common/ErrorNotice';
+import { describeError, type FriendlyError } from '../components/common/friendlyError';
+import { useJobActive } from '../components/common/useJobActive';
+import {
+  alignCaptionsToScript,
+  captionMismatchParts,
+  captionState,
+  refreshEnabledCaptions,
+  setCaptionsEnabled,
+} from '../components/common/captionSync';
+import { loadForPreview } from '../components/common/renderPrep';
 import type { AutoGenerationStatus, Project } from '../schemas';
 import { toLocalFileUrl } from '../utils/toLocalFileUrl';
-import { summarizeProjectProgress } from '../utils/projectHealth';
 import {
-  SOURCE_DISPLAY_MODE_LABELS,
   getDefaultPresentationProfile,
   normalizePresentationProfile,
   resolvePresentationSourceLine,
+  type SourceDisplayMode,
 } from '../../shared/project/presentationProfile';
 
 type Settings = {
@@ -56,14 +65,48 @@ type ResolvedVideoAsset = {
 
 const JOB_ACTIVE_MESSAGE = '自動生成の実行中です。完了すると、書き出しとプレビューができます。';
 
-function renderErrorMessage(error: unknown, fallback: string): string {
-  return error instanceof Error ? stripRenderConflictMarker(error.message) : fallback;
+const SOURCE_DISPLAY_LABELS: Record<SourceDisplayMode, string> = {
+  auto: '記事の出典を使う',
+  hidden: '表示しない',
+  custom: '自分で入力する',
+};
+
+const RESOLUTION_LABELS: Partial<Record<RenderOptions['resolution'], string>> = {
+  '1280x720': 'HD',
+  '1920x1080': 'フル HD',
+  '3840x2160': '4K',
+  '720x1280': 'HD',
+  '1080x1920': 'フル HD',
+  '2160x3840': '4K',
+};
+
+function progressLabel(progress: VideoProgress): string {
+  switch (progress.stage) {
+    case 'preparing':
+      return '準備しています';
+    case 'rendering_parts':
+      return typeof progress.current === 'number' && typeof progress.total === 'number'
+        ? `シーンを動画にしています（${progress.current}/${progress.total}）`
+        : 'シーンを動画にしています';
+    case 'concatenating':
+      return 'シーンをつなげています';
+    case 'finalizing':
+      return '仕上げています';
+    default:
+      return '処理しています';
+  }
+}
+
+function sceneNumbers(parts: Project['parts']): string {
+  const numbers = parts.map((part) => part.index + 1);
+  return numbers.length > 6 ? `${numbers.slice(0, 6).join('・')} ほか` : numbers.join('・');
 }
 
 export function VideoManagePage() {
   const { projectId } = useParams<{ projectId: string }>();
   const navigate = useNavigate();
   const toast = useToast();
+  const { confirm } = useConfirm();
 
   const [project, setProject] = useProjectState(projectId);
   const [settings, setSettings] = useState<Settings | null>(null);
@@ -81,16 +124,18 @@ export function VideoManagePage() {
   const [outputPath, setOutputPath] = useState('');
 
   const [videoPath, setVideoPath] = useState<string | null>(null);
+  const [videoKind, setVideoKind] = useState<
+    { kind: 'output' } | { kind: 'preview'; sceneNo: number }
+  >({ kind: 'output' });
   const [videoSrcVersion, setVideoSrcVersion] = useState(0);
   const [mediaError, setMediaError] = useState<string | null>(null);
-  const [mediaDebug, setMediaDebug] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<FriendlyError | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   const [isLoading, setIsLoading] = useState(true);
   const [isPreviewing, setIsPreviewing] = useState(false);
   const [isRendering, setIsRendering] = useState(false);
   const [progress, setProgress] = useState<VideoProgress | null>(null);
-  const [liveJob, setLiveJob] = useState<{ projectId: string; status?: string } | null>(null);
   const [showProgress, setShowProgress] = useState(false);
   const [presentationProfile, setPresentationProfile] = useState(getDefaultPresentationProfile());
 
@@ -102,9 +147,11 @@ export function VideoManagePage() {
   );
 
   const reportError = useCallback(
-    (message: string, title?: string) => {
-      setError(message);
-      toast.error(message, title);
+    (err: unknown, title: string) => {
+      console.error(title, err);
+      const friendly = describeError(err, title);
+      setError(friendly);
+      toast.error(friendly.message, friendly.title);
     },
     [toast]
   );
@@ -112,15 +159,8 @@ export function VideoManagePage() {
   const syncVideoAsset = useCallback((path: string, identity: string) => {
     const pathChanged = lastVideoPathRef.current !== path;
     const identityChanged = lastVideoIdentityRef.current !== identity;
-
-    if (pathChanged) {
-      setVideoPath(path);
-    }
-
-    if (pathChanged || identityChanged) {
-      setVideoSrcVersion((prev) => prev + 1);
-    }
-
+    if (pathChanged) setVideoPath(path);
+    if (pathChanged || identityChanged) setVideoSrcVersion((prev) => prev + 1);
     lastVideoPathRef.current = path;
     lastVideoIdentityRef.current = identity;
   }, []);
@@ -149,7 +189,6 @@ export function VideoManagePage() {
   const resolveExistingVideoPath = useCallback(
     async (project: Project): Promise<ResolvedVideoAsset | null> => {
       const lastPath = project.autoGenerationStatus?.lastVideoPath;
-
       try {
         const outputDir = `${project.path}/output`;
         const entries = await window.electronAPI.file.listFiles(outputDir);
@@ -159,17 +198,12 @@ export function VideoManagePage() {
         const lastMatch = lastPath
           ? (candidates.find((entry) => entry.path === lastPath) ?? null)
           : null;
-        if (lastMatch) {
-          return { path: lastMatch.path, mtimeMs: lastMatch.mtimeMs };
-        }
+        if (lastMatch) return { path: lastMatch.path, mtimeMs: lastMatch.mtimeMs };
         const latest = candidates[0] ?? null;
-        if (latest) {
-          return { path: latest.path, mtimeMs: latest.mtimeMs };
-        }
+        if (latest) return { path: latest.path, mtimeMs: latest.mtimeMs };
       } catch {
         // fallback below
       }
-
       if (lastPath) {
         try {
           const exists = await window.electronAPI.file.exists(lastPath);
@@ -178,36 +212,37 @@ export function VideoManagePage() {
           return { path: lastPath, mtimeMs: null };
         }
       }
-
       return null;
     },
     []
   );
 
   // 自動生成ジョブの実行中は、手動の書き出しとプレビューを受け付けない(ジョブの動画工程と競合させない)
-  const jobStatus =
-    (liveJob && liveJob.projectId === projectId ? liveJob.status : undefined) ??
-    project?.job?.status;
-  const jobActive = jobStatus === 'running' || jobStatus === 'queued';
+  const jobActive = useJobActive(projectId, project);
 
-  const missingAudioCount = useMemo(() => {
-    if (!project) return 0;
-    return project.parts.filter((p) => !p.audio).length;
+  const readiness = useMemo(() => {
+    if (!project) return null;
+    const noAudio: Project['parts'] = [];
+    const noImage: Project['parts'] = [];
+    const stale: Project['parts'] = [];
+    for (const part of project.parts) {
+      const state = partFreshness(project, part);
+      if (state.audio === 'missing') noAudio.push(part);
+      if (state.image === 'missing') noImage.push(part);
+      if (
+        state.audio !== 'missing' &&
+        state.image !== 'missing' &&
+        (state.script === 'stale' || state.image === 'stale' || state.audio === 'stale')
+      )
+        stale.push(part);
+    }
+    return { noAudio, noImage, stale, hasVideoOutput: isVideoCurrent(project) };
   }, [project]);
 
-  const missingImagesCount = useMemo(() => {
-    if (!project) return 0;
-    return project.parts.filter((p) => (p.panelImages?.length ?? 0) === 0).length;
-  }, [project]);
-  const summary = useMemo(() => (project ? summarizeProjectProgress(project) : null), [project]);
-  const closingSourcePreview = useMemo(
-    () => resolvePresentationSourceLine(presentationProfile, project?.article.source),
-    [presentationProfile, project?.article.source]
+  const selectedPart = useMemo(
+    () => project?.parts.find((p) => p.id === selectedPartId) ?? null,
+    [project, selectedPartId]
   );
-
-  const selectedPart = useMemo(() => {
-    return project?.parts.find((p) => p.id === selectedPartId) ?? null;
-  }, [project, selectedPartId]);
 
   const videoSrc = useMemo(() => {
     if (!videoPath) return null;
@@ -222,53 +257,11 @@ export function VideoManagePage() {
   useEffect(() => {
     if (!videoSrc) return;
     setMediaError(null);
-    setMediaDebug(null);
     const el = videoRef.current;
     el?.pause();
     el?.load();
-    if (el) {
-      el.currentTime = 0;
-    }
+    if (el) el.currentTime = 0;
   }, [videoSrc]);
-
-  // 失敗時の切り分け用（レスポンスヘッダ/Range対応確認）
-  useEffect(() => {
-    let cancelled = false;
-    const run = async () => {
-      if (!videoSrc || !mediaError) {
-        setMediaDebug(null);
-        return;
-      }
-      try {
-        const headRes = await fetch(videoSrc, { method: 'HEAD' });
-        const rangeRes = await fetch(videoSrc, { headers: { Range: 'bytes=0-1' } });
-        if (cancelled) return;
-        const fmt = (res: Response) => {
-          const ct = res.headers.get('content-type');
-          const cl = res.headers.get('content-length');
-          const cr = res.headers.get('content-range');
-          return `${res.status} ct=${ct ?? '-'} len=${cl ?? '-'} range=${cr ?? '-'}`;
-        };
-        setMediaDebug(`HEAD: ${fmt(headRes)} / RANGE: ${fmt(rangeRes)}`);
-      } catch (err) {
-        if (cancelled) return;
-        setMediaDebug(err instanceof Error ? err.message : 'fetch failed');
-      }
-    };
-    run();
-    return () => {
-      cancelled = true;
-    };
-  }, [mediaError, videoSrc]);
-
-  // 保持データが未保存の編集中でも、このプロジェクトのジョブの状態はイベントから直接追う
-  useEffect(() => {
-    if (!projectId) return;
-    return window.electronAPI.events.subscribe('job:statusChange', (payload: unknown) => {
-      const event = payload as { projectId?: string; job?: { status?: string } } | null;
-      if (event?.projectId === projectId) setLiveJob({ projectId, status: event.job?.status });
-    });
-  }, [projectId]);
 
   useEffect(() => {
     const unsubscribe = window.electronAPI.events.subscribe(
@@ -291,8 +284,6 @@ export function VideoManagePage() {
       if (!projectId) return;
       try {
         setIsLoading(true);
-        setError(null);
-
         const [loadedProject, loadedSettings] = await Promise.all([
           projectClient.load(projectId),
           window.electronAPI.settings.get(),
@@ -390,21 +381,17 @@ export function VideoManagePage() {
         }
       } catch (err) {
         console.error('Failed to load project/settings:', err);
-        reportError(
-          err instanceof Error ? err.message : '読み込みに失敗しました',
-          '読み込みに失敗しました'
-        );
+        setLoadError(describeError(err, '読み込めませんでした').message);
       } finally {
         setIsLoading(false);
       }
     };
 
-    load();
+    void load();
   }, [
     applyResolvedVideoAsset,
     clearVideoAsset,
     projectId,
-    reportError,
     resolveExistingVideoPath,
     setProject,
     setSelectedPartId,
@@ -412,27 +399,21 @@ export function VideoManagePage() {
 
   useEffect(() => {
     if (!project) return;
-
     const serialized = JSON.stringify(presentationProfile);
     if (serialized === savedPresentationProfileRef.current) return;
 
     const timeoutId = window.setTimeout(async () => {
       try {
-        const updatedAt = new Date().toISOString();
         const updatedProject: Project = {
           ...project,
           presentationProfile,
-          updatedAt,
+          updatedAt: new Date().toISOString(),
         };
         await projectClient.save(updatedProject);
         savedPresentationProfileRef.current = serialized;
         setProject(updatedProject);
       } catch (err) {
-        console.error('Failed to save video presentation profile:', err);
-        reportError(
-          err instanceof Error ? err.message : '動画設定の保存に失敗しました',
-          '動画設定の保存に失敗しました'
-        );
+        reportError(err, '締めの画面の設定を保存できませんでした');
       }
     }, 250);
 
@@ -480,37 +461,60 @@ export function VideoManagePage() {
   }, [project]);
 
   const handleRevealOutput = useCallback(async () => {
-    if (!outputPath.trim()) return;
-    await window.electronAPI.file.revealInFinder(outputPath.trim());
-  }, [outputPath]);
+    const target = (videoKind.kind === 'output' && videoPath) || outputPath.trim();
+    if (!target) return;
+    await window.electronAPI.file.revealInFinder(target);
+  }, [outputPath, videoKind.kind, videoPath]);
+
+  const handleToggleCaptions = useCallback(
+    (enabled: boolean) => {
+      setProject((prev) => (prev ? setCaptionsEnabled(prev, enabled) : prev));
+    },
+    [setProject]
+  );
+
+  const handleAlignCaptions = useCallback(
+    async (partIds: string[]) => {
+      const accepted = await confirm({
+        title: '字幕を台本に合わせますか?',
+        description:
+          '選んだシーンの字幕を、今の台本と音声から作り直します。以前に手で直した字幕の文は、台本の文に置き換わります。',
+        confirmLabel: '合わせる',
+        confirmVariant: 'primary',
+      });
+      if (!accepted) return;
+      setProject((prev) => (prev ? alignCaptionsToScript(prev, partIds) : prev));
+    },
+    [confirm, setProject]
+  );
 
   const handleGeneratePreview = useCallback(async () => {
-    if (!selectedPartId || !projectId) return;
+    if (!selectedPart || !projectId) return;
     if (jobActive) {
       toast.info(JOB_ACTIVE_MESSAGE, 'プレビューできません');
       return;
     }
+    const partId = selectedPart.id;
+    const sceneNo = selectedPart.index + 1;
     try {
       setIsPreviewing(true);
       setError(null);
       const res = await withRenderConflictRetry(projectId, async () => {
         // 画面が意図した内容を保存してから渡す(Main 側で最新の保存内容と照合する)
-        await projectClient.flush(projectId);
-        const intended = await projectClient.load(projectId);
-        return window.electronAPI.video.preview(selectedPartId, intended);
+        const intended = await loadForPreview(projectId);
+        return window.electronAPI.video.preview(partId, intended);
       });
+      setVideoKind({ kind: 'preview', sceneNo });
       forceReloadVideoAsset(res.previewPath);
-      // 先頭から再生できるように
       setTimeout(() => {
         if (videoRef.current) videoRef.current.currentTime = 0;
       }, 0);
     } catch (err) {
-      console.error('Failed to generate preview:', err);
-      reportError(renderErrorMessage(err, 'プレビュー生成に失敗しました'));
+      reportError(err, 'プレビューを作れませんでした');
     } finally {
       setIsPreviewing(false);
     }
-  }, [forceReloadVideoAsset, jobActive, projectId, reportError, selectedPartId, toast]);
+  }, [forceReloadVideoAsset, jobActive, projectId, reportError, selectedPart, toast]);
 
   const handleRender = useCallback(async () => {
     if (!project) return;
@@ -519,8 +523,7 @@ export function VideoManagePage() {
       return;
     }
     if (!outputPath.trim()) {
-      setError(null);
-      toast.warning('保存先を選択してから書き出してください。', '出力先が未指定です');
+      toast.warning('保存先を選んでから書き出してください。', '保存先が決まっていません');
       return;
     }
 
@@ -528,7 +531,7 @@ export function VideoManagePage() {
       setIsRendering(true);
       setError(null);
       setShowProgress(true);
-      setProgress({ stage: 'preparing', percent: 0, message: '準備中...' });
+      setProgress({ stage: 'preparing', percent: 0 });
 
       const effectiveOptions = {
         ...renderOptions,
@@ -536,15 +539,17 @@ export function VideoManagePage() {
       };
       const res = await withRenderConflictRetry(project.id, async (isRetry) => {
         // 再試行のときは読み直した最新の保持データから組み立てる
-        const source = await projectClient.load(project.id);
+        const loaded = await projectClient.load(project.id);
         // 締めカードなどの表示設定は画面の値で上書きするので、読み直した保存内容と食い違う
         // (画面に未保存の編集がある、または別の保存で変わった)ときは自動で再試行しない
         if (
           isRetry &&
-          inputFingerprint(normalizePresentationProfile(source.presentationProfile)) !==
+          inputFingerprint(normalizePresentationProfile(loaded.presentationProfile)) !==
             inputFingerprint(presentationProfile)
         )
           throw new Error(renderConflictMessage('render'));
+        // 字幕が ON のシーンは、台本や音声に合わせて字幕を最新にしてから書き出す
+        const source = refreshEnabledCaptions(loaded) ?? loaded;
         const renderProject: Project = {
           ...source,
           presentationProfile,
@@ -553,13 +558,14 @@ export function VideoManagePage() {
         await projectClient.save(renderProject);
         return window.electronAPI.video.render(renderProject, effectiveOptions, outputPath.trim());
       });
+      setVideoKind({ kind: 'output' });
       forceReloadVideoAsset(res.outputPath);
       setTimeout(() => {
         if (videoRef.current) videoRef.current.currentTime = 0;
       }, 0);
+      toast.success('動画を書き出しました', '完成しました');
     } catch (err) {
-      console.error('Failed to render video:', err);
-      reportError(renderErrorMessage(err, '動画書き出しに失敗しました'));
+      reportError(err, '動画を書き出せませんでした');
     } finally {
       setIsRendering(false);
     }
@@ -581,7 +587,7 @@ export function VideoManagePage() {
       setIsRendering(false);
       setIsPreviewing(false);
       setError(null);
-      toast.info('動画の処理をキャンセルしました。', 'キャンセル');
+      toast.info('動画の処理を止めました。', '止めました');
     } catch (err) {
       console.warn('Failed to cancel render:', err);
     }
@@ -590,22 +596,50 @@ export function VideoManagePage() {
   if (isLoading) {
     return (
       <div className="flex flex-1 items-center justify-center">
-        <p className="text-slate-600">読み込み中...</p>
+        <p className="text-[var(--nv-color-muted)]">読み込み中...</p>
       </div>
     );
   }
 
-  if (!project || !settings) {
+  if (!project || !settings || !readiness) {
     return (
       <div className="flex flex-1 items-center justify-center">
         <EmptyState
           title="プロジェクトを読み込めません"
-          description={error || 'プロジェクトが見つかりません'}
+          description={loadError || 'プロジェクトが見つかりません'}
           action={<Button onClick={() => navigate('/projects')}>プロジェクト一覧に戻る</Button>}
         />
       </div>
     );
   }
+
+  const returnTo = `/projects/${project.id}/video`;
+  const busy = isRendering || isPreviewing;
+  const captions = captionState(project);
+  const captionMismatches = captionMismatchParts(project);
+  const effectiveResolution = resolutionForAspect(
+    renderOptions.resolution,
+    presentationProfile.aspectRatio
+  );
+  const blockingIssues = readiness.noAudio.length > 0 || readiness.noImage.length > 0;
+  const renderBlockedReason = jobActive
+    ? JOB_ACTIVE_MESSAGE
+    : project.parts.length === 0
+      ? 'シーンがありません。記事画面の「おまかせで作る」から始めてください。'
+      : blockingIssues
+        ? '画像か音声がないシーンがあります。上の案内から作ってください。'
+        : !outputPath.trim()
+          ? '保存先を選んでください。'
+          : null;
+  const previewBlockedReason = jobActive
+    ? JOB_ACTIVE_MESSAGE
+    : !selectedPart
+      ? '左の一覧からシーンを選んでください。'
+      : partFreshness(project, selectedPart).audio === 'missing'
+        ? 'このシーンには音声がありません。'
+        : partFreshness(project, selectedPart).image === 'missing'
+          ? 'このシーンには画像がありません。'
+          : null;
 
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
@@ -613,486 +647,422 @@ export function VideoManagePage() {
 
       {projectId && <WorkflowNav projectId={projectId} current="video" project={project} />}
 
-      {error && (
-        <div className="px-4 pt-4">
-          <ErrorDetailPanel message={error} onDismiss={() => setError(null)} />
-        </div>
-      )}
+      <div className="flex min-h-0 flex-1 gap-4 p-4">
+        <SceneList
+          className="w-56 shrink-0"
+          scenes={project.parts}
+          selectedId={selectedPartId}
+          onSelect={setSelectedPartId}
+          subtitle={`全 ${project.parts.length} シーン`}
+          renderStatus={(part) => {
+            const state = partFreshness(project, part);
+            const ready = state.audio !== 'missing' && state.image !== 'missing';
+            return ready ? (
+              <Badge tone="success">準備完了</Badge>
+            ) : (
+              <>
+                {state.image === 'missing' && <Badge tone="warning">画像なし</Badge>}
+                {state.audio === 'missing' && <Badge tone="warning">音声なし</Badge>}
+              </>
+            );
+          }}
+        />
 
-      <div className="px-4 pt-3">
-        <Card
-          title="書き出し操作"
-          subtitle="プレビュー確認後に最終書き出し"
-          actions={
-            <div className="flex items-center gap-2">
-              <Button
-                variant="secondary"
-                onClick={handleGeneratePreview}
-                disabled={isPreviewing || isRendering || jobActive || !selectedPartId}
-                title={jobActive ? JOB_ACTIVE_MESSAGE : undefined}
-              >
-                {isPreviewing ? 'プレビュー生成中...' : '選択パートをプレビュー'}
-              </Button>
-              <Button
-                variant="success"
-                onClick={handleRender}
-                disabled={isRendering || isPreviewing || jobActive || project.parts.length === 0}
-                title={jobActive ? JOB_ACTIVE_MESSAGE : undefined}
-              >
-                {isRendering ? '書き出し中...' : '動画を書き出し'}
-              </Button>
-              {(isRendering || isPreviewing) && (
-                <Button variant="secondary" onClick={handleCancel}>
-                  キャンセル
-                </Button>
-              )}
-            </div>
-          }
+        <div
+          ref={scrollRef}
+          className="@container nv-scrollbar min-h-0 min-w-0 flex-1 space-y-4 overflow-auto pr-1"
         >
-          {jobActive && (
-            <p role="status" className="mb-2 text-xs font-semibold text-blue-700">
-              {JOB_ACTIVE_MESSAGE}
-            </p>
-          )}
-          <div className="flex flex-wrap items-center gap-2 text-xs">
-            <Badge tone={missingAudioCount === 0 ? 'success' : 'warning'}>
-              音声未生成 {missingAudioCount}
-            </Badge>
-            <Badge tone={missingImagesCount === 0 ? 'success' : 'warning'}>
-              画像未割当 {missingImagesCount}
-            </Badge>
-            <StatusChip
-              tone={summary?.hasVideoOutput ? 'success' : 'info'}
-              label={summary?.hasVideoOutput ? '書き出し済みあり' : '未書き出し'}
-            />
-          </div>
-        </Card>
-      </div>
+          <ErrorNotice error={error} onDismiss={() => setError(null)} returnTo={returnTo} />
 
-      <div
-        ref={scrollRef}
-        className="grid min-h-0 flex-1 grid-cols-1 xl:grid-cols-[220px_minmax(0,1fr)_320px] auto-rows-max xl:auto-rows-auto gap-4 overflow-auto p-4"
-      >
-        <Card
-          title="パート一覧"
-          subtitle={`全 ${project.parts.length} パート`}
-          className="overflow-hidden"
-        >
-          <ul className="nv-scrollbar max-h-[calc(100vh-320px)] space-y-2 overflow-auto pr-1">
-            {project.parts.map((part, idx) => {
-              const hasAudio = Boolean(part.audio);
-              const hasImages = (part.panelImages?.length ?? 0) > 0;
-              return (
-                <li key={part.id}>
-                  <button
-                    onClick={() => setSelectedPartId(part.id)}
-                    className={`w-full rounded-[8px] border px-3 py-2 text-left transition-colors ${
-                      selectedPartId === part.id
-                        ? 'border-[var(--nv-color-accent)] bg-blue-50'
-                        : 'border-[var(--nv-color-border)] bg-white hover:bg-slate-50'
-                    }`}
-                  >
-                    <div className="flex items-center gap-2">
-                      <span className="text-xs text-slate-600">{idx + 1}</span>
-                      <span className="truncate text-sm font-semibold text-slate-900">
-                        {part.title}
-                      </span>
-                    </div>
-                    <div className="mt-1 flex items-center gap-1 text-xs">
-                      <Badge tone={hasAudio ? 'success' : 'warning'}>
-                        {hasAudio ? '音声OK' : '音声未生成'}
-                      </Badge>
-                      <Badge tone={hasImages ? 'success' : 'warning'}>
-                        {hasImages ? `画像${part.panelImages.length}` : '画像未割当'}
-                      </Badge>
-                    </div>
-                  </button>
-                </li>
-              );
-            })}
-          </ul>
-        </Card>
-
-        <Card
-          title="プレビュー"
-          subtitle={
-            selectedPart ? `${selectedPart.index + 1}. ${selectedPart.title}` : 'パート未選択'
-          }
-          className="overflow-auto"
-        >
-          <div className="space-y-3">
-            <div
-              className="w-full overflow-hidden rounded-[12px] bg-black"
-              style={{ aspectRatio: presentationProfile.aspectRatio.replace(':', ' / ') }}
-            >
-              {videoSrc ? (
-                <video
-                  key={videoSrc}
-                  ref={videoRef}
-                  src={videoSrc}
-                  controls
-                  className="h-full w-full"
-                  onError={() => {
-                    const code = videoRef.current?.error?.code ?? 0;
-                    const label =
-                      code === 1
-                        ? '読み込みが中断されました'
-                        : code === 2
-                          ? 'ネットワークエラー（ファイル読み込み失敗）'
-                          : code === 3
-                            ? 'デコードエラー（コーデック/ファイル破損）'
-                            : code === 4
-                              ? '非対応の形式です'
-                              : '再生エラー';
-                    setMediaError(`${label}（code=${code}）`);
-                  }}
-                />
-              ) : (
-                <div className="flex h-full w-full items-center justify-center text-sm text-slate-300">
-                  プレビュー生成後に表示
-                </div>
-              )}
-            </div>
-            {mediaError && (
-              <ErrorDetailPanel
-                title="再生エラー"
-                message={mediaError}
-                onDismiss={() => setMediaError(null)}
-                className="px-3 py-2"
-              />
-            )}
-            {mediaDebug && (
-              <div className="rounded-[8px] border border-[var(--nv-color-border)] bg-slate-50 px-3 py-2 text-xs text-slate-700 break-all">
-                {mediaDebug}
-              </div>
-            )}
-            {videoPath && <div className="text-xs text-slate-600 break-all">{videoPath}</div>}
-          </div>
-        </Card>
-
-        <div className="space-y-4 overflow-auto">
-          <Card title="締めカード設定" subtitle="この動画の締め画面を調整">
+          <Card
+            emphasis
+            title="書き出し"
+            subtitle={
+              readiness.hasVideoOutput
+                ? '最新の内容で書き出し済みです'
+                : '内容を確認して、動画ファイルに書き出します'
+            }
+          >
             <div className="space-y-4">
-              <div className="rounded-[10px] border border-[var(--nv-color-border)] bg-slate-50 p-3 text-xs text-slate-600">
-                <p>
-                  締め画面の文言はこの動画だけに適用します。共通の前後動画は設定画面で選べます。
+              {jobActive && (
+                <p
+                  role="status"
+                  className="rounded-[var(--nv-radius-sm)] border border-[var(--nv-color-accent)]/30 bg-[var(--nv-color-accent)]/5 px-3 py-2 text-sm font-semibold text-[var(--nv-color-accent)]"
+                >
+                  {JOB_ACTIVE_MESSAGE}
                 </p>
-              </div>
+              )}
 
-              <label className="inline-flex items-center gap-2 text-sm text-slate-700">
-                <input
-                  type="checkbox"
-                  checked={presentationProfile.closingCardEnabled}
-                  onChange={(e) =>
-                    setPresentationProfile((prev) => ({
-                      ...prev,
-                      closingCardEnabled: e.target.checked,
-                    }))
-                  }
-                  disabled={isRendering || isPreviewing}
-                />
-                締めカードを含める
-              </label>
-
-              <div className="grid gap-4">
-                <div>
-                  <label
-                    htmlFor="VideoManagePage-field-1"
-                    className="mb-1 block text-xs font-semibold text-slate-600"
-                  >
-                    見出し
-                  </label>
-                  <input
-                    id="VideoManagePage-field-1"
-                    type="text"
-                    value={presentationProfile.closingCardHeadline}
-                    onChange={(e) =>
-                      setPresentationProfile((prev) => ({
-                        ...prev,
-                        closingCardHeadline: e.target.value,
-                      }))
-                    }
-                    className="nv-input"
-                    disabled={isRendering || isPreviewing}
-                    placeholder="ご視聴ありがとうございました"
-                  />
-                </div>
-
-                <div>
-                  <label
-                    htmlFor="VideoManagePage-field-2"
-                    className="mb-1 block text-xs font-semibold text-slate-600"
-                  >
-                    CTA
-                  </label>
-                  <input
-                    id="VideoManagePage-field-2"
-                    type="text"
-                    value={presentationProfile.closingCardCtaText}
-                    onChange={(e) =>
-                      setPresentationProfile((prev) => ({
-                        ...prev,
-                        closingCardCtaText: e.target.value,
-                      }))
-                    }
-                    className="nv-input"
-                    disabled={isRendering || isPreviewing}
-                    placeholder="続きは概要欄から確認してください"
-                  />
-                </div>
-
-                <div>
-                  <label
-                    htmlFor="VideoManagePage-field-3"
-                    className="mb-1 block text-xs font-semibold text-slate-600"
-                  >
-                    出典表示
-                  </label>
-                  <select
-                    id="VideoManagePage-field-3"
-                    value={presentationProfile.sourceDisplayMode}
-                    onChange={(e) =>
-                      setPresentationProfile((prev) => ({
-                        ...prev,
-                        sourceDisplayMode: e.target.value as typeof prev.sourceDisplayMode,
-                      }))
-                    }
-                    className="nv-input"
-                    disabled={isRendering || isPreviewing}
-                  >
-                    {Object.entries(SOURCE_DISPLAY_MODE_LABELS).map(([mode, label]) => (
-                      <option key={mode} value={mode}>
-                        {label}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                {presentationProfile.sourceDisplayMode === 'custom' && (
-                  <div>
-                    <label
-                      htmlFor="VideoManagePage-field-4"
-                      className="mb-1 block text-xs font-semibold text-slate-600"
+              <section aria-label="書き出し前の確認" className="space-y-2">
+                {project.parts.length === 0 ? (
+                  <p className="nv-help">シーンがありません。</p>
+                ) : !blockingIssues ? (
+                  <p className="rounded-[var(--nv-radius-sm)] border border-[var(--nv-color-success)]/30 bg-[var(--nv-color-success)]/5 px-3 py-2 text-sm text-[var(--nv-color-text)]">
+                    すべてのシーンの画像と音声がそろっています。
+                  </p>
+                ) : null}
+                {readiness.noImage.length > 0 && (
+                  <div className="flex flex-wrap items-center justify-between gap-2 rounded-[var(--nv-radius-sm)] border border-[var(--nv-color-warning)]/30 bg-[var(--nv-color-warning)]/5 px-3 py-2">
+                    <p className="text-sm text-[var(--nv-color-text)]">
+                      画像がないシーン: {sceneNumbers(readiness.noImage)}
+                    </p>
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      onClick={() => navigate(`/projects/${project.id}/image`)}
                     >
-                      カスタム出典表記
-                    </label>
-                    <input
-                      id="VideoManagePage-field-4"
-                      type="text"
-                      value={presentationProfile.sourceDisplayText}
-                      onChange={(e) =>
-                        setPresentationProfile((prev) => ({
-                          ...prev,
-                          sourceDisplayText: e.target.value,
-                        }))
-                      }
-                      className="nv-input"
-                      disabled={isRendering || isPreviewing}
-                      placeholder="出典: 社内広報資料"
-                    />
+                      画像を作る
+                    </Button>
+                  </div>
+                )}
+                {readiness.noAudio.length > 0 && (
+                  <div className="flex flex-wrap items-center justify-between gap-2 rounded-[var(--nv-radius-sm)] border border-[var(--nv-color-warning)]/30 bg-[var(--nv-color-warning)]/5 px-3 py-2">
+                    <p className="text-sm text-[var(--nv-color-text)]">
+                      音声がないシーン: {sceneNumbers(readiness.noAudio)}
+                    </p>
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      onClick={() => navigate(`/projects/${project.id}/audio`)}
+                    >
+                      音声を作る
+                    </Button>
+                  </div>
+                )}
+                {readiness.stale.length > 0 && (
+                  <p className="nv-help">
+                    台本の変更後に作り直していない素材があります（シーン{' '}
+                    {sceneNumbers(readiness.stale)}）。このまま書き出すこともできます。
+                  </p>
+                )}
+              </section>
+
+              <div className="space-y-3">
+                <Checkbox
+                  checked={captions === 'on'}
+                  indeterminate={captions === 'mixed'}
+                  onChange={handleToggleCaptions}
+                  disabled={busy || project.parts.length === 0}
+                  label="字幕を入れる"
+                  description={
+                    captions === 'mixed'
+                      ? '一部のシーンだけ字幕が入っています。チェックすると、すべてのシーンに入れます。'
+                      : '台本の文章を、読み上げに合わせて画面の下に表示します。'
+                  }
+                />
+                {captionMismatches.length > 0 && (
+                  <div className="flex flex-wrap items-center justify-between gap-2 rounded-[var(--nv-radius-sm)] border border-[var(--nv-color-warning)]/30 bg-[var(--nv-color-warning)]/5 px-3 py-2">
+                    <p className="min-w-0 flex-1 text-sm text-[var(--nv-color-text)]">
+                      字幕の文が台本と違うシーンがあります（シーン {sceneNumbers(captionMismatches)}
+                      ）。
+                    </p>
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      disabled={busy}
+                      onClick={() => void handleAlignCaptions(captionMismatches.map((p) => p.id))}
+                    >
+                      字幕を台本に合わせる
+                    </Button>
+                  </div>
+                )}
+                {(settings.openingVideoPath || settings.endingVideoPath) && (
+                  <div className="flex flex-wrap gap-x-6 gap-y-2">
+                    {settings.openingVideoPath && (
+                      <Checkbox
+                        checked={renderOptions.includeOpening}
+                        onChange={(checked) => {
+                          const next = { ...renderOptions, includeOpening: checked };
+                          setRenderOptions(next);
+                          setProject({ ...project, outputSettings: next });
+                        }}
+                        disabled={busy}
+                        label="最初にオープニング動画を入れる"
+                      />
+                    )}
+                    {settings.endingVideoPath && (
+                      <Checkbox
+                        checked={renderOptions.includeEnding}
+                        onChange={(checked) => {
+                          const next = { ...renderOptions, includeEnding: checked };
+                          setRenderOptions(next);
+                          setProject({ ...project, outputSettings: next });
+                        }}
+                        disabled={busy}
+                        label="最後にエンディング動画を入れる"
+                      />
+                    )}
                   </div>
                 )}
               </div>
 
-              <div className="rounded-[10px] border border-[var(--nv-color-border)] bg-white p-3">
-                <div className="mb-2 flex flex-wrap gap-2 text-xs">
-                  <Badge tone={presentationProfile.closingCardEnabled ? 'success' : 'neutral'}>
-                    {presentationProfile.closingCardEnabled ? '締めカードあり' : '締めカードなし'}
-                  </Badge>
-                  <Badge tone="info">
-                    {SOURCE_DISPLAY_MODE_LABELS[presentationProfile.sourceDisplayMode]}
-                  </Badge>
-                  {renderOptions.includeEnding && (
-                    <Badge tone="neutral">後段に ending 動画を連結</Badge>
+              <div>
+                <p className="nv-label">保存先</p>
+                <div className="flex flex-wrap items-center gap-2">
+                  <p
+                    className="min-w-0 flex-1 truncate rounded-[var(--nv-radius-sm)] border border-[var(--nv-color-border)] bg-[var(--nv-color-canvas)] px-3 py-2 font-mono text-xs text-[var(--nv-color-muted)]"
+                    title={outputPath}
+                  >
+                    {outputPath.trim() || '未設定'}
+                  </p>
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    onClick={handleSelectOutputDir}
+                    disabled={busy}
+                  >
+                    場所を変える
+                  </Button>
+                </div>
+                <p className="nv-help mt-1">
+                  画質: {effectiveResolution}
+                  {RESOLUTION_LABELS[effectiveResolution]
+                    ? `（${RESOLUTION_LABELS[effectiveResolution]}）`
+                    : ''}
+                  。 画質は設定画面で変えられます。
+                </p>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2 border-t border-[var(--nv-color-border)] pt-4">
+                <Button
+                  size="lg"
+                  variant="success"
+                  onClick={() => void handleRender()}
+                  disabled={busy || Boolean(renderBlockedReason)}
+                  title={renderBlockedReason ?? undefined}
+                >
+                  {isRendering ? '書き出し中…' : '動画を書き出す'}
+                </Button>
+                {busy && (
+                  <Button variant="secondary" onClick={handleCancel}>
+                    止める
+                  </Button>
+                )}
+                {videoPath && videoKind.kind === 'output' && !busy && (
+                  <Button variant="ghost" onClick={() => void handleRevealOutput()}>
+                    Finder で表示
+                  </Button>
+                )}
+                {renderBlockedReason && !busy && (
+                  <p className="nv-help basis-full">{renderBlockedReason}</p>
+                )}
+              </div>
+            </div>
+          </Card>
+
+          <div className="grid items-start gap-4 @4xl:grid-cols-[minmax(0,1fr)_20rem]">
+            <Card
+              title="プレビュー"
+              subtitle={
+                !videoPath
+                  ? 'まだ動画はありません'
+                  : videoKind.kind === 'preview'
+                    ? `シーン ${videoKind.sceneNo} のプレビュー`
+                    : '書き出した動画'
+              }
+            >
+              <div className="space-y-3">
+                <div
+                  className="w-full overflow-hidden rounded-[var(--nv-radius-md)] bg-black"
+                  style={{ aspectRatio: presentationProfile.aspectRatio.replace(':', ' / ') }}
+                >
+                  {videoSrc ? (
+                    <video
+                      key={videoSrc}
+                      ref={videoRef}
+                      src={videoSrc}
+                      controls
+                      className="h-full w-full"
+                      onError={() => {
+                        const code = videoRef.current?.error?.code ?? 0;
+                        setMediaError(
+                          code === 3 || code === 4
+                            ? 'この動画ファイルは再生できませんでした。もう一度書き出すか、プレビューを作り直してください。'
+                            : '動画ファイルを読み込めませんでした。ファイルが移動・削除されていないか確認してください。'
+                        );
+                      }}
+                    />
+                  ) : (
+                    <div className="flex h-full w-full items-center justify-center px-4 text-center text-sm text-white/70">
+                      シーンのプレビューを作るか、動画を書き出すと、ここで再生できます
+                    </div>
                   )}
                 </div>
-                <div className="space-y-2 text-xs text-slate-600">
-                  <div>
-                    <div className="font-semibold text-slate-700">見出しプレビュー</div>
-                    <div className="mt-1 text-sm text-slate-900">
-                      {presentationProfile.closingCardHeadline.trim() || '未設定'}
-                    </div>
-                  </div>
-                  <div>
-                    <div className="font-semibold text-slate-700">CTA プレビュー</div>
-                    <div className="mt-1 text-sm text-slate-900">
-                      {presentationProfile.closingCardCtaText.trim() || 'なし'}
-                    </div>
-                  </div>
-                  <div>
-                    <div className="font-semibold text-slate-700">出典プレビュー</div>
-                    <div className="mt-1 text-sm text-slate-900">
-                      {closingSourcePreview ?? 'なし'}
-                    </div>
-                  </div>
+                {mediaError && (
+                  <p role="alert" className="text-sm text-[var(--nv-color-danger)]">
+                    {mediaError}
+                  </p>
+                )}
+                <div className="flex flex-wrap items-center gap-2">
+                  <Button
+                    variant="secondary"
+                    onClick={() => void handleGeneratePreview()}
+                    disabled={busy || Boolean(previewBlockedReason)}
+                    title={previewBlockedReason ?? undefined}
+                  >
+                    {isPreviewing
+                      ? 'プレビューを作っています…'
+                      : selectedPart
+                        ? `シーン ${selectedPart.index + 1} をプレビュー`
+                        : 'シーンをプレビュー'}
+                  </Button>
+                  {previewBlockedReason && !busy && (
+                    <p className="nv-help">{previewBlockedReason}</p>
+                  )}
                 </div>
               </div>
-            </div>
-          </Card>
+            </Card>
 
-          <Card
-            title="今回の書き出し設定"
-            subtitle="保存済みの品質設定と、今回使う前後動画"
-            actions={
-              <Button
-                variant="secondary"
-                size="sm"
-                onClick={() =>
-                  navigate('/settings', {
-                    state: { returnTo: projectId ? `/projects/${projectId}/video` : '/projects' },
-                  })
-                }
-              >
-                設定を開く
-              </Button>
-            }
-          >
-            <div className="grid grid-cols-1 gap-3">
-              <div className="rounded-[10px] border border-[var(--nv-color-border)] bg-slate-50 p-3">
-                <div className="grid gap-2 sm:grid-cols-2 text-xs text-slate-600">
-                  <div>
-                    <div className="font-semibold text-slate-700">解像度</div>
-                    <div className="mt-1 text-sm text-slate-900">
-                      {resolutionForAspect(
-                        renderOptions.resolution,
-                        presentationProfile.aspectRatio
-                      )}
+            <Card title="締めの画面" subtitle="動画の最後に出す画面です">
+              <div className="space-y-4">
+                <Checkbox
+                  checked={presentationProfile.closingCardEnabled}
+                  onChange={(checked) =>
+                    setPresentationProfile((prev) => ({ ...prev, closingCardEnabled: checked }))
+                  }
+                  disabled={busy}
+                  label="締めの画面を入れる"
+                />
+                {presentationProfile.closingCardEnabled && (
+                  <>
+                    <div>
+                      <label htmlFor="closing-headline" className="nv-label">
+                        見出し
+                      </label>
+                      <input
+                        id="closing-headline"
+                        type="text"
+                        value={presentationProfile.closingCardHeadline}
+                        onChange={(e) =>
+                          setPresentationProfile((prev) => ({
+                            ...prev,
+                            closingCardHeadline: e.target.value,
+                          }))
+                        }
+                        className="nv-input"
+                        disabled={busy}
+                        placeholder="ご視聴ありがとうございました"
+                      />
                     </div>
-                  </div>
-                  <div>
-                    <div className="font-semibold text-slate-700">フレームレート</div>
-                    <div className="mt-1 text-sm text-slate-900">{renderOptions.fps}</div>
-                  </div>
-                  <div>
-                    <div className="font-semibold text-slate-700">動画品質</div>
-                    <div className="mt-1 text-sm text-slate-900">{renderOptions.videoBitrate}</div>
-                  </div>
-                  <div>
-                    <div className="font-semibold text-slate-700">音声品質</div>
-                    <div className="mt-1 text-sm text-slate-900">{renderOptions.audioBitrate}</div>
-                  </div>
-                </div>
-                <p className="mt-3 text-xs text-slate-600">
-                  このプロジェクトに保存した品質です。新規制作の既定値は設定画面で変更できます。
-                </p>
+                    <div>
+                      <label htmlFor="closing-message" className="nv-label">
+                        ひとこと（任意）
+                      </label>
+                      <input
+                        id="closing-message"
+                        type="text"
+                        value={presentationProfile.closingCardCtaText}
+                        onChange={(e) =>
+                          setPresentationProfile((prev) => ({
+                            ...prev,
+                            closingCardCtaText: e.target.value,
+                          }))
+                        }
+                        className="nv-input"
+                        disabled={busy}
+                        placeholder="続きは概要欄から確認してください"
+                      />
+                    </div>
+                    <div>
+                      <label htmlFor="closing-source" className="nv-label">
+                        出典の表示
+                      </label>
+                      <select
+                        id="closing-source"
+                        value={presentationProfile.sourceDisplayMode}
+                        onChange={(e) =>
+                          setPresentationProfile((prev) => ({
+                            ...prev,
+                            sourceDisplayMode: e.target.value as SourceDisplayMode,
+                          }))
+                        }
+                        className="nv-input"
+                        disabled={busy}
+                      >
+                        {(Object.keys(SOURCE_DISPLAY_LABELS) as SourceDisplayMode[]).map((mode) => (
+                          <option key={mode} value={mode}>
+                            {SOURCE_DISPLAY_LABELS[mode]}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    {presentationProfile.sourceDisplayMode === 'custom' && (
+                      <div>
+                        <label htmlFor="closing-source-text" className="nv-label">
+                          出典として表示する文
+                        </label>
+                        <input
+                          id="closing-source-text"
+                          type="text"
+                          value={presentationProfile.sourceDisplayText}
+                          onChange={(e) =>
+                            setPresentationProfile((prev) => ({
+                              ...prev,
+                              sourceDisplayText: e.target.value,
+                            }))
+                          }
+                          className="nv-input"
+                          disabled={busy}
+                          placeholder="出典: 社内広報資料"
+                        />
+                      </div>
+                    )}
+                    <Details summary="締めの画面に出る文を確認">
+                      <dl className="space-y-2 text-sm">
+                        <div>
+                          <dt className="nv-label">見出し</dt>
+                          <dd>{presentationProfile.closingCardHeadline.trim() || '（なし）'}</dd>
+                        </div>
+                        <div>
+                          <dt className="nv-label">ひとこと</dt>
+                          <dd>{presentationProfile.closingCardCtaText.trim() || '（なし）'}</dd>
+                        </div>
+                        <div>
+                          <dt className="nv-label">出典</dt>
+                          <dd>
+                            {resolvePresentationSourceLine(
+                              presentationProfile,
+                              project.article.source
+                            ) ?? '（なし）'}
+                          </dd>
+                        </div>
+                      </dl>
+                    </Details>
+                  </>
+                )}
               </div>
-
-              <div className="flex flex-wrap items-center gap-4 text-sm text-slate-700">
-                <label className="inline-flex items-center gap-2">
-                  <input
-                    type="checkbox"
-                    checked={renderOptions.includeOpening}
-                    onChange={(e) =>
-                      (() => {
-                        const next = { ...renderOptions, includeOpening: e.target.checked };
-                        setRenderOptions(next);
-                        setProject({ ...project, outputSettings: next });
-                      })()
-                    }
-                    disabled={!settings.openingVideoPath || isRendering || isPreviewing}
-                  />
-                  オープニングを含める
-                </label>
-                <label className="inline-flex items-center gap-2">
-                  <input
-                    type="checkbox"
-                    checked={renderOptions.includeEnding}
-                    onChange={(e) =>
-                      (() => {
-                        const next = { ...renderOptions, includeEnding: e.target.checked };
-                        setRenderOptions(next);
-                        setProject({ ...project, outputSettings: next });
-                      })()
-                    }
-                    disabled={!settings.endingVideoPath || isRendering || isPreviewing}
-                  />
-                  エンディングを含める
-                </label>
-              </div>
-
-              <div>
-                <label className="mb-1 block text-xs font-semibold text-slate-600">
-                  現在の保存先
-                </label>
-                <div className="space-y-2">
-                  <div className="rounded-[8px] border border-[var(--nv-color-border)] bg-slate-50 px-3 py-2 font-mono text-xs leading-5 text-slate-600 break-all">
-                    {outputPath.trim() || '未設定'}
-                  </div>
-                  <div className="flex flex-wrap justify-end gap-2">
-                    <Button
-                      variant="secondary"
-                      onClick={handleSelectOutputDir}
-                      disabled={isRendering || isPreviewing}
-                      className="whitespace-nowrap"
-                    >
-                      場所を選択
-                    </Button>
-                    <Button
-                      variant="secondary"
-                      onClick={handleRevealOutput}
-                      disabled={!outputPath.trim()}
-                      className="whitespace-nowrap"
-                    >
-                      Finderで表示
-                    </Button>
-                  </div>
-                </div>
-                <p className="mt-2 text-xs text-slate-600">
-                  出力ファイル名はプロジェクト名から自動で付与されます。
-                </p>
-              </div>
-            </div>
-          </Card>
-
-          <Card title="公開前チェック" subtitle="書き出し前に確認">
-            <ul className="space-y-2 text-xs text-slate-600">
-              <li className="flex items-center justify-between">
-                <span>全パート音声生成</span>
-                <StatusChip
-                  tone={missingAudioCount === 0 ? 'success' : 'warning'}
-                  label={missingAudioCount === 0 ? 'OK' : '未完了'}
-                />
-              </li>
-              <li className="flex items-center justify-between">
-                <span>全パート画像割り当て</span>
-                <StatusChip
-                  tone={missingImagesCount === 0 ? 'success' : 'warning'}
-                  label={missingImagesCount === 0 ? 'OK' : '未完了'}
-                />
-              </li>
-              <li className="flex items-center justify-between">
-                <span>出力先指定</span>
-                <StatusChip
-                  tone={outputPath.trim() ? 'success' : 'warning'}
-                  label={outputPath.trim() ? 'OK' : '未指定'}
-                />
-              </li>
-            </ul>
-          </Card>
+            </Card>
+          </div>
         </div>
       </div>
 
-      {showProgress && progress && (isRendering || isPreviewing) && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/45 p-4">
-          <div className="nv-surface w-full max-w-md p-5">
-            <div className="mb-2 text-base font-semibold text-slate-900">
-              {isRendering ? '動画を書き出し中...' : 'プレビュー生成中...'}
-            </div>
-            <div className="mb-3 text-sm text-slate-600">
-              {progress.message || progress.stage || '処理中'}
-            </div>
-            <ProgressBar value={Math.min(100, Math.max(0, progress.percent ?? 0))} max={100} />
-            <div className="mt-2 flex items-center justify-between text-xs text-slate-600">
-              <div>{typeof progress.percent === 'number' ? `${progress.percent}%` : ''}</div>
-              {typeof progress.current === 'number' && typeof progress.total === 'number' && (
-                <div>
-                  {progress.current}/{progress.total}
-                </div>
-              )}
-            </div>
+      {showProgress && progress && busy && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-[var(--nv-color-text)]/45 p-4">
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="video-progress-title"
+            className="nv-surface w-full max-w-md p-5"
+          >
+            <h3
+              id="video-progress-title"
+              className="mb-2 text-base font-semibold text-[var(--nv-color-text)]"
+            >
+              {isRendering ? '動画を書き出しています' : 'プレビューを作っています'}
+            </h3>
+            <p className="mb-3 text-sm text-[var(--nv-color-muted)]">{progressLabel(progress)}</p>
+            <ProgressBar
+              value={Math.min(100, Math.max(0, progress.percent ?? 0))}
+              max={100}
+              label={
+                typeof progress.percent === 'number'
+                  ? `${Math.round(progress.percent)}%`
+                  : undefined
+              }
+            />
             <div className="mt-4 flex justify-end">
               <Button variant="secondary" onClick={handleCancel}>
-                キャンセル
+                止める
               </Button>
             </div>
           </div>

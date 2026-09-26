@@ -2,12 +2,20 @@ import { spawn } from 'child_process';
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import { createRequire } from 'module';
+import {
+  DEFAULT_STALL_TIMEOUT_MS,
+  createProgressObserver,
+  createStallWatchdog,
+  stallErrorMessage,
+} from './watchdog';
 
 const require = createRequire(import.meta.url);
 
 export type VideoJob = {
   canceled: boolean;
   processes: Set<ReturnType<typeof spawn>>;
+  /** 進捗が止まったとみなすまでの時間(省略時は DEFAULT_STALL_TIMEOUT_MS) */
+  stallTimeoutMs?: number;
 };
 
 type ProgressHandler = (progress: Record<string, string>) => void;
@@ -101,11 +109,23 @@ export async function runFfmpeg(
 
     let stderr = '';
     let stdoutBuf = '';
+    // -progress pipe:1 の出力が止まったら、固まったとみなして止める
+    let stalled = false;
+    const stallTimeoutMs = job.stallTimeoutMs ?? DEFAULT_STALL_TIMEOUT_MS;
+    const watchdog = createStallWatchdog(stallTimeoutMs, () => {
+      stalled = true;
+      proc.kill('SIGKILL');
+      // 子プロセスが出力をつかんだままでも待たずに失敗させる
+      cleanup();
+      reject(new Error(stallErrorMessage(stallTimeoutMs, 'ffmpeg')));
+    });
 
     const cleanup = () => {
+      watchdog.stop();
       job.processes.delete(proc);
     };
 
+    const advanced = createProgressObserver();
     proc.stdout.on('data', (data) => {
       stdoutBuf += data.toString('utf-8');
       const lines = stdoutBuf.split(/\r?\n/);
@@ -117,6 +137,7 @@ export async function runFfmpeg(
         if (idx <= 0) continue;
         const key = trimmed.slice(0, idx);
         const value = trimmed.slice(idx + 1);
+        if (advanced(key, value)) watchdog.reset();
         onProgress?.({ [key]: value });
       }
     });
@@ -143,6 +164,10 @@ export async function runFfmpeg(
       cleanup();
       if (job.canceled) {
         reject(new Error('キャンセルしました'));
+        return;
+      }
+      if (stalled) {
+        reject(new Error(stallErrorMessage(stallTimeoutMs, 'ffmpeg')));
         return;
       }
       if (code === 0) {

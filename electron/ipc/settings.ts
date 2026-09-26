@@ -1,4 +1,3 @@
-import { configureGenerationConcurrency } from '../utils/generationPolicy';
 import { registerOperation } from './operations';
 import { app, safeStorage, BrowserWindow } from 'electron';
 import * as fs from 'node:fs/promises';
@@ -32,9 +31,7 @@ async function readSettings(): Promise<Settings> {
   try {
     const settingsPath = getSettingsPath();
     const content = await fs.readFile(settingsPath, 'utf-8');
-    const settings = normalizeSettings(JSON.parse(content));
-    configureGenerationConcurrency(settings.generationConcurrency);
-    return settings;
+    return normalizeSettings(JSON.parse(content));
   } catch {
     return normalizeSettings(DEFAULT_SETTINGS);
   }
@@ -97,7 +94,6 @@ registerOperation('settings:set', async (_, settings: unknown) => {
   const currentSettings = await readSettings();
   const validatedSettings = parseSettingsUpdate(settings);
   const newSettings = normalizeSettings({ ...currentSettings, ...validatedSettings });
-  configureGenerationConcurrency(newSettings.generationConcurrency);
 
   await fs.writeFile(settingsPath, JSON.stringify(newSettings, null, 2));
   const generationKeys = [

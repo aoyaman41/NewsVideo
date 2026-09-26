@@ -48,6 +48,10 @@ export type TTSEngine = (typeof TTS_ENGINES)[number];
 
 export type AppSettings = {
   readingDictionary: ReadingEntry[];
+  /**
+   * 旧設定(全プロバイダ共通の同時実行数)。保存済みの settings.json を読めるよう項目だけ残す。
+   * 同時実行数はプロバイダと用途ごとの既定値(electron/utils/generationPolicy.ts)で決まり、この値は使わない
+   */
   generationConcurrency: number;
   ttsEngine: TTSEngine;
   ttsModel: GeminiTtsModel;

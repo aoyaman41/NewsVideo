@@ -1,22 +1,30 @@
-import { JobHistory } from '../components/article/JobHistory';
-import { SourceRecords } from '../components/article/SourceRecords';
-import { JOB_STATUS_LABELS } from '../../shared/project/jobs';
-import { GenerationQuote } from '../components/article/GenerationQuote';
-import { projectClient, useProjectState } from '../stores/projectStore';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useParams } from 'react-router-dom';
 import { Header, WorkflowNav } from '../components/layout';
-import { ArticleInput, FileImport, ImageDropzone } from '../components/article';
-import { Badge, Card, ErrorDetailPanel, StatusChip, useToast } from '../components/ui';
+import { ArticleInput, ImageDropzone } from '../components/article';
+import type { ArticleAction } from '../components/article/ArticleInput';
+import { GenerationQuote } from '../components/article/GenerationQuote';
+import { FriendlyError } from '../components/errors/FriendlyError';
+import { BUDGET_STAGE, isJobActive, isJobResumable } from '../components/job/jobDisplay';
+import { API_KEY_SERVICE_INFO, requiredServices } from '../components/onboarding/apiKeys';
+import { useApiKeyStatus } from '../components/onboarding/useApiKeyStatus';
+import { useOpenSettings } from '../components/settings/settingsNavigation';
+import { Button, useConfirm, useToast } from '../components/ui';
+import {
+  budgetToUsd,
+  useGenerationPreferences,
+  type GenerationPreferences,
+} from '../stores/generationPreferences';
+import { useJobFeed } from '../stores/jobStore';
+import { projectClient, useProjectState } from '../stores/projectStore';
 import type {
   ArticleInput as ArticleInputType,
   ImageAsset,
   PresentationProfile,
   Project,
 } from '../schemas';
-import { createOpenAIUsageRecord } from '../utils/usage';
+import { normalizeSettings, type AppSettings } from '../../shared/settings/appSettings';
 import {
-  CLOSING_LINE_MODE_LABELS,
   PRESENTATION_PROFILE_PRESET_DESCRIPTIONS,
   PRESENTATION_PROFILE_PRESET_LABELS,
   PRESENTATION_PROFILE_PRESETS,
@@ -38,42 +46,54 @@ import {
   TTS_NARRATION_STYLE_PRESETS,
 } from '../../shared/project/ttsNarrationStyles';
 
+const CLOSING_LINE_LABELS: Record<PresentationProfile['closingLineMode'], string> = {
+  preset: '用途に合わせた定型文',
+  none: '入れない',
+  custom: '自分で入力する',
+};
+
+const fieldLabel = 'mb-1 block text-xs font-semibold text-[var(--nv-color-muted)]';
+const fieldHint = 'mt-1 text-xs text-[var(--nv-color-muted)]';
+const sectionSummary =
+  'nv-focus-ring cursor-pointer rounded-[var(--nv-radius-sm)] text-sm font-semibold text-[var(--nv-color-text)]';
+
 export function ArticleInputPage() {
   const { projectId } = useParams<{ projectId: string }>();
-  const navigate = useNavigate();
   const toast = useToast();
+  const { confirm } = useConfirm();
+  const openSettings = useOpenSettings();
 
   const [project, setProject] = useProjectState(projectId);
-  const [articleData, setArticleData] = useState<Partial<ArticleInputType>>({
+  const [formDefaults, setFormDefaults] = useState<Partial<ArticleInputType>>({
     title: '',
     source: '',
     bodyText: '',
   });
   const [images, setImages] = useState<ImageAsset[]>([]);
   const [blobUrls, setBlobUrls] = useState<Map<string, string>>(new Map());
-  const [isGenerating, setIsGenerating] = useState(false);
-  // 既定は全自動(確認のために止めない)。「確認しながら」は選択肢として残す
-  const [generationMode, setGenerationMode] = useState<'automatic' | 'review'>('automatic');
-  const [budgetUsd, setBudgetUsd] = useState('5');
-  const [error, setError] = useState<string | null>(null);
+  const [starting, setStarting] = useState(false);
+  const [error, setError] = useState<unknown>(null);
   const [targetPartCount, setTargetPartCount] = useState<number>(5);
   const [presentationProfile, setPresentationProfile] = useState<PresentationProfile>(
     getDefaultPresentationProfile()
   );
+  const [settings, setSettings] = useState<AppSettings | null>(null);
+  const [preferences, setPreferences] = useGenerationPreferences();
+  // 止まっているジョブがあるときは、そのジョブの進め方と予算を初期値にする(「続きから」で使う値を画面に出す)
+  const [runOptions, setRunOptions] = useState<GenerationPreferences | null>(null);
+  const { status: keyStatus, loaded: keysLoaded, refresh: refreshKeys } = useApiKeyStatus();
+  const trackedJob = useJobFeed().jobs.get(projectId ?? '')?.job;
+  const job = trackedJob ?? project?.job;
+
   const isMountedRef = useRef(true);
   const blobUrlsRef = useRef<Map<string, string>>(new Map());
   const savedPresentationProfileRef = useRef<string>(
     JSON.stringify(getDefaultPresentationProfile())
   );
 
-  const reportError = useCallback(
-    (message: string, title?: string) => {
-      if (!isMountedRef.current) return;
-      setError(message);
-      toast.error(message, title);
-    },
-    [toast]
-  );
+  const reportError = useCallback((value: unknown) => {
+    if (isMountedRef.current) setError(value);
+  }, []);
 
   useEffect(() => {
     blobUrlsRef.current = blobUrls;
@@ -90,33 +110,50 @@ export function ArticleInputPage() {
   }, []);
 
   useEffect(() => {
+    let active = true;
+    void window.electronAPI.settings
+      .get()
+      .then((value) => {
+        if (active) setSettings(normalizeSettings(value));
+      })
+      .catch(() => {
+        if (active) setSettings(normalizeSettings({}));
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  useEffect(() => {
     let cancelled = false;
     const load = async () => {
       if (!projectId) return;
       try {
-        const project = await projectClient.load(projectId);
+        const loaded = await projectClient.load(projectId);
         if (cancelled) return;
 
-        setProject(project);
-        setArticleData({
-          title: project.article?.title ?? '',
-          source: project.article?.source ?? '',
-          bodyText: project.article?.bodyText ?? '',
+        setProject(loaded);
+        setFormDefaults({
+          title: loaded.article?.title ?? '',
+          source: loaded.article?.source ?? '',
+          bodyText: loaded.article?.bodyText ?? '',
         });
-        const normalizedProfile = normalizePresentationProfile(project.presentationProfile);
+        const normalizedProfile = normalizePresentationProfile(loaded.presentationProfile);
         setPresentationProfile(normalizedProfile);
         savedPresentationProfileRef.current = JSON.stringify(normalizedProfile);
-        if (typeof project.generationConfig?.targetPartCount === 'number')
-          setTargetPartCount(project.generationConfig.targetPartCount);
-        // 途中で止まっているジョブは、開始したときの進め方のまま「続きから」再開できるようにする
-        if (project.job && project.job.status !== 'completed') setGenerationMode(project.job.mode);
-        if (project.parts?.length) {
-          const nextCount = Math.min(20, Math.max(1, project.parts.length));
-          setTargetPartCount(nextCount);
+        if (typeof loaded.generationConfig?.targetPartCount === 'number')
+          setTargetPartCount(loaded.generationConfig.targetPartCount);
+        if (loaded.parts?.length) {
+          setTargetPartCount(Math.min(20, Math.max(1, loaded.parts.length)));
         }
 
-        const imported = (project.article?.importedImages ?? []) as ImageAsset[];
-        setImages(imported);
+        if (loaded.job && isJobResumable(loaded.job))
+          setRunOptions({
+            mode: loaded.job.mode,
+            budgetUsd: loaded.job.budgetUsd === undefined ? '' : String(loaded.job.budgetUsd),
+          });
+
+        setImages((loaded.article?.importedImages ?? []) as ImageAsset[]);
         setBlobUrls((prev) => {
           for (const url of prev.values()) {
             URL.revokeObjectURL(url);
@@ -125,19 +162,17 @@ export function ArticleInputPage() {
         });
       } catch (err) {
         console.error('Failed to load project:', err);
-        reportError(
-          err instanceof Error ? err.message : 'プロジェクトの読み込みに失敗しました',
-          '読み込みに失敗しました'
-        );
+        reportError(err);
       }
     };
 
-    load();
+    void load();
     return () => {
       cancelled = true;
     };
   }, [projectId, reportError, setProject]);
 
+  // 詳細設定の変更はプロジェクトに自動で保存する
   useEffect(() => {
     if (!project) return;
 
@@ -146,21 +181,17 @@ export function ArticleInputPage() {
 
     const timeoutId = window.setTimeout(async () => {
       try {
-        const updatedAt = new Date().toISOString();
         const updatedProject: Project = {
           ...project,
           presentationProfile,
-          updatedAt,
+          updatedAt: new Date().toISOString(),
         };
         await projectClient.save(updatedProject);
         savedPresentationProfileRef.current = serialized;
         setProject(updatedProject);
       } catch (err) {
         console.error('Failed to save presentation profile:', err);
-        reportError(
-          err instanceof Error ? err.message : '表現設定の保存に失敗しました',
-          '表現設定の保存に失敗しました'
-        );
+        reportError(err);
       }
     }, 250);
 
@@ -181,105 +212,112 @@ export function ArticleInputPage() {
     () => resolvePresentationClosingLine(presentationProfile),
     [presentationProfile]
   );
-  const presetDescription = PRESENTATION_PROFILE_PRESET_DESCRIPTIONS[presentationProfile.preset];
-  const imageStyleDescription =
-    IMAGE_STYLE_PRESET_DESCRIPTIONS[presentationProfile.imageStylePreset];
-  const ttsStyleDescription =
-    TTS_NARRATION_STYLE_DESCRIPTIONS[presentationProfile.ttsNarrationStylePreset];
 
-  const handleSubmit = async (data: ArticleInputType) => {
-    if (!projectId) return;
-
-    setIsGenerating(true);
-    setError(null);
-
-    try {
-      // 記事データをプロジェクトに保存
-      const project = await projectClient.load(projectId);
-      project.article = {
-        title: data.title,
-        source: data.source,
-        bodyText: data.bodyText,
-        importedImages: images,
-      };
-      project.presentationProfile = presentationProfile;
-      project.updatedAt = new Date().toISOString();
-      await projectClient.save(project);
-
-      // スクリプト生成を実行
-      const result = await window.electronAPI.ai.generateScript(project.article, {
-        tone: presentationProfile.tone,
-        targetPartCount,
-        targetDurationPerPartSec: presentationProfile.targetDurationPerPartSec,
-        closingLine: closingLinePreview,
-      });
-      const usageRecord = createOpenAIUsageRecord('script_generate', result.usage);
-
-      // 生成されたパートをプロジェクトに保存
-      project.parts = result.parts;
-      if (usageRecord) {
-        project.usage = [...(project.usage ?? []), usageRecord];
-      }
-      project.updatedAt = new Date().toISOString();
-      await projectClient.save(project);
-
-      // スクリプト編集画面に遷移
-      navigate(`/projects/${projectId}/script`);
-    } catch (err) {
-      console.error('Script generation failed:', err);
-      reportError(err instanceof Error ? err.message : 'スクリプト生成に失敗しました');
-    } finally {
-      setIsGenerating(false);
-    }
+  const running = isJobActive(job);
+  const resumable = isJobResumable(job);
+  const hasScript = (project?.parts.length ?? 0) > 0;
+  const runSettings = runOptions ?? preferences;
+  const updateRunSettings = (patch: Partial<GenerationPreferences>) => {
+    setRunOptions({ ...runSettings, ...patch });
+    setPreferences(patch);
   };
 
-  const handleAutoSubmit = async (data: ArticleInputType, restart = false) => {
+  // 「続きから」はジョブを開始したときの設定で進むので、必要なキーもその設定で判定する
+  const jobSettings = useMemo(() => (job ? normalizeSettings(job.settings) : null), [job]);
+  const missingFor = useCallback(
+    (selection: AppSettings | null) =>
+      selection && keysLoaded
+        ? requiredServices(selection).filter((service) => keyStatus[service] === false)
+        : [],
+    [keyStatus, keysLoaded]
+  );
+  const freshMissing = missingFor(settings);
+  const resumeMissing = resumable ? missingFor(jobSettings) : [];
+  const missingKeys = [...new Set([...(resumable ? resumeMissing : []), ...freshMissing])];
+
+  const startJob = async (data: ArticleInputType, restart: boolean) => {
     if (!projectId || !project) return;
+    setError(null);
+    setStarting(true);
     try {
-      const draft = {
+      const latestKeys = await refreshKeys();
+      const selection = !restart && resumable ? jobSettings : settings;
+      if (selection && requiredServices(selection).some((service) => !latestKeys[service])) {
+        toast.warning('先に API キーを設定してください。', 'API キーが未設定です');
+        return;
+      }
+      await projectClient.save({
         ...project,
         article: { ...project.article, ...data, importedImages: images },
         presentationProfile,
-      };
-      await projectClient.save(draft);
+      });
       await window.electronAPI.jobs.start(projectId, {
-        mode: generationMode,
+        mode: runSettings.mode,
         targetPartCount,
-        budgetUsd: budgetUsd.trim() ? Number(budgetUsd) : undefined,
+        budgetUsd: budgetToUsd(runSettings.budgetUsd),
         restart,
       });
-    } catch (error) {
-      reportError(error instanceof Error ? error.message : String(error));
+      toast.info(
+        '進み具合は画面上部に表示します。ほかの画面に移っても止まりません。',
+        restart ? '最初から作り直しています' : '自動生成を始めました'
+      );
+    } catch (err) {
+      reportError(err);
+    } finally {
+      if (isMountedRef.current) setStarting(false);
     }
   };
-  const handleAutoResume = (data: ArticleInputType) => handleAutoSubmit(data);
-  const handleAutoRestart = (data: ArticleInputType) => handleAutoSubmit(data, true);
-  const handleAutoCancel = () => {
-    if (projectId)
-      void window.electronAPI.jobs.cancel(projectId).catch((error) => reportError(String(error)));
-  };
-  const autoRunning = project?.job?.status === 'running' || project?.job?.status === 'queued';
-  const currentAutoStatus = project?.job?.stage;
 
-  const handleImportedText = (title: string, text: string) => {
-    setProject((previous) =>
-      previous
-        ? {
-            ...previous,
-            article: {
-              ...previous.article,
-              title: previous.article.title.trim() ? previous.article.title : title,
-              bodyText: text,
-            },
-          }
-        : previous
-    );
-    setArticleData((prev) => ({
-      ...prev,
-      title: prev.title && prev.title.trim().length > 0 ? prev.title : title,
-      bodyText: text,
-    }));
+  const confirmRestart = async (data: ArticleInputType, reason?: string) => {
+    const accepted = await confirm({
+      title: '最初から作り直しますか？',
+      description: `${reason ?? ''}台本から作り直します。今の台本・画像・音声は、新しく作るものに置き換わります。`,
+      confirmLabel: '作り直す',
+      confirmVariant: 'primary',
+    });
+    if (accepted) await startJob(data, true);
   };
+
+  // 台本があるのにシーン数を変えたときは、台本から作り直さないと反映されない(台本が新しければ作り直さないため)
+  const startFresh = (data: ArticleInputType) => {
+    if (project && project.parts.length > 0 && targetPartCount !== project.parts.length) {
+      void confirmRestart(
+        data,
+        `シーン数を ${project.parts.length} から ${targetPartCount} に変えたため、`
+      );
+      return;
+    }
+    void startJob(data, false);
+  };
+
+  const restartAction: ArticleAction = {
+    key: 'restart',
+    label: '最初から作り直す',
+    variant: 'secondary',
+    disabled: starting || freshMissing.length > 0,
+    onClick: (data) => void confirmRestart(data),
+  };
+  const actions: ArticleAction[] = running
+    ? [{ key: 'running', label: '生成中…', disabled: true, onClick: () => {} }]
+    : resumable
+      ? [
+          restartAction,
+          {
+            key: 'resume',
+            label: starting ? '開始しています…' : '続きから',
+            disabled: starting || resumeMissing.length > 0,
+            onClick: (data) => void startJob(data, false),
+          },
+        ]
+      : [
+          ...(hasScript ? [restartAction] : []),
+          {
+            key: 'start',
+            label: starting ? '開始しています…' : 'おまかせで作る',
+            disabled: starting || freshMissing.length > 0,
+            onClick: startFresh,
+          },
+        ];
 
   const handleImagesAdded = (added: ImageAsset[], addedBlobUrls: Map<string, string>) => {
     setImages((prev) => [...prev, ...added]);
@@ -327,6 +365,307 @@ export function ArticleInputPage() {
     });
   };
 
+  const advancedSettings = (
+    <details className="nv-surface-muted px-4 py-3">
+      <summary className={sectionSummary}>
+        詳細設定
+        <span className="ml-2 font-normal text-[var(--nv-color-muted)]">
+          シーン数・長さ・声・画像の雰囲気・進め方など
+        </span>
+      </summary>
+      <div className="mt-4 grid gap-4 md:grid-cols-2">
+        <div>
+          <label htmlFor="article-preset" className={fieldLabel}>
+            用途
+          </label>
+          <select
+            id="article-preset"
+            value={presentationProfile.preset}
+            onChange={(e) => applyPresentationPreset(e.target.value as PresentationProfilePreset)}
+            className="nv-input"
+          >
+            {PRESENTATION_PROFILE_PRESETS.map((preset) => (
+              <option key={preset} value={preset}>
+                {PRESENTATION_PROFILE_PRESET_LABELS[preset]}
+              </option>
+            ))}
+          </select>
+          <p className={fieldHint}>
+            {PRESENTATION_PROFILE_PRESET_DESCRIPTIONS[presentationProfile.preset]}
+          </p>
+        </div>
+
+        <div>
+          <label htmlFor="article-scene-count" className={fieldLabel}>
+            シーン数(1〜20)
+          </label>
+          <input
+            id="article-scene-count"
+            type="number"
+            min={1}
+            max={20}
+            value={targetPartCount}
+            onChange={(e) => {
+              const next = Number(e.target.value);
+              if (!Number.isFinite(next)) return;
+              setTargetPartCount(Math.min(20, Math.max(1, Math.round(next))));
+            }}
+            className="nv-input w-28"
+          />
+          <p className={fieldHint}>
+            シーンごとに画像と音声を作ります。あとから台本画面で変えられます。
+          </p>
+        </div>
+
+        <div>
+          <label htmlFor="article-duration" className={fieldLabel}>
+            1 シーンの長さの目安(秒)
+          </label>
+          <input
+            id="article-duration"
+            type="number"
+            min={10}
+            max={300}
+            value={presentationProfile.targetDurationPerPartSec}
+            onChange={(e) => {
+              const next = Number(e.target.value);
+              if (!Number.isFinite(next)) return;
+              setPresentationProfile((prev) => ({
+                ...prev,
+                targetDurationPerPartSec: Math.min(300, Math.max(10, Math.round(next))),
+              }));
+            }}
+            className="nv-input w-28"
+          />
+          <p className={fieldHint}>10〜300 秒。用途を選ぶと目安の値が入ります。</p>
+        </div>
+
+        <div>
+          <label htmlFor="article-closing" className={fieldLabel}>
+            締めのひとこと
+          </label>
+          <select
+            id="article-closing"
+            value={presentationProfile.closingLineMode}
+            onChange={(e) =>
+              setPresentationProfile((prev) => ({
+                ...prev,
+                closingLineMode: e.target.value as PresentationProfile['closingLineMode'],
+              }))
+            }
+            className="nv-input"
+          >
+            {Object.entries(CLOSING_LINE_LABELS).map(([mode, label]) => (
+              <option key={mode} value={mode}>
+                {label}
+              </option>
+            ))}
+          </select>
+          {presentationProfile.closingLineMode === 'custom' ? (
+            <input
+              type="text"
+              aria-label="締めのひとこと(自分で入力)"
+              value={presentationProfile.closingLineText}
+              onChange={(e) =>
+                setPresentationProfile((prev) => ({ ...prev, closingLineText: e.target.value }))
+              }
+              className="nv-input mt-2"
+              placeholder="ご視聴ありがとうございました"
+            />
+          ) : (
+            <p className={fieldHint}>読み上げる文: {closingLinePreview ?? 'なし'}</p>
+          )}
+        </div>
+
+        <div>
+          <label htmlFor="article-image-style" className={fieldLabel}>
+            画像の雰囲気
+          </label>
+          <select
+            id="article-image-style"
+            value={presentationProfile.imageStylePreset}
+            onChange={(e) =>
+              setPresentationProfile((prev) => ({
+                ...prev,
+                imageStylePreset: e.target.value as PresentationProfile['imageStylePreset'],
+              }))
+            }
+            className="nv-input"
+          >
+            {IMAGE_STYLE_PRESETS.map((preset) => (
+              <option key={preset} value={preset}>
+                {IMAGE_STYLE_PRESET_LABELS[preset]}
+              </option>
+            ))}
+          </select>
+          <p className={fieldHint}>
+            {IMAGE_STYLE_PRESET_DESCRIPTIONS[presentationProfile.imageStylePreset]}
+          </p>
+        </div>
+
+        <div>
+          <label htmlFor="article-aspect" className={fieldLabel}>
+            画面の縦横
+          </label>
+          <select
+            id="article-aspect"
+            value={presentationProfile.aspectRatio}
+            onChange={(e) =>
+              setPresentationProfile((prev) => ({
+                ...prev,
+                aspectRatio: e.target.value as PresentationProfile['aspectRatio'],
+              }))
+            }
+            className="nv-input"
+          >
+            {IMAGE_ASPECT_RATIOS.map((aspectRatio) => (
+              <option key={aspectRatio} value={aspectRatio}>
+                {IMAGE_ASPECT_RATIO_LABELS[aspectRatio]}
+              </option>
+            ))}
+          </select>
+          <p className={fieldHint}>画像と動画の両方に使います。</p>
+        </div>
+
+        <div>
+          <label htmlFor="article-voice-style" className={fieldLabel}>
+            読み上げの話し方
+          </label>
+          <select
+            id="article-voice-style"
+            value={presentationProfile.ttsNarrationStylePreset}
+            onChange={(e) =>
+              setPresentationProfile((prev) => ({
+                ...prev,
+                ttsNarrationStylePreset: e.target
+                  .value as PresentationProfile['ttsNarrationStylePreset'],
+              }))
+            }
+            className="nv-input"
+          >
+            {TTS_NARRATION_STYLE_PRESETS.map((preset) => (
+              <option key={preset} value={preset}>
+                {TTS_NARRATION_STYLE_LABELS[preset]}
+              </option>
+            ))}
+          </select>
+          <p className={fieldHint}>
+            {TTS_NARRATION_STYLE_DESCRIPTIONS[presentationProfile.ttsNarrationStylePreset]}
+          </p>
+        </div>
+
+        <div>
+          <label htmlFor="article-voice-note" className={fieldLabel}>
+            読み上げの補足(任意)
+          </label>
+          <input
+            id="article-voice-note"
+            type="text"
+            value={presentationProfile.ttsNarrationStyleNote}
+            onChange={(e) =>
+              setPresentationProfile((prev) => ({
+                ...prev,
+                ttsNarrationStyleNote: e.target.value,
+              }))
+            }
+            className="nv-input"
+            placeholder="例: 語尾はやわらかく、あおりすぎない"
+          />
+        </div>
+
+        <div>
+          <label htmlFor="article-mode" className={fieldLabel}>
+            自動生成の進め方
+          </label>
+          <select
+            id="article-mode"
+            value={runSettings.mode}
+            onChange={(e) =>
+              updateRunSettings({ mode: e.target.value === 'review' ? 'review' : 'automatic' })
+            }
+            className="nv-input"
+          >
+            <option value="automatic">最後まで自動で進める(おすすめ)</option>
+            <option value="review">台本と素材ができたところで止めて確認する</option>
+          </select>
+          <p className={fieldHint}>確認しながら進めると、途中で 2 回止まります。</p>
+        </div>
+
+        <div>
+          <label htmlFor="article-budget" className={fieldLabel}>
+            1 回の予算の上限(USD)
+          </label>
+          <input
+            id="article-budget"
+            type="number"
+            min="0"
+            step="0.1"
+            value={runSettings.budgetUsd}
+            onChange={(e) => updateRunSettings({ budgetUsd: e.target.value })}
+            className="nv-input w-32"
+            placeholder="上限なし"
+          />
+          <p className={fieldHint}>
+            空欄なら上限なし。上限に近づくと止まり、画面上部から続けられます。
+          </p>
+        </div>
+      </div>
+    </details>
+  );
+
+  const photos = (
+    <details className="nv-surface-muted px-4 py-3">
+      <summary className={sectionSummary}>
+        写真を追加(任意)
+        {images.length > 0 && (
+          <span className="ml-2 font-normal text-[var(--nv-color-muted)]">{images.length} 枚</span>
+        )}
+      </summary>
+      <p className="mt-2 mb-3 text-xs text-[var(--nv-color-muted)]">
+        記事に関係する写真を登録すると、画像画面でシーンの画像として使えます。
+      </p>
+      <ImageDropzone
+        images={images}
+        projectId={projectId}
+        onImagesAdded={handleImagesAdded}
+        onImageRemoved={handleImageRemoved}
+        blobUrlMap={blobUrls}
+      />
+    </details>
+  );
+
+  const keyWarning = missingKeys.length > 0 && (
+    <div
+      role="alert"
+      className="nv-surface flex flex-wrap items-center justify-between gap-3 border-l-4 border-l-[var(--nv-color-warning)] px-4 py-3"
+    >
+      <div className="min-w-0">
+        <p className="text-sm font-semibold text-[var(--nv-color-text)]">
+          {missingKeys.map((service) => API_KEY_SERVICE_INFO[service].name).join('・')} の API
+          キーが未設定です
+        </p>
+        <p className="text-xs text-[var(--nv-color-muted)]">設定すると生成を始められます。</p>
+      </div>
+      <Button size="sm" onClick={() => openSettings('api')}>
+        API キーを設定する
+      </Button>
+    </div>
+  );
+
+  const stoppedText =
+    job?.status === 'paused' && job.stage === BUDGET_STAGE
+      ? '予算の上限に近づいたため止まっています。「詳細設定」で予算を増やすか空欄にしてから「続きから」を押してください。'
+      : job?.status === 'paused'
+        ? '確認待ちです。台本や素材を確認したら「続きから」を押してください。'
+        : '途中で止まった自動生成があります。「続きから」を押すと、止まったところから再開します。';
+  const statusNote = running ? (
+    <p className="text-sm text-[var(--nv-color-muted)]">
+      生成しています。進み具合は画面上部に出ています。止めるときは上部の「停止」を押してください。
+    </p>
+  ) : resumable ? (
+    <p className="text-sm text-[var(--nv-color-muted)]">{stoppedText}</p>
+  ) : null;
+
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
       <Header title="記事" subtitle={project?.name} />
@@ -334,351 +673,48 @@ export function ArticleInputPage() {
       {projectId && <WorkflowNav projectId={projectId} current="article" project={project} />}
 
       <div className="flex-1 overflow-auto p-5">
-        <div className="mx-auto grid w-full max-w-7xl gap-4 lg:grid-cols-[2fr_1fr]">
-          <div className="space-y-4">
-            {error && <ErrorDetailPanel message={error} onDismiss={() => setError(null)} />}
+        <div className="mx-auto w-full max-w-3xl space-y-4">
+          {error !== null && <FriendlyError error={error} onDismiss={() => setError(null)} />}
 
-            <details className="rounded-lg border border-slate-200 bg-white p-3">
-              <summary className="cursor-pointer text-sm font-semibold">
-                今回の動画の声・見た目・詳細設定
-              </summary>
-              <Card
-                title="今回の生成設定"
-                subtitle="このプロジェクトに適用します。アプリ全体の既定値は設定画面で変更できます。"
-              >
-                <div className="grid gap-4 md:grid-cols-2">
-                  <div>
-                    <label className="mb-1 block text-xs font-semibold text-slate-600">
-                      配信スタイル
-                    </label>
-                    <select
-                      value={presentationProfile.preset}
-                      onChange={(e) =>
-                        applyPresentationPreset(e.target.value as PresentationProfilePreset)
+          <section className="nv-surface p-5">
+            <p className="mb-4 text-sm text-[var(--nv-color-muted)]">
+              記事を貼り付けて「おまかせで作る」を押すと、台本・画像・音声を作り、動画に仕上げます。入力は自動で保存されます。
+            </p>
+            <ArticleInput
+              defaultValues={formDefaults}
+              bodyLength={project?.article.bodyText.length ?? 0}
+              onChange={(data) => {
+                setProject((previous) =>
+                  previous
+                    ? {
+                        ...previous,
+                        name:
+                          previous.name === '新しい動画' && data.title?.trim()
+                            ? data.title.trim()
+                            : previous.name,
+                        article: { ...previous.article, ...data, importedImages: images },
                       }
-                      className="nv-input"
-                    >
-                      {PRESENTATION_PROFILE_PRESETS.map((preset) => (
-                        <option key={preset} value={preset}>
-                          {PRESENTATION_PROFILE_PRESET_LABELS[preset]}
-                        </option>
-                      ))}
-                    </select>
-                    <p className="mt-2 text-xs text-slate-600">{presetDescription}</p>
-                  </div>
-
-                  <div>
-                    <label className="mb-1 block text-xs font-semibold text-slate-600">
-                      パート数
-                    </label>
-                    <div className="flex flex-wrap items-center gap-3">
-                      <input
-                        type="number"
-                        min={1}
-                        max={20}
-                        value={targetPartCount}
-                        onChange={(e) => {
-                          const next = Number(e.target.value);
-                          if (!Number.isFinite(next)) return;
-                          setTargetPartCount(Math.min(20, Math.max(1, Math.round(next))));
-                        }}
-                        className="nv-input w-28"
-                      />
-                      <Badge tone="info">1〜20</Badge>
-                    </div>
-                    <p className="mt-2 text-xs text-slate-600">
-                      画像を分けたい場合はパート数を増やしてください（後から編集可能）。
-                    </p>
-                  </div>
-
-                  <div>
-                    <label className="mb-1 block text-xs font-semibold text-slate-600">
-                      1パートの目安秒数
-                    </label>
-                    <div className="flex flex-wrap items-center gap-3">
-                      <input
-                        type="number"
-                        min={10}
-                        max={300}
-                        value={presentationProfile.targetDurationPerPartSec}
-                        onChange={(e) => {
-                          const next = Number(e.target.value);
-                          if (!Number.isFinite(next)) return;
-                          setPresentationProfile((prev) => ({
-                            ...prev,
-                            targetDurationPerPartSec: Math.min(300, Math.max(10, Math.round(next))),
-                          }));
-                        }}
-                        className="nv-input w-28"
-                      />
-                      <Badge tone="neutral">10〜300秒</Badge>
-                    </div>
-                    <p className="mt-2 text-xs text-slate-600">
-                      プリセット初期値は自動で入ります。必要なら上書きできます。
-                    </p>
-                  </div>
-
-                  <div>
-                    <label className="mb-1 block text-xs font-semibold text-slate-600">
-                      締め文
-                    </label>
-                    <select
-                      value={presentationProfile.closingLineMode}
-                      onChange={(e) =>
-                        setPresentationProfile((prev) => ({
-                          ...prev,
-                          closingLineMode: e.target.value as PresentationProfile['closingLineMode'],
-                        }))
-                      }
-                      className="nv-input"
-                    >
-                      {Object.entries(CLOSING_LINE_MODE_LABELS).map(([mode, label]) => (
-                        <option key={mode} value={mode}>
-                          {label}
-                        </option>
-                      ))}
-                    </select>
-                    <p className="mt-2 text-xs text-slate-600">
-                      現在の出力予定: {closingLinePreview ?? '締め文なし'}
-                    </p>
-                  </div>
-
-                  <div>
-                    <label className="mb-1 block text-xs font-semibold text-slate-600">
-                      画像スタイル
-                    </label>
-                    <select
-                      value={presentationProfile.imageStylePreset}
-                      onChange={(e) =>
-                        setPresentationProfile((prev) => ({
-                          ...prev,
-                          imageStylePreset: e.target
-                            .value as PresentationProfile['imageStylePreset'],
-                        }))
-                      }
-                      className="nv-input"
-                    >
-                      {IMAGE_STYLE_PRESETS.map((preset) => (
-                        <option key={preset} value={preset}>
-                          {IMAGE_STYLE_PRESET_LABELS[preset]}
-                        </option>
-                      ))}
-                    </select>
-                    <p className="mt-2 text-xs text-slate-600">{imageStyleDescription}</p>
-                  </div>
-
-                  <div>
-                    <label className="mb-1 block text-xs font-semibold text-slate-600">
-                      画像アスペクト比
-                    </label>
-                    <select
-                      value={presentationProfile.aspectRatio}
-                      onChange={(e) =>
-                        setPresentationProfile((prev) => ({
-                          ...prev,
-                          aspectRatio: e.target.value as PresentationProfile['aspectRatio'],
-                        }))
-                      }
-                      className="nv-input"
-                    >
-                      {IMAGE_ASPECT_RATIOS.map((aspectRatio) => (
-                        <option key={aspectRatio} value={aspectRatio}>
-                          {IMAGE_ASPECT_RATIO_LABELS[aspectRatio]}
-                        </option>
-                      ))}
-                    </select>
-                    <p className="mt-2 text-xs text-slate-600">
-                      画像プロンプト生成と画像生成の両方で使われます。
-                    </p>
-                  </div>
-
-                  <div>
-                    <label className="mb-1 block text-xs font-semibold text-slate-600">
-                      音声の話し方
-                    </label>
-                    <select
-                      value={presentationProfile.ttsNarrationStylePreset}
-                      onChange={(e) =>
-                        setPresentationProfile((prev) => ({
-                          ...prev,
-                          ttsNarrationStylePreset: e.target
-                            .value as PresentationProfile['ttsNarrationStylePreset'],
-                        }))
-                      }
-                      className="nv-input"
-                    >
-                      {TTS_NARRATION_STYLE_PRESETS.map((preset) => (
-                        <option key={preset} value={preset}>
-                          {TTS_NARRATION_STYLE_LABELS[preset]}
-                        </option>
-                      ))}
-                    </select>
-                    <p className="mt-2 text-xs text-slate-600">{ttsStyleDescription}</p>
-                  </div>
-                </div>
-
-                {presentationProfile.closingLineMode === 'custom' && (
-                  <div className="mt-4">
-                    <label className="mb-1 block text-xs font-semibold text-slate-600">
-                      カスタム締め文
-                    </label>
-                    <input
-                      type="text"
-                      value={presentationProfile.closingLineText}
-                      onChange={(e) =>
-                        setPresentationProfile((prev) => ({
-                          ...prev,
-                          closingLineText: e.target.value,
-                        }))
-                      }
-                      className="nv-input"
-                      placeholder="ご視聴ありがとうございました"
+                    : previous
+                );
+              }}
+              footer={
+                <div className="space-y-3">
+                  {advancedSettings}
+                  {photos}
+                  {keyWarning}
+                  {project && settings && (
+                    <GenerationQuote
+                      project={project}
+                      partCount={targetPartCount}
+                      settings={settings}
                     />
-                  </div>
-                )}
-
-                <div className="mt-4">
-                  <label className="mb-1 block text-xs font-semibold text-slate-600">
-                    音声スタイル補足
-                  </label>
-                  <input
-                    type="text"
-                    value={presentationProfile.ttsNarrationStyleNote}
-                    onChange={(e) =>
-                      setPresentationProfile((prev) => ({
-                        ...prev,
-                        ttsNarrationStyleNote: e.target.value,
-                      }))
-                    }
-                    className="nv-input"
-                    placeholder="語尾はやわらかく、煽りすぎない"
-                  />
-                  <p className="mt-2 text-xs text-slate-600">
-                    短い補足だけを上書きできます。engine やボイス設定は変更しません。
-                  </p>
-                </div>
-              </Card>
-            </details>
-
-            <Card title="記事情報" subtitle="必須項目を入力してスクリプトを生成">
-              {project && <GenerationQuote project={project} partCount={targetPartCount} />}
-              <div className="mb-4 grid gap-3 sm:grid-cols-2">
-                <label className="text-sm">
-                  生成の進め方
-                  <select
-                    className="nv-input"
-                    value={generationMode}
-                    onChange={(event) =>
-                      setGenerationMode(event.target.value as 'automatic' | 'review')
-                    }
-                  >
-                    <option value="automatic">すべて自動で進める</option>
-                    <option value="review">台本・素材を確認しながら</option>
-                  </select>
-                </label>
-                <label className="text-sm">
-                  ジョブ予算（USD、空欄で制限なし）
-                  <input
-                    type="number"
-                    min="0"
-                    step="0.1"
-                    className="nv-input"
-                    value={budgetUsd}
-                    onChange={(event) => setBudgetUsd(event.target.value)}
-                  />
-                </label>
-              </div>
-              {project?.job && (
-                <div className="mb-4 rounded border p-3 text-sm" role="status">
-                  <p className="text-xs break-all">ジョブID: {project.job.id}</p>
-                  <p>
-                    {project.job.stage} / {JOB_STATUS_LABELS[project.job.status]} ・使用額 $
-                    {project.job.spentUsd.toFixed(4)}
-                  </p>
-                  {project.job.unknownCharges > 0 && (
-                    <p>
-                      料金未確定のリクエスト {project.job.unknownCharges}
-                      件。API側の利用明細で確認してください。
-                    </p>
                   )}
-                  {project.job.error && <p className="text-red-700">{project.job.error.message}</p>}
-                  <p>
-                    開始前に推定料金の余裕を含めて予算を確認します。実際の料金を厳密に上限へ抑えるものではありません。
-                  </p>
+                  {statusNote}
                 </div>
-              )}
-              {project && <JobHistory project={project} />}
-              <ArticleInput
-                onChange={(data) => {
-                  setArticleData(data);
-                  setProject((previous) =>
-                    previous
-                      ? {
-                          ...previous,
-                          name:
-                            previous.name === '新しい動画' && data.title?.trim()
-                              ? data.title.trim()
-                              : previous.name,
-                          article: { ...previous.article, ...data, importedImages: images },
-                        }
-                      : previous
-                  );
-                }}
-                onSaveDraft={() => {
-                  if (projectId)
-                    void projectClient.flush(projectId).catch((error) => setError(String(error)));
-                }}
-                defaultValues={articleData}
-                onSubmit={handleSubmit}
-                onAutoSubmit={handleAutoResume}
-                onAutoRestart={handleAutoRestart}
-                onAutoCancel={handleAutoCancel}
-                isLoading={isGenerating}
-                isAutoLoading={autoRunning}
-              />
-            </Card>
-          </div>
-
-          <div className="space-y-4">
-            <Card title="自動生成" subtitle="記事から動画までをまとめて進行">
-              <div className="space-y-3 text-sm text-slate-600">
-                <div className="flex flex-wrap items-center gap-2">
-                  <StatusChip
-                    tone={autoRunning ? 'info' : 'neutral'}
-                    label={autoRunning ? '実行中' : '待機中'}
-                  />
-                  <Badge tone="info">記事保存 → スクリプト → 画像 → 音声 → 動画</Badge>
-                </div>
-                <p className="text-xs text-slate-600">
-                  台本と素材の確認時には、記事フォームの「続きから自動生成」で再開できます。
-                </p>
-                <div className="rounded-[8px] border border-[var(--nv-color-border)] bg-slate-50 px-3 py-3 text-xs">
-                  {autoRunning && currentAutoStatus ? (
-                    <span className="text-blue-700">自動生成中: {currentAutoStatus}</span>
-                  ) : (
-                    <span className="text-slate-600">
-                      必要なときに「記事から動画まで自動生成」を実行できます。
-                    </span>
-                  )}
-                </div>
-              </div>
-            </Card>
-
-            {project && <SourceRecords project={project} onChange={setProject} />}
-            <Card title="テキストインポート" subtitle="txt / md / docx を読み込み">
-              <FileImport onTextImported={handleImportedText} />
-            </Card>
-
-            <Card title="記事関連画像" subtitle="ドラッグ&ドロップで登録">
-              <ImageDropzone
-                images={images}
-                projectId={projectId}
-                onImagesAdded={handleImagesAdded}
-                onImageRemoved={handleImageRemoved}
-                blobUrlMap={blobUrls}
-              />
-            </Card>
-          </div>
+              }
+              actions={actions}
+            />
+          </section>
         </div>
       </div>
     </div>
