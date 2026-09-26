@@ -24,7 +24,7 @@
 - Opus 5.5 の拒否時は、引き続きエラー表示のみ(`fallbacks` は使わない)
 
 メインループ判断:
-- Claude の effort は用途別にする。台本は `medium`、画像プロンプトの抽出とコメント反映(画像プロンプト側)は `low` を既定にする。統合時に 2〜3 記事で品質を比較して確定する
+- Claude の effort は用途別の 2 つの設定に分ける。既定値は**台本・画像プロンプトとも `medium`**(当初は画像プロンプトを `low` としていたが、2026-09-26 にユーザーが medium に変更)。統合時に 2〜3 記事で品質を確認する
 - 旧モデルは選択肢から外すが、保存済みの設定値は引き続き読めるようにする
 - 3.8 TTS では、台本中の半角の `<` `>` を全角の `＜` `＞` に変換する(タグとして誤解釈されるのを防ぐ)
 
@@ -32,7 +32,7 @@
 
 ### 2.1 テキスト生成の設定
 - 既定のテキストモデル: `DEFAULT_SCRIPT_TEXT_MODEL` と `DEFAULT_IMAGE_PROMPT_TEXT_MODEL` を `claude-opus-5-5` にする。既存ユーザーが保存済みの値は変えない
-- Claude の effort を用途別にする。例: 既存の `claudeEffort` を台本用とし、画像プロンプト用に `claudeImagePromptEffort` を新設する(名前は既存の命名に合わせてよい)。既定値は台本 `medium`、画像プロンプト `low`。設定の正規化・プロジェクトの `generationConfig`・変更検知(integrity)・設定画面の選択欄を対応させる。設定画面で台本用と画像プロンプト用の 2 つの選択欄が同じ値を書き換える問題(SettingsPage の Claude 部分)を解消する
+- Claude の effort を用途別にする。例: 既存の `claudeEffort` を台本用とし、画像プロンプト用に `claudeImagePromptEffort` を新設する(名前は既存の命名に合わせてよい)。既定値は台本・画像プロンプトとも `medium`。設定の正規化・プロジェクトの `generationConfig`・変更検知(integrity)・設定画面の選択欄を対応させる。設定画面で台本用と画像プロンプト用の 2 つの選択欄が同じ値を書き換える問題(SettingsPage の Claude 部分)を解消する
 - OpenAI と Gemini も同じく 2 つの選択欄が 1 つの値を共有しているが、M4b で設定画面を「品質プリセット」に作り直すので、M3 では Claude だけを直す
 - Gemini 3.1 Pro に送っている `temperature`(`electron/ipc/ai.ts` の 761 / 1885 / 2234 行付近と `generateGeminiTextContent`)を送らないようにする。公式は既定値 1.0 のままを強く推奨している(https://ai.google.dev/gemini-api/docs/gemini-3)
 - OpenAI の推論強度で、どのモデルも対応していない `minimal` を選択肢から外す(保存済みの値は正規化で対応する)
@@ -85,7 +85,7 @@
 
 ## 4. 統合時の確認項目(メインループ + ユーザー)
 
-- 2〜3 本の記事で、Claude の effort の既定値(台本 medium、画像プロンプト low)と以前の high を比べ、台本と画像プロンプトの品質を確認する
+- 2〜3 本の記事で、Claude の effort の既定値(台本・画像プロンプトとも medium)と以前の high を比べ、台本と画像プロンプトの品質を確認する
 - 画像に指定外の文字が描かれていないこと。FHD で文字が読めること
 - 3.8 TTS の短いスタイルで、ニュース調の読み上げになっていること。`<` `>` を含む台本で試す
 - 画像プロンプトの一括生成と自動生成の両方で、2 回目以降の `cache_read_input_tokens` が 0 より大きいこと
