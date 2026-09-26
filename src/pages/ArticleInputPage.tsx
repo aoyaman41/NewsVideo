@@ -9,10 +9,13 @@ import { BUDGET_STAGE, isJobActive, isJobResumable } from '../components/job/job
 import { API_KEY_SERVICE_INFO, requiredServices } from '../components/onboarding/apiKeys';
 import { useApiKeyStatus } from '../components/onboarding/useApiKeyStatus';
 import { useOpenSettings } from '../components/settings/settingsNavigation';
-import { Button, useConfirm, useToast } from '../components/ui';
+import { Button, Details, useConfirm, useToast } from '../components/ui';
 import {
   budgetToUsd,
-  useGenerationPreferences,
+  ensureGenerationPreferencesMigrated,
+  preferencesFromSettings,
+  preferencesToSettings,
+  saveGenerationPreferences,
   type GenerationPreferences,
 } from '../stores/generationPreferences';
 import { useJobFeed } from '../stores/jobStore';
@@ -23,7 +26,11 @@ import type {
   PresentationProfile,
   Project,
 } from '../schemas';
-import { normalizeSettings, type AppSettings } from '../../shared/settings/appSettings';
+import {
+  DEFAULT_SETTINGS,
+  normalizeSettings,
+  type AppSettings,
+} from '../../shared/settings/appSettings';
 import {
   PRESENTATION_PROFILE_PRESET_DESCRIPTIONS,
   PRESENTATION_PROFILE_PRESET_LABELS,
@@ -52,10 +59,12 @@ const CLOSING_LINE_LABELS: Record<PresentationProfile['closingLineMode'], string
   custom: '自分で入力する',
 };
 
-const fieldLabel = 'mb-1 block text-xs font-semibold text-[var(--nv-color-muted)]';
-const fieldHint = 'mt-1 text-xs text-[var(--nv-color-muted)]';
-const sectionSummary =
-  'nv-focus-ring cursor-pointer rounded-[var(--nv-radius-sm)] text-sm font-semibold text-[var(--nv-color-text)]';
+// 見た目は M4-B の共通クラス(src/styles/utilities.css の .nv-label / .nv-help)にそろえる
+const fieldLabel = 'nv-label';
+const fieldHint = 'nv-help mt-1';
+
+/** 画面に出すエラーと、何に失敗したか */
+type PageError = { error: unknown; title: string };
 
 export function ArticleInputPage() {
   const { projectId } = useParams<{ projectId: string }>();
@@ -72,13 +81,12 @@ export function ArticleInputPage() {
   const [images, setImages] = useState<ImageAsset[]>([]);
   const [blobUrls, setBlobUrls] = useState<Map<string, string>>(new Map());
   const [starting, setStarting] = useState(false);
-  const [error, setError] = useState<unknown>(null);
+  const [error, setError] = useState<PageError | null>(null);
   const [targetPartCount, setTargetPartCount] = useState<number>(5);
   const [presentationProfile, setPresentationProfile] = useState<PresentationProfile>(
     getDefaultPresentationProfile()
   );
   const [settings, setSettings] = useState<AppSettings | null>(null);
-  const [preferences, setPreferences] = useGenerationPreferences();
   // 止まっているジョブがあるときは、そのジョブの進め方と予算を初期値にする(「続きから」で使う値を画面に出す)
   const [runOptions, setRunOptions] = useState<GenerationPreferences | null>(null);
   const { status: keyStatus, loaded: keysLoaded, refresh: refreshKeys } = useApiKeyStatus();
@@ -91,8 +99,8 @@ export function ArticleInputPage() {
     JSON.stringify(getDefaultPresentationProfile())
   );
 
-  const reportError = useCallback((value: unknown) => {
-    if (isMountedRef.current) setError(value);
+  const reportError = useCallback((value: unknown, title: string) => {
+    if (isMountedRef.current) setError({ error: value, title });
   }, []);
 
   useEffect(() => {
@@ -111,8 +119,9 @@ export function ArticleInputPage() {
 
   useEffect(() => {
     let active = true;
-    void window.electronAPI.settings
-      .get()
+    // 以前の版が画面側に覚えていた進め方と予算を、先に設定へ移してから読む
+    void ensureGenerationPreferencesMigrated()
+      .then(() => window.electronAPI.settings.get())
       .then((value) => {
         if (active) setSettings(normalizeSettings(value));
       })
@@ -162,7 +171,7 @@ export function ArticleInputPage() {
         });
       } catch (err) {
         console.error('Failed to load project:', err);
-        reportError(err);
+        reportError(err, 'プロジェクトを読み込めませんでした');
       }
     };
 
@@ -191,7 +200,7 @@ export function ArticleInputPage() {
         setProject(updatedProject);
       } catch (err) {
         console.error('Failed to save presentation profile:', err);
-        reportError(err);
+        reportError(err, '詳細設定を保存できませんでした');
       }
     }, 250);
 
@@ -216,10 +225,16 @@ export function ArticleInputPage() {
   const running = isJobActive(job);
   const resumable = isJobResumable(job);
   const hasScript = (project?.parts.length ?? 0) > 0;
+  // 進め方と予算の既定値は設定(AppSettings)に保存する。変えると次の「おまかせで作る」から使う
+  const preferences = preferencesFromSettings(settings ?? DEFAULT_SETTINGS);
   const runSettings = runOptions ?? preferences;
   const updateRunSettings = (patch: Partial<GenerationPreferences>) => {
     setRunOptions({ ...runSettings, ...patch });
-    setPreferences(patch);
+    const update = preferencesToSettings(patch);
+    setSettings((previous) => (previous ? { ...previous, ...update } : previous));
+    void saveGenerationPreferences(update).catch((err) =>
+      reportError(err, '進め方と予算を保存できませんでした')
+    );
   };
 
   // 「続きから」はジョブを開始したときの設定で進むので、必要なキーもその設定で判定する
@@ -262,7 +277,10 @@ export function ArticleInputPage() {
         restart ? '最初から作り直しています' : '自動生成を始めました'
       );
     } catch (err) {
-      reportError(err);
+      reportError(
+        err,
+        restart ? '作り直しを始められませんでした' : '自動生成を始められませんでした'
+      );
     } finally {
       if (isMountedRef.current) setStarting(false);
     }
@@ -366,262 +384,267 @@ export function ArticleInputPage() {
   };
 
   const advancedSettings = (
-    <details className="nv-surface-muted px-4 py-3">
-      <summary className={sectionSummary}>
-        詳細設定
-        <span className="ml-2 font-normal text-[var(--nv-color-muted)]">
-          シーン数・長さ・声・画像の雰囲気・進め方など
-        </span>
-      </summary>
-      <div className="mt-4 grid gap-4 md:grid-cols-2">
-        <div>
-          <label htmlFor="article-preset" className={fieldLabel}>
-            用途
-          </label>
-          <select
-            id="article-preset"
-            value={presentationProfile.preset}
-            onChange={(e) => applyPresentationPreset(e.target.value as PresentationProfilePreset)}
-            className="nv-input"
-          >
-            {PRESENTATION_PROFILE_PRESETS.map((preset) => (
-              <option key={preset} value={preset}>
-                {PRESENTATION_PROFILE_PRESET_LABELS[preset]}
-              </option>
-            ))}
-          </select>
-          <p className={fieldHint}>
-            {PRESENTATION_PROFILE_PRESET_DESCRIPTIONS[presentationProfile.preset]}
-          </p>
-        </div>
-
-        <div>
-          <label htmlFor="article-scene-count" className={fieldLabel}>
-            シーン数(1〜20)
-          </label>
-          <input
-            id="article-scene-count"
-            type="number"
-            min={1}
-            max={20}
-            value={targetPartCount}
-            onChange={(e) => {
-              const next = Number(e.target.value);
-              if (!Number.isFinite(next)) return;
-              setTargetPartCount(Math.min(20, Math.max(1, Math.round(next))));
-            }}
-            className="nv-input w-28"
-          />
-          <p className={fieldHint}>
-            シーンごとに画像と音声を作ります。あとから台本画面で変えられます。
-          </p>
-        </div>
-
-        <div>
-          <label htmlFor="article-duration" className={fieldLabel}>
-            1 シーンの長さの目安(秒)
-          </label>
-          <input
-            id="article-duration"
-            type="number"
-            min={10}
-            max={300}
-            value={presentationProfile.targetDurationPerPartSec}
-            onChange={(e) => {
-              const next = Number(e.target.value);
-              if (!Number.isFinite(next)) return;
-              setPresentationProfile((prev) => ({
-                ...prev,
-                targetDurationPerPartSec: Math.min(300, Math.max(10, Math.round(next))),
-              }));
-            }}
-            className="nv-input w-28"
-          />
-          <p className={fieldHint}>10〜300 秒。用途を選ぶと目安の値が入ります。</p>
-        </div>
-
-        <div>
-          <label htmlFor="article-closing" className={fieldLabel}>
-            締めのひとこと
-          </label>
-          <select
-            id="article-closing"
-            value={presentationProfile.closingLineMode}
-            onChange={(e) =>
-              setPresentationProfile((prev) => ({
-                ...prev,
-                closingLineMode: e.target.value as PresentationProfile['closingLineMode'],
-              }))
-            }
-            className="nv-input"
-          >
-            {Object.entries(CLOSING_LINE_LABELS).map(([mode, label]) => (
-              <option key={mode} value={mode}>
-                {label}
-              </option>
-            ))}
-          </select>
-          {presentationProfile.closingLineMode === 'custom' ? (
-            <input
-              type="text"
-              aria-label="締めのひとこと(自分で入力)"
-              value={presentationProfile.closingLineText}
-              onChange={(e) =>
-                setPresentationProfile((prev) => ({ ...prev, closingLineText: e.target.value }))
-              }
-              className="nv-input mt-2"
-              placeholder="ご視聴ありがとうございました"
-            />
-          ) : (
-            <p className={fieldHint}>読み上げる文: {closingLinePreview ?? 'なし'}</p>
-          )}
-        </div>
-
-        <div>
-          <label htmlFor="article-image-style" className={fieldLabel}>
-            画像の雰囲気
-          </label>
-          <select
-            id="article-image-style"
-            value={presentationProfile.imageStylePreset}
-            onChange={(e) =>
-              setPresentationProfile((prev) => ({
-                ...prev,
-                imageStylePreset: e.target.value as PresentationProfile['imageStylePreset'],
-              }))
-            }
-            className="nv-input"
-          >
-            {IMAGE_STYLE_PRESETS.map((preset) => (
-              <option key={preset} value={preset}>
-                {IMAGE_STYLE_PRESET_LABELS[preset]}
-              </option>
-            ))}
-          </select>
-          <p className={fieldHint}>
-            {IMAGE_STYLE_PRESET_DESCRIPTIONS[presentationProfile.imageStylePreset]}
-          </p>
-        </div>
-
-        <div>
-          <label htmlFor="article-aspect" className={fieldLabel}>
-            画面の縦横
-          </label>
-          <select
-            id="article-aspect"
-            value={presentationProfile.aspectRatio}
-            onChange={(e) =>
-              setPresentationProfile((prev) => ({
-                ...prev,
-                aspectRatio: e.target.value as PresentationProfile['aspectRatio'],
-              }))
-            }
-            className="nv-input"
-          >
-            {IMAGE_ASPECT_RATIOS.map((aspectRatio) => (
-              <option key={aspectRatio} value={aspectRatio}>
-                {IMAGE_ASPECT_RATIO_LABELS[aspectRatio]}
-              </option>
-            ))}
-          </select>
-          <p className={fieldHint}>画像と動画の両方に使います。</p>
-        </div>
-
-        <div>
-          <label htmlFor="article-voice-style" className={fieldLabel}>
-            読み上げの話し方
-          </label>
-          <select
-            id="article-voice-style"
-            value={presentationProfile.ttsNarrationStylePreset}
-            onChange={(e) =>
-              setPresentationProfile((prev) => ({
-                ...prev,
-                ttsNarrationStylePreset: e.target
-                  .value as PresentationProfile['ttsNarrationStylePreset'],
-              }))
-            }
-            className="nv-input"
-          >
-            {TTS_NARRATION_STYLE_PRESETS.map((preset) => (
-              <option key={preset} value={preset}>
-                {TTS_NARRATION_STYLE_LABELS[preset]}
-              </option>
-            ))}
-          </select>
-          <p className={fieldHint}>
-            {TTS_NARRATION_STYLE_DESCRIPTIONS[presentationProfile.ttsNarrationStylePreset]}
-          </p>
-        </div>
-
-        <div>
-          <label htmlFor="article-voice-note" className={fieldLabel}>
-            読み上げの補足(任意)
-          </label>
-          <input
-            id="article-voice-note"
-            type="text"
-            value={presentationProfile.ttsNarrationStyleNote}
-            onChange={(e) =>
-              setPresentationProfile((prev) => ({
-                ...prev,
-                ttsNarrationStyleNote: e.target.value,
-              }))
-            }
-            className="nv-input"
-            placeholder="例: 語尾はやわらかく、あおりすぎない"
-          />
-        </div>
-
-        <div>
-          <label htmlFor="article-mode" className={fieldLabel}>
-            自動生成の進め方
-          </label>
-          <select
-            id="article-mode"
-            value={runSettings.mode}
-            onChange={(e) =>
-              updateRunSettings({ mode: e.target.value === 'review' ? 'review' : 'automatic' })
-            }
-            className="nv-input"
-          >
-            <option value="automatic">最後まで自動で進める(おすすめ)</option>
-            <option value="review">台本と素材ができたところで止めて確認する</option>
-          </select>
-          <p className={fieldHint}>確認しながら進めると、途中で 2 回止まります。</p>
-        </div>
-
-        <div>
-          <label htmlFor="article-budget" className={fieldLabel}>
-            1 回の予算の上限(USD)
-          </label>
-          <input
-            id="article-budget"
-            type="number"
-            min="0"
-            step="0.1"
-            value={runSettings.budgetUsd}
-            onChange={(e) => updateRunSettings({ budgetUsd: e.target.value })}
-            className="nv-input w-32"
-            placeholder="上限なし"
-          />
-          <p className={fieldHint}>
-            空欄なら上限なし。上限に近づくと止まり、画面上部から続けられます。
-          </p>
-        </div>
+    <Details
+      summary={
+        <>
+          詳細設定
+          <span className="font-normal text-[var(--nv-color-muted)]">
+            シーン数・長さ・声・画像の雰囲気・進め方など
+          </span>
+        </>
+      }
+      bodyClassName="grid gap-4 md:grid-cols-2"
+    >
+      <div>
+        <label htmlFor="article-preset" className={fieldLabel}>
+          用途
+        </label>
+        <select
+          id="article-preset"
+          value={presentationProfile.preset}
+          onChange={(e) => applyPresentationPreset(e.target.value as PresentationProfilePreset)}
+          className="nv-input"
+        >
+          {PRESENTATION_PROFILE_PRESETS.map((preset) => (
+            <option key={preset} value={preset}>
+              {PRESENTATION_PROFILE_PRESET_LABELS[preset]}
+            </option>
+          ))}
+        </select>
+        <p className={fieldHint}>
+          {PRESENTATION_PROFILE_PRESET_DESCRIPTIONS[presentationProfile.preset]}
+        </p>
       </div>
-    </details>
+
+      <div>
+        <label htmlFor="article-scene-count" className={fieldLabel}>
+          シーン数(1〜20)
+        </label>
+        <input
+          id="article-scene-count"
+          type="number"
+          min={1}
+          max={20}
+          value={targetPartCount}
+          onChange={(e) => {
+            const next = Number(e.target.value);
+            if (!Number.isFinite(next)) return;
+            setTargetPartCount(Math.min(20, Math.max(1, Math.round(next))));
+          }}
+          className="nv-input w-28"
+        />
+        <p className={fieldHint}>
+          シーンごとに画像と音声を作ります。あとから台本画面で変えられます。
+        </p>
+      </div>
+
+      <div>
+        <label htmlFor="article-duration" className={fieldLabel}>
+          1 シーンの長さの目安(秒)
+        </label>
+        <input
+          id="article-duration"
+          type="number"
+          min={10}
+          max={300}
+          value={presentationProfile.targetDurationPerPartSec}
+          onChange={(e) => {
+            const next = Number(e.target.value);
+            if (!Number.isFinite(next)) return;
+            setPresentationProfile((prev) => ({
+              ...prev,
+              targetDurationPerPartSec: Math.min(300, Math.max(10, Math.round(next))),
+            }));
+          }}
+          className="nv-input w-28"
+        />
+        <p className={fieldHint}>10〜300 秒。用途を選ぶと目安の値が入ります。</p>
+      </div>
+
+      <div>
+        <label htmlFor="article-closing" className={fieldLabel}>
+          締めのひとこと
+        </label>
+        <select
+          id="article-closing"
+          value={presentationProfile.closingLineMode}
+          onChange={(e) =>
+            setPresentationProfile((prev) => ({
+              ...prev,
+              closingLineMode: e.target.value as PresentationProfile['closingLineMode'],
+            }))
+          }
+          className="nv-input"
+        >
+          {Object.entries(CLOSING_LINE_LABELS).map(([mode, label]) => (
+            <option key={mode} value={mode}>
+              {label}
+            </option>
+          ))}
+        </select>
+        {presentationProfile.closingLineMode === 'custom' ? (
+          <input
+            type="text"
+            aria-label="締めのひとこと(自分で入力)"
+            value={presentationProfile.closingLineText}
+            onChange={(e) =>
+              setPresentationProfile((prev) => ({ ...prev, closingLineText: e.target.value }))
+            }
+            className="nv-input mt-2"
+            placeholder="ご視聴ありがとうございました"
+          />
+        ) : (
+          <p className={fieldHint}>読み上げる文: {closingLinePreview ?? 'なし'}</p>
+        )}
+      </div>
+
+      <div>
+        <label htmlFor="article-image-style" className={fieldLabel}>
+          画像の雰囲気
+        </label>
+        <select
+          id="article-image-style"
+          value={presentationProfile.imageStylePreset}
+          onChange={(e) =>
+            setPresentationProfile((prev) => ({
+              ...prev,
+              imageStylePreset: e.target.value as PresentationProfile['imageStylePreset'],
+            }))
+          }
+          className="nv-input"
+        >
+          {IMAGE_STYLE_PRESETS.map((preset) => (
+            <option key={preset} value={preset}>
+              {IMAGE_STYLE_PRESET_LABELS[preset]}
+            </option>
+          ))}
+        </select>
+        <p className={fieldHint}>
+          {IMAGE_STYLE_PRESET_DESCRIPTIONS[presentationProfile.imageStylePreset]}
+        </p>
+      </div>
+
+      <div>
+        <label htmlFor="article-aspect" className={fieldLabel}>
+          画面の縦横
+        </label>
+        <select
+          id="article-aspect"
+          value={presentationProfile.aspectRatio}
+          onChange={(e) =>
+            setPresentationProfile((prev) => ({
+              ...prev,
+              aspectRatio: e.target.value as PresentationProfile['aspectRatio'],
+            }))
+          }
+          className="nv-input"
+        >
+          {IMAGE_ASPECT_RATIOS.map((aspectRatio) => (
+            <option key={aspectRatio} value={aspectRatio}>
+              {IMAGE_ASPECT_RATIO_LABELS[aspectRatio]}
+            </option>
+          ))}
+        </select>
+        <p className={fieldHint}>画像と動画の両方に使います。</p>
+      </div>
+
+      <div>
+        <label htmlFor="article-voice-style" className={fieldLabel}>
+          読み上げの話し方
+        </label>
+        <select
+          id="article-voice-style"
+          value={presentationProfile.ttsNarrationStylePreset}
+          onChange={(e) =>
+            setPresentationProfile((prev) => ({
+              ...prev,
+              ttsNarrationStylePreset: e.target
+                .value as PresentationProfile['ttsNarrationStylePreset'],
+            }))
+          }
+          className="nv-input"
+        >
+          {TTS_NARRATION_STYLE_PRESETS.map((preset) => (
+            <option key={preset} value={preset}>
+              {TTS_NARRATION_STYLE_LABELS[preset]}
+            </option>
+          ))}
+        </select>
+        <p className={fieldHint}>
+          {TTS_NARRATION_STYLE_DESCRIPTIONS[presentationProfile.ttsNarrationStylePreset]}
+        </p>
+      </div>
+
+      <div>
+        <label htmlFor="article-voice-note" className={fieldLabel}>
+          読み上げの補足(任意)
+        </label>
+        <input
+          id="article-voice-note"
+          type="text"
+          value={presentationProfile.ttsNarrationStyleNote}
+          onChange={(e) =>
+            setPresentationProfile((prev) => ({
+              ...prev,
+              ttsNarrationStyleNote: e.target.value,
+            }))
+          }
+          className="nv-input"
+          placeholder="例: 語尾はやわらかく、あおりすぎない"
+        />
+      </div>
+
+      <div>
+        <label htmlFor="article-mode" className={fieldLabel}>
+          自動生成の進め方
+        </label>
+        <select
+          id="article-mode"
+          value={runSettings.mode}
+          onChange={(e) =>
+            updateRunSettings({ mode: e.target.value === 'review' ? 'review' : 'automatic' })
+          }
+          className="nv-input"
+        >
+          <option value="automatic">最後まで自動で進める(おすすめ)</option>
+          <option value="review">台本と素材ができたところで止めて確認する</option>
+        </select>
+        <p className={fieldHint}>確認しながら進めると、途中で 2 回止まります。</p>
+      </div>
+
+      <div>
+        <label htmlFor="article-budget" className={fieldLabel}>
+          1 回の予算の上限(USD)
+        </label>
+        <input
+          id="article-budget"
+          type="number"
+          min="0"
+          step="0.1"
+          value={runSettings.budgetUsd}
+          onChange={(e) => updateRunSettings({ budgetUsd: e.target.value })}
+          className="nv-input w-32"
+          placeholder="上限なし"
+        />
+        <p className={fieldHint}>
+          空欄なら上限なし。上限に近づくと止まり、画面上部から続けられます。
+        </p>
+      </div>
+    </Details>
   );
 
   const photos = (
-    <details className="nv-surface-muted px-4 py-3">
-      <summary className={sectionSummary}>
-        写真を追加(任意)
-        {images.length > 0 && (
-          <span className="ml-2 font-normal text-[var(--nv-color-muted)]">{images.length} 枚</span>
-        )}
-      </summary>
-      <p className="mt-2 mb-3 text-xs text-[var(--nv-color-muted)]">
+    <Details
+      summary={
+        <>
+          写真を追加(任意)
+          {images.length > 0 && (
+            <span className="font-normal text-[var(--nv-color-muted)]">{images.length} 枚</span>
+          )}
+        </>
+      }
+    >
+      <p className="mb-3 text-xs text-[var(--nv-color-muted)]">
         記事に関係する写真を登録すると、画像画面でシーンの画像として使えます。
       </p>
       <ImageDropzone
@@ -631,7 +654,7 @@ export function ArticleInputPage() {
         onImageRemoved={handleImageRemoved}
         blobUrlMap={blobUrls}
       />
-    </details>
+    </Details>
   );
 
   const keyWarning = missingKeys.length > 0 && (
@@ -674,7 +697,13 @@ export function ArticleInputPage() {
 
       <div className="flex-1 overflow-auto p-5">
         <div className="mx-auto w-full max-w-3xl space-y-4">
-          {error !== null && <FriendlyError error={error} onDismiss={() => setError(null)} />}
+          {error && (
+            <FriendlyError
+              title={error.title}
+              error={error.error}
+              onDismiss={() => setError(null)}
+            />
+          )}
 
           <section className="nv-surface p-5">
             <p className="mb-4 text-sm text-[var(--nv-color-muted)]">

@@ -6,7 +6,7 @@ import { cx } from '../../utils/cx';
 import { dismissJob, useJobFeed } from '../../stores/jobStore';
 import { projectClient, useProjectState } from '../../stores/projectStore';
 import { FriendlyError } from '../errors/FriendlyError';
-import { explainError } from '../errors/explainError';
+import { errorToastContent, explainError } from '../errors/explainError';
 import { projectIdFromPath } from '../layout/workflowLabels';
 import { Button, StatusChip, useToast } from '../ui';
 import { cancelJob, resumeJob } from './jobActions';
@@ -157,8 +157,8 @@ function JobBannerItem({ projectId, job, isRoute }: BannerItem) {
     try {
       await action();
     } catch (error) {
-      const explanation = explainError(error);
-      toast.error(explanation.description, explanation.title);
+      const content = errorToastContent(explainError(error));
+      toast.error(content.message, content.title);
     } finally {
       setPending(false);
     }

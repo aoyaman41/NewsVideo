@@ -46,6 +46,10 @@ import {
 export const TTS_ENGINES = ['google_tts', 'gemini_tts', 'macos_tts'] as const;
 export type TTSEngine = (typeof TTS_ENGINES)[number];
 
+/** 自動生成の進め方。automatic は最後まで自動、review は台本と素材ができたところで止めて確認する */
+export const GENERATION_MODES = ['automatic', 'review'] as const;
+export type GenerationMode = (typeof GENERATION_MODES)[number];
+
 export type AppSettings = {
   readingDictionary: ReadingEntry[];
   /**
@@ -53,6 +57,10 @@ export type AppSettings = {
    * 同時実行数はプロバイダと用途ごとの既定値(electron/utils/generationPolicy.ts)で決まり、この値は使わない
    */
   generationConcurrency: number;
+  /** 「おまかせで作る」の進め方の既定値(記事画面と設定画面の詳細設定で変える) */
+  generationMode: GenerationMode;
+  /** 「おまかせで作る」の 1 回の予算の上限の既定値(USD)。null は上限なし */
+  generationBudgetUsd: number | null;
   ttsEngine: TTSEngine;
   ttsModel: GeminiTtsModel;
   ttsVoice: string;
@@ -83,6 +91,9 @@ export type AppSettings = {
 export const DEFAULT_SETTINGS: AppSettings = {
   readingDictionary: [],
   generationConcurrency: 2,
+  // 既定は全自動(ユーザー決定 2026-09-26)。予算は従来の記事画面の初期値(5 USD)を引き継ぐ
+  generationMode: 'automatic',
+  generationBudgetUsd: 5,
   ttsEngine: 'gemini_tts',
   ttsModel: DEFAULT_GEMINI_TTS_MODEL,
   ttsVoice: 'Charon',
@@ -111,6 +122,8 @@ export const settingsUpdateSchema = z
   .object({
     readingDictionary: z.array(readingEntrySchema).max(500).optional(),
     generationConcurrency: z.number().int().min(1).max(4).optional(),
+    generationMode: z.enum(GENERATION_MODES).optional(),
+    generationBudgetUsd: z.number().finite().nonnegative().nullable().optional(),
     ttsEngine: z.enum(TTS_ENGINES).optional(),
     ttsModel: z.enum(GEMINI_TTS_MODELS).optional(),
     ttsVoice: z.string().optional(),
@@ -203,6 +216,19 @@ export function normalizeSettings(input: unknown): AppSettings {
   merged.generationConcurrency = Number.isFinite(merged.generationConcurrency)
     ? Math.max(1, Math.min(4, Math.round(merged.generationConcurrency)))
     : 2;
+  if (!GENERATION_MODES.includes(merged.generationMode)) {
+    merged.generationMode = DEFAULT_SETTINGS.generationMode;
+  }
+  if (
+    merged.generationBudgetUsd !== null &&
+    !(
+      typeof merged.generationBudgetUsd === 'number' &&
+      Number.isFinite(merged.generationBudgetUsd) &&
+      merged.generationBudgetUsd >= 0
+    )
+  ) {
+    merged.generationBudgetUsd = DEFAULT_SETTINGS.generationBudgetUsd;
+  }
 
   // 旧ボイス名の移行
   if (merged.ttsVoice === 'ja-JP-Chirp3-HD-Aoife') {

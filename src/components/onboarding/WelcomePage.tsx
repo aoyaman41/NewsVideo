@@ -103,7 +103,11 @@ export function WelcomePage() {
           </section>
 
           {sampleError !== null && (
-            <FriendlyError error={sampleError} onDismiss={() => setSampleError(null)} />
+            <FriendlyError
+              title="サンプルを開けませんでした"
+              error={sampleError}
+              onDismiss={() => setSampleError(null)}
+            />
           )}
 
           <footer className="flex flex-wrap items-center justify-between gap-3">

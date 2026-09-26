@@ -169,6 +169,33 @@ describe('settings IPC handlers', () => {
     expect(saved.geminiThinkingLevel).toBe('low');
     expect(saved.unknown).toBeUndefined();
   });
+
+  it('keeps both changes when two partial saves overlap, and reads after pending saves', async () => {
+    // 読み込み → 書き込みの間に別の保存が入ると、先の変更が消える(ファイルは 1 つ)
+    let stored = JSON.stringify(DEFAULT_SETTINGS);
+    readFileMock.mockImplementation(async () => stored);
+    writeFileMock.mockImplementation(async (_path: string, content: string) => {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      stored = content;
+    });
+    const event = { senderFrame: { url: 'http://localhost:5173', parent: null } };
+
+    const saves = Promise.all([
+      getHandler('settings:set')(event, { generationMode: 'review' }),
+      getHandler('settings:set')(event, { generationBudgetUsd: null }),
+    ]);
+    const read = getHandler('settings:get')(event) as Promise<typeof DEFAULT_SETTINGS>;
+    await saves;
+
+    expect(JSON.parse(stored)).toMatchObject({
+      generationMode: 'review',
+      generationBudgetUsd: null,
+    });
+    await expect(read).resolves.toMatchObject({
+      generationMode: 'review',
+      generationBudgetUsd: null,
+    });
+  });
 });
 
 describe('Anthropic settings', () => {

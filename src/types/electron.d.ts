@@ -228,6 +228,8 @@ interface ImageBatchGenerationResult {
 interface Settings {
   readingDictionary?: Array<{ word: string; reading: string }>;
   generationConcurrency: number;
+  generationMode: 'automatic' | 'review';
+  generationBudgetUsd: number | null;
   ttsEngine: TTSEngine;
   ttsModel: GeminiTtsModel;
   ttsVoice: string;

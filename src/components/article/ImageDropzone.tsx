@@ -3,6 +3,7 @@ import { useCallback, useState } from 'react';
 import { useDropzone, type FileWithPath } from 'react-dropzone';
 import type { ImageAsset } from '../../schemas';
 import { ImageTagEditor } from '../common/ImageTagEditor';
+import { FriendlyError } from '../errors/FriendlyError';
 
 interface ImageDropzoneProps {
   images: ImageAsset[];
@@ -41,7 +42,7 @@ export function ImageDropzone({
   onImageTagsUpdate,
   blobUrlMap = new Map(),
 }: ImageDropzoneProps) {
-  const [importError, setImportError] = useState<string | null>(null);
+  const [importError, setImportError] = useState<unknown>(null);
   const [selectedImageId, setSelectedImageId] = useState<string | null>(null);
 
   const onDrop = useCallback(
@@ -72,7 +73,7 @@ export function ImageDropzone({
           newImages.push(imageAsset);
           newBlobUrls.set(imageAsset.id, blobUrl);
         } catch (error) {
-          setImportError(error instanceof Error ? error.message : String(error));
+          setImportError(error);
           URL.revokeObjectURL(blobUrl);
         }
       }
@@ -93,10 +94,12 @@ export function ImageDropzone({
 
   return (
     <div className="space-y-4">
-      {importError && (
-        <p role="alert" className="text-sm text-[var(--nv-color-danger)]">
-          {importError}
-        </p>
+      {importError !== null && (
+        <FriendlyError
+          title="写真を追加できませんでした"
+          error={importError}
+          onDismiss={() => setImportError(null)}
+        />
       )}
       {/* ドロップゾーン */}
       <div

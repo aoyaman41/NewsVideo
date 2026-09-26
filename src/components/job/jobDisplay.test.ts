@@ -39,8 +39,13 @@ describe('describeJob without progress (M2 まで)', () => {
     expect(view.steps).toBeNull();
   });
 
+  it('describes the parallel image and audio stage of the job engine', () => {
+    expect(describeRunningStage('画像と音声')).toBe('画像と音声を作っています');
+    expect(describeJob(job({ stage: '画像と音声' })).headline).toBe('画像と音声を作っています');
+  });
+
   it('keeps unknown stage names visible instead of hiding them', () => {
-    expect(describeRunningStage('画像と音声')).toBe('生成しています(画像と音声)');
+    expect(describeRunningStage('素材の整理')).toBe('生成しています(素材の整理)');
     expect(describeRunningStage('')).toBe('生成しています');
   });
 
@@ -50,6 +55,19 @@ describe('describeJob without progress (M2 まで)', () => {
 });
 
 describe('describeJob with progress', () => {
+  it('shows image and audio as started as soon as the parallel stage begins', () => {
+    const view = describeJob(
+      job({ stage: '画像と音声', progress: { script: { done: 1, total: 1 } } })
+    );
+    expect(view.headline).toBe('画像と音声を作っています');
+    expect(view.steps?.map((step) => [step.key, step.state])).toEqual([
+      ['script', 'done'],
+      ['image', 'active'],
+      ['audio', 'active'],
+      ['video', 'waiting'],
+    ]);
+  });
+
   it('reports parallel image and audio work and a weighted overall percent', () => {
     const view = describeJob(
       job({

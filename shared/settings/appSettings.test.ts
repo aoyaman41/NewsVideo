@@ -296,3 +296,38 @@ describe('Gemini image model GA migration', () => {
     expect(normalizeSettings({}).imageModel).toBe('gpt-image-2.5-sunburst');
   });
 });
+
+describe('auto generation defaults (mode and budget)', () => {
+  it('defaults to fully automatic with a 5 USD budget and keeps the legacy concurrency field', () => {
+    const normalized = normalizeSettings({});
+    expect(normalized.generationMode).toBe('automatic');
+    expect(normalized.generationBudgetUsd).toBe(5);
+    expect(normalized.generationConcurrency).toBe(2);
+    expect(normalizeSettings({ generationConcurrency: 4 }).generationConcurrency).toBe(4);
+  });
+
+  it('keeps saved values, including no budget limit (null)', () => {
+    expect(
+      normalizeSettings({ generationMode: 'review', generationBudgetUsd: null })
+    ).toMatchObject({ generationMode: 'review', generationBudgetUsd: null });
+    expect(normalizeSettings({ generationBudgetUsd: 0 }).generationBudgetUsd).toBe(0);
+    expect(normalizeSettings({ generationBudgetUsd: 2.5 }).generationBudgetUsd).toBe(2.5);
+  });
+
+  it('resets invalid values to the defaults', () => {
+    expect(normalizeSettings({ generationMode: 'fast' }).generationMode).toBe('automatic');
+    expect(normalizeSettings({ generationBudgetUsd: -1 }).generationBudgetUsd).toBe(5);
+    expect(normalizeSettings({ generationBudgetUsd: '3' }).generationBudgetUsd).toBe(5);
+    expect(normalizeSettings({ generationBudgetUsd: Number.NaN }).generationBudgetUsd).toBe(5);
+  });
+
+  it('accepts updates from the screens and rejects invalid ones', () => {
+    expect(parseSettingsUpdate({ generationMode: 'review', generationBudgetUsd: null })).toEqual({
+      generationMode: 'review',
+      generationBudgetUsd: null,
+    });
+    expect(parseSettingsUpdate({ generationBudgetUsd: 1.5 }).generationBudgetUsd).toBe(1.5);
+    expect(() => parseSettingsUpdate({ generationMode: 'fast' })).toThrow();
+    expect(() => parseSettingsUpdate({ generationBudgetUsd: -1 })).toThrow();
+  });
+});

@@ -19,12 +19,9 @@ import {
 } from '../components/ui';
 import { SceneList } from '../components/common/SceneList';
 import { StaleNotice } from '../components/common/StaleNotice';
-import { ErrorNotice } from '../components/common/ErrorNotice';
-import {
-  describeError,
-  describeFailures,
-  type FriendlyError,
-} from '../components/common/friendlyError';
+import { FriendlyError } from '../components/errors/FriendlyError';
+import { ProjectLoadFailure } from '../components/errors/ProjectLoadFailure';
+import { useErrorReport } from '../components/errors/useErrorReport';
 import { JOB_ACTIVE_MESSAGE, useJobActive } from '../components/common/useJobActive';
 import { useProjectCommit } from '../components/common/useProjectCommit';
 import { runLimited } from '../components/common/runLimited';
@@ -82,24 +79,19 @@ export function ImageManagePage() {
   const jobActive = useJobActive(projectId, project);
 
   const [isLoading, setIsLoading] = useState(true);
-  const [loadError, setLoadError] = useState<string | null>(null);
-  const [error, setError] = useState<FriendlyError | null>(null);
+  const [loadError, setLoadError] = useState<unknown>(null);
+  const {
+    reported: error,
+    report: reportError,
+    reportFailures,
+    clear: clearError,
+  } = useErrorReport();
   const [busy, setBusy] = useState<{ partId: string; label: string } | null>(null);
   const [batch, setBatch] = useState<BatchState | null>(null);
   const batchCancelRef = useRef(false);
   const [instructionOpen, setInstructionOpen] = useState(false);
   const [instruction, setInstruction] = useState('');
   const [target, setTarget] = useState<{ partId: string; slot: SlotTarget } | null>(null);
-
-  const reportError = useCallback(
-    (err: unknown, title: string) => {
-      console.error(title, err);
-      const friendly = describeError(err, title);
-      setError(friendly);
-      toast.error(friendly.message, friendly.title);
-    },
-    [toast]
-  );
 
   useEffect(() => {
     const loadProject = async () => {
@@ -113,7 +105,7 @@ export function ImageManagePage() {
         }
       } catch (err) {
         console.error('Failed to load project:', err);
-        setLoadError(describeError(err, '読み込めませんでした').message);
+        setLoadError(err);
       } finally {
         setIsLoading(false);
       }
@@ -215,7 +207,7 @@ export function ImageManagePage() {
       const partId = selectedPart.id;
       const targetSlot = slot;
       const startedWith = sceneSnapshot(selectedPart);
-      setError(null);
+      clearError();
       try {
         setBusy({ partId, label: '画像の内容を考えています…' });
         let prompt = await ensurePrompt(partId);
@@ -289,6 +281,7 @@ export function ImageManagePage() {
     [
       batch,
       busy,
+      clearError,
       commit,
       ensurePrompt,
       jobActive,
@@ -306,7 +299,7 @@ export function ImageManagePage() {
     const targetIds = batchTargets.parts.map((part) => part.id);
     if (targetIds.length === 0) return;
     batchCancelRef.current = false;
-    setError(null);
+    clearError();
     const failures: Array<{ label: string; error: unknown }> = [];
     try {
       // 1. 画像の内容(指示)を用意する
@@ -421,8 +414,7 @@ export function ImageManagePage() {
       if (batchCancelRef.current) {
         toast.info('まとめて作るのを止めました。できた画像は使われています。', '止めました');
       } else if (failures.length > 0) {
-        setError(describeFailures('一部の画像を作れませんでした', failures));
-        toast.warning('一部の画像を作れませんでした。', '一部失敗しました');
+        reportFailures('一部の画像を作れませんでした', failures);
       } else {
         toast.success('画像をまとめて作りました');
       }
@@ -436,11 +428,13 @@ export function ImageManagePage() {
     batch,
     batchTargets.parts,
     busy,
+    clearError,
     commit,
     ensurePrompt,
     jobActive,
     projectId,
     reportError,
+    reportFailures,
     toast,
   ]);
 
@@ -597,18 +591,9 @@ export function ImageManagePage() {
   }
 
   if (!project) {
-    return (
-      <div className="flex flex-1 items-center justify-center">
-        <EmptyState
-          title="プロジェクトを読み込めません"
-          description={loadError || 'プロジェクトが見つかりません'}
-          action={<Button onClick={() => navigate('/projects')}>プロジェクト一覧に戻る</Button>}
-        />
-      </div>
-    );
+    return <ProjectLoadFailure error={loadError} onBack={() => navigate('/projects')} />;
   }
 
-  const returnTo = `/projects/${project.id}/image`;
   const busyHere = busy && selectedPart && busy.partId === selectedPart.id ? busy : null;
   const hasImages = (selectedPart?.panelImages.length ?? 0) > 0;
   const createLabel = !hasImages
@@ -663,7 +648,13 @@ export function ImageManagePage() {
           ref={scrollRef}
           className="@container nv-scrollbar min-h-0 min-w-0 flex-1 space-y-4 overflow-auto pr-1"
         >
-          <ErrorNotice error={error} onDismiss={() => setError(null)} returnTo={returnTo} />
+          {error && (
+            <FriendlyError
+              title={error.title}
+              explanation={error.explanation}
+              onDismiss={clearError}
+            />
+          )}
 
           <Card
             title="まとめて作る"

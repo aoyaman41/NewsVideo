@@ -54,3 +54,4 @@
 | 日付 | 内容 |
 |---|---|
 | 2026-09-26 | 指示書作成。Opus サブエージェントに worktree 分離で発注 |
+| 2026-09-26 | M4-C 完了(worktree `agent-a31961a580df7440b`、424330f に reset、44 ファイル +1500/−971)。メインループで typecheck / lint / test(485 件)/ audit:licenses を確認し、統合した。範囲を少し超えた判断: Main の `settings:get` / `settings:set` を 1 件ずつ順に処理するようにした(記事画面と設定画面の保存が重なって変更が消えるのを防ぐため。テストあり)→ メインループが妥当と判断。撮影スクリプトに `welcome.png` と `job-progress.png` を追加したが、撮影は未実施(README の画像表への追加は撮影後) |

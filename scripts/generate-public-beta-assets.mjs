@@ -24,6 +24,7 @@ const fontPath = '/System/Library/Fonts/Supplemental/Menlo.ttc';
 const COMPLETE_PROJECT_ID = '0fbbd0df-33bb-4cfa-a4d1-5dc8d925ebad';
 const SCRIPT_ONLY_PROJECT_ID = 'b1557e92-ef7a-49a1-a9da-f0eae2349d8c';
 const ARTICLE_ONLY_PROJECT_ID = 'c1d24302-e23f-4dc7-a1b1-c457cf6f848a';
+const SCRIPT_REVIEW_JOB_ID = '5f0c3a8e-2d41-4c7b-9a6e-3b8f1d2c4e5a';
 
 const articleFixture = {
   title: '再エネ拡大と蓄電池導入、来夏の電力需給を左右　系統混雑も課題',
@@ -108,9 +109,15 @@ const partFixtures = [
   },
 ];
 
+// 並び順は GIF(workflow-demo.gif)の順番でもある
 const screenshotTargets = [
+  // 初回起動のようこそ画面(隔離プロファイルには API キーがないので、3 つとも「未設定」で写る)
+  { route: '/welcome', fileName: 'welcome.png' },
   { route: '/projects', fileName: 'project-list.png' },
   { route: `/projects/${COMPLETE_PROJECT_ID}/article`, fileName: 'article-input.png' },
+  // 画面上部の自動生成の進捗表示。起動時に実行中のジョブは「中断」に戻るため、
+  // 「確認しながら」進めて台本の確認で止まっているジョブ(createScriptOnlyProject)を写す
+  { route: `/projects/${SCRIPT_ONLY_PROJECT_ID}/script`, fileName: 'job-progress.png' },
   { route: `/projects/${COMPLETE_PROJECT_ID}/image`, fileName: 'image-workflow.png' },
   { route: `/projects/${COMPLETE_PROJECT_ID}/video`, fileName: 'video-export.png' },
 ];
@@ -437,6 +444,26 @@ async function createScriptOnlyProject(projectsDir) {
     schemaVersion: 'v1.1',
     createdAt,
     updatedAt,
+    // 進捗表示の撮影用: 「確認しながら」進めて、台本ができたところで止まっている自動生成ジョブ
+    job: {
+      id: SCRIPT_REVIEW_JOB_ID,
+      status: 'paused',
+      stage: '台本の確認',
+      mode: 'review',
+      targetPartCount: 1,
+      startedAt: createdAt,
+      updatedAt,
+      completed: ['script'],
+      outputs: [],
+      reviewedStages: [],
+      cancelRequested: false,
+      settings: {},
+      budgetUsd: 5,
+      spentUsd: 0.04,
+      estimatedRemainingUsd: 0.6,
+      unknownCharges: 0,
+      progress: { script: { done: 1, total: 1 } },
+    },
   });
   await writeJson(path.join(projectDir, 'article.json'), {
     title: '地方空港と訪日需要、夏ダイヤで便数回復',

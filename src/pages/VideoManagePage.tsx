@@ -14,14 +14,15 @@ import {
   Card,
   Checkbox,
   Details,
-  EmptyState,
   ProgressBar,
   useConfirm,
   useToast,
 } from '../components/ui';
 import { SceneList } from '../components/common/SceneList';
-import { ErrorNotice } from '../components/common/ErrorNotice';
-import { describeError, type FriendlyError } from '../components/common/friendlyError';
+import { FriendlyError } from '../components/errors/FriendlyError';
+import { explainError } from '../components/errors/explainError';
+import { ProjectLoadFailure } from '../components/errors/ProjectLoadFailure';
+import { useErrorReport } from '../components/errors/useErrorReport';
 import { useJobActive } from '../components/common/useJobActive';
 import {
   alignCaptionsToScript,
@@ -33,6 +34,7 @@ import {
 import { loadForPreview } from '../components/common/renderPrep';
 import type { AutoGenerationStatus, Project } from '../schemas';
 import { toLocalFileUrl } from '../utils/toLocalFileUrl';
+import { isOwnVideoProgress, type VideoProgressEvent } from '../utils/videoProgress';
 import {
   getDefaultPresentationProfile,
   normalizePresentationProfile,
@@ -49,14 +51,10 @@ type Settings = {
   endingVideoPath: string;
 };
 
-type VideoProgress = {
-  stage?: string;
-  percent?: number;
-  current?: number;
-  total?: number;
-  message?: string;
-  error?: string;
-};
+type VideoProgress = VideoProgressEvent;
+
+/** この画面で実行中の書き出し・プレビュー(進捗イベントの取り違えを防ぐため、1 回ごとに別の値にする) */
+type ActiveOperation = { kind: 'preview' | 'render' };
 
 type ResolvedVideoAsset = {
   path: string;
@@ -129,8 +127,8 @@ export function VideoManagePage() {
   >({ kind: 'output' });
   const [videoSrcVersion, setVideoSrcVersion] = useState(0);
   const [mediaError, setMediaError] = useState<string | null>(null);
-  const [error, setError] = useState<FriendlyError | null>(null);
-  const [loadError, setLoadError] = useState<string | null>(null);
+  const { reported: error, report: reportError, clear: clearError } = useErrorReport();
+  const [loadError, setLoadError] = useState<unknown>(null);
 
   const [isLoading, setIsLoading] = useState(true);
   const [isPreviewing, setIsPreviewing] = useState(false);
@@ -142,18 +140,9 @@ export function VideoManagePage() {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const lastVideoPathRef = useRef<string | null>(null);
   const lastVideoIdentityRef = useRef<string | null>(null);
+  const activeOperationRef = useRef<ActiveOperation | null>(null);
   const savedPresentationProfileRef = useRef<string>(
     JSON.stringify(getDefaultPresentationProfile())
-  );
-
-  const reportError = useCallback(
-    (err: unknown, title: string) => {
-      console.error(title, err);
-      const friendly = describeError(err, title);
-      setError(friendly);
-      toast.error(friendly.message, friendly.title);
-    },
-    [toast]
   );
 
   const syncVideoAsset = useCallback((path: string, identity: string) => {
@@ -267,17 +256,18 @@ export function VideoManagePage() {
     const unsubscribe = window.electronAPI.events.subscribe(
       'progress:update',
       (payload: unknown) => {
-        const p = payload as { source?: string } & VideoProgress;
-        if (p?.source !== 'video') return;
-        setProgress(p);
+        // 別のプロジェクトや自動生成ジョブの書き出しの進捗は出さない(ジョブは画面上部に出る)
+        const target = { projectId, kind: activeOperationRef.current?.kind ?? null };
+        if (!isOwnVideoProgress(payload, target)) return;
+        setProgress(payload);
         setShowProgress(true);
-        if (typeof p.percent === 'number' && p.percent >= 100) {
+        if (typeof payload.percent === 'number' && payload.percent >= 100) {
           setTimeout(() => setShowProgress(false), 800);
         }
       }
     );
     return unsubscribe;
-  }, []);
+  }, [projectId]);
 
   useEffect(() => {
     const load = async () => {
@@ -381,7 +371,7 @@ export function VideoManagePage() {
         }
       } catch (err) {
         console.error('Failed to load project/settings:', err);
-        setLoadError(describeError(err, '読み込めませんでした').message);
+        setLoadError(err);
       } finally {
         setIsLoading(false);
       }
@@ -496,9 +486,12 @@ export function VideoManagePage() {
     }
     const partId = selectedPart.id;
     const sceneNo = selectedPart.index + 1;
+    const operation: ActiveOperation = { kind: 'preview' };
+    activeOperationRef.current = operation;
     try {
       setIsPreviewing(true);
-      setError(null);
+      clearError();
+      setProgress(null);
       const res = await withRenderConflictRetry(projectId, async () => {
         // 画面が意図した内容を保存してから渡す(Main 側で最新の保存内容と照合する)
         const intended = await loadForPreview(projectId);
@@ -510,11 +503,13 @@ export function VideoManagePage() {
         if (videoRef.current) videoRef.current.currentTime = 0;
       }, 0);
     } catch (err) {
-      reportError(err, 'プレビューを作れませんでした');
+      // 「止める」で止めたときは、止めたことを通知済みなのでエラーにしない
+      if (explainError(err).kind !== 'cancelled') reportError(err, 'プレビューを作れませんでした');
     } finally {
+      if (activeOperationRef.current === operation) activeOperationRef.current = null;
       setIsPreviewing(false);
     }
-  }, [forceReloadVideoAsset, jobActive, projectId, reportError, selectedPart, toast]);
+  }, [clearError, forceReloadVideoAsset, jobActive, projectId, reportError, selectedPart, toast]);
 
   const handleRender = useCallback(async () => {
     if (!project) return;
@@ -527,9 +522,11 @@ export function VideoManagePage() {
       return;
     }
 
+    const operation: ActiveOperation = { kind: 'render' };
+    activeOperationRef.current = operation;
     try {
       setIsRendering(true);
-      setError(null);
+      clearError();
       setShowProgress(true);
       setProgress({ stage: 'preparing', percent: 0 });
 
@@ -565,11 +562,13 @@ export function VideoManagePage() {
       }, 0);
       toast.success('動画を書き出しました', '完成しました');
     } catch (err) {
-      reportError(err, '動画を書き出せませんでした');
+      if (explainError(err).kind !== 'cancelled') reportError(err, '動画を書き出せませんでした');
     } finally {
+      if (activeOperationRef.current === operation) activeOperationRef.current = null;
       setIsRendering(false);
     }
   }, [
+    clearError,
     forceReloadVideoAsset,
     jobActive,
     outputPath,
@@ -582,16 +581,16 @@ export function VideoManagePage() {
 
   const handleCancel = useCallback(async () => {
     try {
-      await window.electronAPI.video.cancelRender();
+      await window.electronAPI.video.cancelRender(projectId);
       setShowProgress(false);
       setIsRendering(false);
       setIsPreviewing(false);
-      setError(null);
+      clearError();
       toast.info('動画の処理を止めました。', '止めました');
     } catch (err) {
       console.warn('Failed to cancel render:', err);
     }
-  }, [toast]);
+  }, [clearError, projectId, toast]);
 
   if (isLoading) {
     return (
@@ -602,18 +601,9 @@ export function VideoManagePage() {
   }
 
   if (!project || !settings || !readiness) {
-    return (
-      <div className="flex flex-1 items-center justify-center">
-        <EmptyState
-          title="プロジェクトを読み込めません"
-          description={loadError || 'プロジェクトが見つかりません'}
-          action={<Button onClick={() => navigate('/projects')}>プロジェクト一覧に戻る</Button>}
-        />
-      </div>
-    );
+    return <ProjectLoadFailure error={loadError} onBack={() => navigate('/projects')} />;
   }
 
-  const returnTo = `/projects/${project.id}/video`;
   const busy = isRendering || isPreviewing;
   const captions = captionState(project);
   const captionMismatches = captionMismatchParts(project);
@@ -672,7 +662,13 @@ export function VideoManagePage() {
           ref={scrollRef}
           className="@container nv-scrollbar min-h-0 min-w-0 flex-1 space-y-4 overflow-auto pr-1"
         >
-          <ErrorNotice error={error} onDismiss={() => setError(null)} returnTo={returnTo} />
+          {error && (
+            <FriendlyError
+              title={error.title}
+              explanation={error.explanation}
+              onDismiss={clearError}
+            />
+          )}
 
           <Card
             emphasis

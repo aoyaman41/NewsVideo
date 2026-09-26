@@ -1,6 +1,6 @@
 import { useEffect } from 'react';
 import { ensureJobEvents, onJobTransition } from '../../stores/jobStore';
-import { explainError } from '../errors/explainError';
+import { errorToastContent, explainError } from '../errors/explainError';
 import { useToast } from '../ui';
 
 /**
@@ -16,10 +16,11 @@ export function JobNotifier() {
       if (job.status === 'completed') {
         toast.success('画面上部の「動画を見る」から確認できます。', '動画ができました');
       } else if (job.status === 'failed') {
-        toast.error(
-          explainError(job.error?.message ?? '', { kind: job.error?.kind }).title,
+        const content = errorToastContent(
+          explainError(job.error?.message ?? '', { kind: job.error?.kind }),
           '自動生成が途中で止まりました'
         );
+        toast.error(content.message, content.title);
       }
     });
   }, [toast]);

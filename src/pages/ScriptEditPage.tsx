@@ -8,8 +8,9 @@ import { PartList, ScenePreview, ScriptEditor } from '../components/script';
 import { Button, EmptyState, useConfirm, useToast } from '../components/ui';
 import { StaleNotice } from '../components/common/StaleNotice';
 import { NarrationOverrideNotice } from '../components/common/NarrationOverrideNotice';
-import { ErrorNotice } from '../components/common/ErrorNotice';
-import { describeError, type FriendlyError } from '../components/common/friendlyError';
+import { FriendlyError } from '../components/errors/FriendlyError';
+import { ProjectLoadFailure } from '../components/errors/ProjectLoadFailure';
+import { useErrorReport } from '../components/errors/useErrorReport';
 import { JOB_ACTIVE_MESSAGE, useJobActive } from '../components/common/useJobActive';
 import type { PartEdit, Project } from '../schemas';
 import { createNewPart } from '../schemas';
@@ -27,22 +28,12 @@ export function ScriptEditPage() {
   const scrollRef = useScrollMemory(`${projectId}:script:${selectedPartId}`);
   const jobActive = useJobActive(projectId, project);
   const [isLoading, setIsLoading] = useState(true);
-  const [loadError, setLoadError] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<unknown>(null);
   const [isProcessing, setIsProcessing] = useState(false);
-  const [error, setError] = useState<FriendlyError | null>(null);
+  const { reported: error, report: reportError, clear: clearError } = useErrorReport();
   const [lastDiffByPart, setLastDiffByPart] = useState<
     Record<string, { before: string; after: string }>
   >({});
-
-  const reportError = useCallback(
-    (err: unknown, title: string) => {
-      console.error(title, err);
-      const friendly = describeError(err, title);
-      setError(friendly);
-      toast.error(friendly.message, friendly.title);
-    },
-    [toast]
-  );
 
   useEffect(() => {
     if (!projectId) return;
@@ -56,7 +47,7 @@ export function ScriptEditPage() {
         }
       } catch (err) {
         console.error('Failed to load project:', err);
-        setLoadError(describeError(err, '読み込めませんでした').message);
+        setLoadError(err);
       } finally {
         setIsLoading(false);
       }
@@ -181,7 +172,7 @@ export function ScriptEditPage() {
       if (!part) return;
 
       setIsProcessing(true);
-      setError(null);
+      clearError();
       try {
         const before = part.scriptText;
         const result = await window.electronAPI.ai.applyComment(
@@ -231,7 +222,7 @@ export function ScriptEditPage() {
         setIsProcessing(false);
       }
     },
-    [project, reportError, setProject, toast]
+    [clearError, project, reportError, setProject, toast]
   );
 
   const closeDiff = useCallback((partId: string) => {
@@ -288,18 +279,9 @@ export function ScriptEditPage() {
   }
 
   if (!project) {
-    return (
-      <div className="flex flex-1 items-center justify-center">
-        <EmptyState
-          title="プロジェクトを読み込めません"
-          description={loadError || 'プロジェクトが見つかりません'}
-          action={<Button onClick={() => navigate('/projects')}>プロジェクト一覧に戻る</Button>}
-        />
-      </div>
-    );
+    return <ProjectLoadFailure error={loadError} onBack={() => navigate('/projects')} />;
   }
 
-  const returnTo = `/projects/${project.id}/script`;
   const hasNext = selectedPart ? selectedPart.index < project.parts.length - 1 : false;
 
   return (
@@ -324,7 +306,13 @@ export function ScriptEditPage() {
           ref={scrollRef}
           className="@container nv-scrollbar min-h-0 min-w-0 flex-1 space-y-4 overflow-auto pr-1"
         >
-          <ErrorNotice error={error} onDismiss={() => setError(null)} returnTo={returnTo} />
+          {error && (
+            <FriendlyError
+              title={error.title}
+              explanation={error.explanation}
+              onDismiss={clearError}
+            />
+          )}
 
           {selectedPart ? (
             <div className="grid items-start gap-4 @4xl:grid-cols-[minmax(0,1fr)_20rem]">

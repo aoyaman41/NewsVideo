@@ -20,12 +20,9 @@ import {
 import { SceneList } from '../components/common/SceneList';
 import { StaleNotice } from '../components/common/StaleNotice';
 import { NarrationOverrideNotice } from '../components/common/NarrationOverrideNotice';
-import { ErrorNotice } from '../components/common/ErrorNotice';
-import {
-  describeError,
-  describeFailures,
-  type FriendlyError,
-} from '../components/common/friendlyError';
+import { FriendlyError } from '../components/errors/FriendlyError';
+import { ProjectLoadFailure } from '../components/errors/ProjectLoadFailure';
+import { useErrorReport } from '../components/errors/useErrorReport';
 import { JOB_ACTIVE_MESSAGE, useJobActive } from '../components/common/useJobActive';
 import { useProjectCommit } from '../components/common/useProjectCommit';
 import { runLimited } from '../components/common/runLimited';
@@ -106,8 +103,13 @@ export function AudioManagePage() {
   const jobActive = useJobActive(projectId, project);
 
   const [isLoading, setIsLoading] = useState(true);
-  const [loadError, setLoadError] = useState<string | null>(null);
-  const [error, setError] = useState<FriendlyError | null>(null);
+  const [loadError, setLoadError] = useState<unknown>(null);
+  const {
+    reported: error,
+    report: reportError,
+    reportFailures,
+    clear: clearError,
+  } = useErrorReport();
   const [busyPartId, setBusyPartId] = useState<string | null>(null);
   const [batchProgress, setBatchProgress] = useState<{ current: number; total: number } | null>(
     null
@@ -119,16 +121,6 @@ export function AudioManagePage() {
   const cancelRef = useRef(false);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const syncListRef = useRef<HTMLOListElement | null>(null);
-
-  const reportError = useCallback(
-    (err: unknown, title: string) => {
-      console.error(title, err);
-      const friendly = describeError(err, title);
-      setError(friendly);
-      toast.error(friendly.message, friendly.title);
-    },
-    [toast]
-  );
 
   useEffect(() => {
     const load = async () => {
@@ -146,7 +138,7 @@ export function AudioManagePage() {
         }
       } catch (err) {
         console.error('Failed to load project/settings:', err);
-        setLoadError(describeError(err, '読み込めませんでした').message);
+        setLoadError(err);
       } finally {
         setIsLoading(false);
       }
@@ -249,7 +241,7 @@ export function AudioManagePage() {
 
   const handleGenerateForSelected = useCallback(async () => {
     if (!selectedPart || busyPartId || batchProgress || jobActive) return;
-    setError(null);
+    clearError();
     setBusyPartId(selectedPart.id);
     try {
       await generateFor(selectedPart);
@@ -259,7 +251,16 @@ export function AudioManagePage() {
     } finally {
       setBusyPartId(null);
     }
-  }, [batchProgress, busyPartId, generateFor, jobActive, reportError, selectedPart, toast]);
+  }, [
+    batchProgress,
+    busyPartId,
+    clearError,
+    generateFor,
+    jobActive,
+    reportError,
+    selectedPart,
+    toast,
+  ]);
 
   const handleClearAudio = useCallback(async () => {
     if (!selectedPart?.audio) return;
@@ -296,7 +297,7 @@ export function AudioManagePage() {
     const list = targets.parts;
     if (list.length === 0) return;
     cancelRef.current = false;
-    setError(null);
+    clearError();
     setBatchProgress({ current: 0, total: list.length });
     const failures: Array<{ label: string; error: unknown }> = [];
     let completed = 0;
@@ -316,8 +317,7 @@ export function AudioManagePage() {
       if (cancelRef.current) {
         toast.info('まとめて作るのを止めました。できた音声は使われています。', '止めました');
       } else if (failures.length > 0) {
-        setError(describeFailures('一部の音声を作れませんでした', failures));
-        toast.warning('一部の音声を作れませんでした。', '一部失敗しました');
+        reportFailures('一部の音声を作れませんでした', failures);
       } else {
         toast.success('音声をまとめて作りました');
       }
@@ -330,10 +330,12 @@ export function AudioManagePage() {
   }, [
     batchProgress,
     busyPartId,
+    clearError,
     generateFor,
     jobActive,
     projectId,
     reportError,
+    reportFailures,
     targets.parts,
     toast,
   ]);
@@ -430,15 +432,7 @@ export function AudioManagePage() {
   }
 
   if (!project) {
-    return (
-      <div className="flex flex-1 items-center justify-center">
-        <EmptyState
-          title="プロジェクトを読み込めません"
-          description={loadError || 'プロジェクトが見つかりません'}
-          action={<Button onClick={() => navigate('/projects')}>プロジェクト一覧に戻る</Button>}
-        />
-      </div>
-    );
+    return <ProjectLoadFailure error={loadError} onBack={() => navigate('/projects')} />;
   }
 
   const returnTo = `/projects/${project.id}/audio`;
@@ -492,7 +486,13 @@ export function AudioManagePage() {
           ref={scrollRef}
           className="@container nv-scrollbar min-h-0 min-w-0 flex-1 space-y-4 overflow-auto pr-1"
         >
-          <ErrorNotice error={error} onDismiss={() => setError(null)} returnTo={returnTo} />
+          {error && (
+            <FriendlyError
+              title={error.title}
+              explanation={error.explanation}
+              onDismiss={clearError}
+            />
+          )}
 
           <Card
             title="まとめて作る"

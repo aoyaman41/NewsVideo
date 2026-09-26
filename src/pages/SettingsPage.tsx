@@ -2,7 +2,9 @@ import { useEffect, useMemo, useState, type KeyboardEvent, type ReactNode } from
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useAutoSave } from '../hooks';
 import { Header } from '../components/layout';
-import { Button, Card, ErrorDetailPanel, useToast } from '../components/ui';
+import { Button, Card, useToast } from '../components/ui';
+import { FriendlyError } from '../components/errors/FriendlyError';
+import { errorToastContent, explainError } from '../components/errors/explainError';
 import { ApiKeyList } from '../components/onboarding/ApiKeyList';
 import { API_KEY_SERVICE_INFO, type ApiKeyService } from '../components/onboarding/apiKeys';
 import { useApiKeyStatus } from '../components/onboarding/useApiKeyStatus';
@@ -11,7 +13,11 @@ import {
   readSettingsLocationState,
   type SettingsSection,
 } from '../components/settings/settingsNavigation';
-import { useGenerationPreferences } from '../stores/generationPreferences';
+import {
+  budgetToUsd,
+  ensureGenerationPreferencesMigrated,
+  forgetLegacyGenerationPreferences,
+} from '../stores/generationPreferences';
 import { cx } from '../utils/cx';
 import { normalizeSettings, type AppSettings } from '../../shared/settings/appSettings';
 import {
@@ -65,8 +71,9 @@ const SECTIONS: Array<{ key: SettingsSection; label: string }> = [
   { key: 'advanced', label: '詳細設定' },
 ];
 
-const fieldLabel = 'mb-1 block text-xs font-semibold text-[var(--nv-color-muted)]';
-const fieldHint = 'mt-1 text-xs text-[var(--nv-color-muted)]';
+// 見た目は M4-B の共通クラス(src/styles/utilities.css の .nv-label / .nv-help)にそろえる
+const fieldLabel = 'nv-label';
+const fieldHint = 'nv-help mt-1';
 
 function formatOpenAIReasoningLabel(value: OpenAIReasoningEffort): string {
   const labels: Record<Exclude<OpenAIReasoningEffort, 'default'>, string> = {
@@ -187,12 +194,11 @@ export function SettingsPage() {
   );
 
   const { status: keyStatus, markSaved } = useApiKeyStatus();
-  const [preferences, setPreferences] = useGenerationPreferences();
   const [settings, setSettings] = useState<Settings>(() => normalizeSettings({}));
   const [ttsVoices, setTtsVoices] = useState<VoiceInfo[]>([]);
   const [isLoadingTtsVoices, setIsLoadingTtsVoices] = useState(false);
   const [hasLoadedSettings, setHasLoadedSettings] = useState(false);
-  const [settingsSaveError, setSettingsSaveError] = useState<string | null>(null);
+  const [settingsSaveError, setSettingsSaveError] = useState<unknown>(null);
   const [activeSection, setActiveSection] = useState<SettingsSection>(requestedSection ?? 'api');
   const [shownRequest, setShownRequest] = useState(location.key);
 
@@ -206,6 +212,8 @@ export function SettingsPage() {
     let active = true;
     const load = async () => {
       try {
+        // 以前の版が画面側に覚えていた進め方と予算を、先に設定へ移してから読む
+        await ensureGenerationPreferencesMigrated();
         const loaded = await window.electronAPI.settings.get();
         if (active) setSettings(normalizeSettings(loaded));
       } catch (error) {
@@ -263,10 +271,11 @@ export function SettingsPage() {
         await window.electronAPI.settings.set(
           payload as Parameters<typeof window.electronAPI.settings.set>[0]
         );
+        // 進め方と予算も保存したので、以前の版の値(localStorage)は使わない
+        forgetLegacyGenerationPreferences();
         setSettingsSaveError(null);
       } catch (error) {
-        const message = error instanceof Error ? error.message : '不明なエラー';
-        setSettingsSaveError(message);
+        setSettingsSaveError(error);
         throw error;
       }
     },
@@ -276,7 +285,7 @@ export function SettingsPage() {
     if (!hasLoadedSettings) {
       return { label: '読み込み中', tone: 'neutral' as const };
     }
-    if (settingsSaveError) {
+    if (settingsSaveError !== null) {
       return { label: '保存できませんでした', tone: 'danger' as const };
     }
     if (settingsAutoSave.isSaving || settingsAutoSave.isDirty) {
@@ -551,10 +560,10 @@ export function SettingsPage() {
             ))}
           </div>
 
-          {settingsSaveError && (
-            <ErrorDetailPanel
-              title="保存できませんでした"
-              message={`設定を自動で保存できませんでした。変更内容は画面に残っています。詳しい内容: ${settingsSaveError}`}
+          {settingsSaveError !== null && (
+            <FriendlyError
+              title="設定を保存できませんでした(変更内容は画面に残っています)"
+              error={settingsSaveError}
             />
           )}
 
@@ -877,11 +886,12 @@ export function SettingsPage() {
                         </label>
                         <select
                           id="settings-mode"
-                          value={preferences.mode}
+                          value={settings.generationMode}
                           onChange={(e) =>
-                            setPreferences({
-                              mode: e.target.value === 'review' ? 'review' : 'automatic',
-                            })
+                            update(
+                              'generationMode',
+                              e.target.value === 'review' ? 'review' : 'automatic'
+                            )
                           }
                           className="nv-input"
                         >
@@ -898,8 +908,10 @@ export function SettingsPage() {
                           type="number"
                           min="0"
                           step="0.1"
-                          value={preferences.budgetUsd}
-                          onChange={(e) => setPreferences({ budgetUsd: e.target.value })}
+                          value={settings.generationBudgetUsd ?? ''}
+                          onChange={(e) =>
+                            update('generationBudgetUsd', budgetToUsd(e.target.value) ?? null)
+                          }
                           className="nv-input w-32"
                           placeholder="上限なし"
                         />
@@ -938,26 +950,6 @@ export function SettingsPage() {
                       {effortControl('script')}
                       {effortControl('image')}
                     </div>
-                  </Section>
-
-                  <Section
-                    title="同時に処理する数"
-                    description="1 つのサービスに同時に送る数です。多いほど速くなりますが、利用上限に達しやすくなります。"
-                  >
-                    <select
-                      aria-label="同時に処理する数"
-                      className="nv-input w-32"
-                      value={settings.generationConcurrency}
-                      onChange={(event) =>
-                        update('generationConcurrency', Number(event.target.value))
-                      }
-                    >
-                      {[1, 2, 3, 4].map((count) => (
-                        <option key={count} value={count}>
-                          {count}
-                        </option>
-                      ))}
-                    </select>
                   </Section>
 
                   <Section title="動画の書き出し">
@@ -1038,7 +1030,11 @@ export function SettingsPage() {
                           const file = await window.electronAPI.diagnostics.export();
                           if (file) toast.success('診断ファイルを保存しました');
                         } catch (error) {
-                          toast.error(String(error), '診断ファイルを保存できませんでした');
+                          const content = errorToastContent(
+                            explainError(error),
+                            '診断ファイルを保存できませんでした'
+                          );
+                          toast.error(content.message, content.title);
                         }
                       }}
                     >

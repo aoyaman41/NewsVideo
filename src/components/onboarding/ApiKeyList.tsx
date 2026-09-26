@@ -1,7 +1,7 @@
 import { useId, useState } from 'react';
 import type { Tone } from '../../types/ui';
 import { cleanErrorMessage } from '../errors/explainError';
-import { Button, StatusChip } from '../ui';
+import { Button, Details, StatusChip } from '../ui';
 import {
   API_KEY_SERVICE_INFO,
   API_KEY_SERVICES,
@@ -148,12 +148,11 @@ function ApiKeyRow({
             {result.summary}
           </p>
           {result.detail && (
-            <details className="mt-1 text-[var(--nv-color-muted)]">
-              <summary className="nv-focus-ring w-fit cursor-pointer rounded-[var(--nv-radius-sm)]">
-                詳しい内容
-              </summary>
-              <p className="mt-1 break-all">{result.detail}</p>
-            </details>
+            <Details summary="詳しい内容" className="mt-2">
+              <p className="break-all font-mono text-xs text-[var(--nv-color-muted)]">
+                {result.detail}
+              </p>
+            </Details>
           )}
         </div>
       )}

@@ -1,43 +1,39 @@
-import { useSyncExternalStore } from 'react';
+import {
+  DEFAULT_SETTINGS,
+  GENERATION_MODES,
+  type AppSettings,
+  type GenerationMode,
+} from '../../shared/settings/appSettings';
 
 /**
- * 自動生成の「進め方」と「予算の上限」の既定値。記事画面の詳細設定と設定画面の詳細設定の両方から
- * 変更でき、次に「おまかせで作る」を押したときに使う。ジョブ自体は開始時の値を保存しているので、
+ * 自動生成の「進め方」と「予算の上限」の既定値。保存先は AppSettings(settings.json の
+ * generationMode / generationBudgetUsd)。記事画面と設定画面の詳細設定の両方から変更でき、
+ * 次に「おまかせで作る」を押したときに使う。ジョブ自体は開始時の値を保存しているので、
  * 「続きから」はジョブに保存された値で再開する。
- * 設定ファイル(settings.json)のスキーマを変えないよう、この Mac の画面側だけで覚える。
  */
-export type GenerationMode = 'automatic' | 'review';
+export type { GenerationMode };
+
+/** 画面で扱う形。予算は入力途中の値も持てるよう文字列(空文字は上限なし) */
 export type GenerationPreferences = {
   mode: GenerationMode;
-  /** 空文字なら上限なし。USD の文字列(入力途中の値も保持する) */
   budgetUsd: string;
 };
 
-const STORAGE_KEY = 'newsvideo.generationPreferences.v1';
-// 既定は全自動(ユーザー決定 2026-09-26)。予算の既定値は従来の記事画面の初期値を引き継ぐ
-export const DEFAULT_GENERATION_PREFERENCES: GenerationPreferences = {
-  mode: 'automatic',
-  budgetUsd: '5',
-};
+type PreferenceSettings = Pick<AppSettings, 'generationMode' | 'generationBudgetUsd'>;
+export type GenerationPreferencesUpdate = Partial<PreferenceSettings>;
 
-const listeners = new Set<() => void>();
-let cached: GenerationPreferences | null = null;
+/** 以前(localStorage に保存していたころ)の保存場所。起動時に 1 回だけ AppSettings へ移して消す */
+export const LEGACY_PREFERENCES_STORAGE_KEY = 'newsvideo.generationPreferences.v1';
 
-export function parseGenerationPreferences(raw: string | null | undefined): GenerationPreferences {
-  if (!raw) return DEFAULT_GENERATION_PREFERENCES;
-  try {
-    const value = JSON.parse(raw) as Partial<GenerationPreferences>;
-    return {
-      mode: value.mode === 'review' ? 'review' : 'automatic',
-      budgetUsd:
-        typeof value.budgetUsd === 'string'
-          ? value.budgetUsd
-          : DEFAULT_GENERATION_PREFERENCES.budgetUsd,
-    };
-  } catch {
-    return DEFAULT_GENERATION_PREFERENCES;
-  }
+export function preferencesFromSettings(settings: PreferenceSettings): GenerationPreferences {
+  return {
+    mode: settings.generationMode,
+    budgetUsd: settings.generationBudgetUsd === null ? '' : String(settings.generationBudgetUsd),
+  };
 }
+
+export const DEFAULT_GENERATION_PREFERENCES: GenerationPreferences =
+  preferencesFromSettings(DEFAULT_SETTINGS);
 
 /** 予算の入力値を jobs.start に渡す値にする。空欄・不正・負の値は上限なし(undefined) */
 export function budgetToUsd(budgetUsd: string): number | undefined {
@@ -47,40 +43,146 @@ export function budgetToUsd(budgetUsd: string): number | undefined {
   return Number.isFinite(value) && value >= 0 ? value : undefined;
 }
 
-function read(): GenerationPreferences {
-  if (cached) return cached;
-  let raw: string | null = null;
+function toMode(value: unknown): GenerationMode | undefined {
+  return GENERATION_MODES.find((mode) => mode === value);
+}
+
+/** 画面での変更を、AppSettings の更新(settings.set に渡す値)にする */
+export function preferencesToSettings(
+  patch: Partial<GenerationPreferences>
+): GenerationPreferencesUpdate {
+  const update: GenerationPreferencesUpdate = {};
+  if (patch.mode !== undefined) update.generationMode = toMode(patch.mode) ?? 'automatic';
+  if (patch.budgetUsd !== undefined)
+    update.generationBudgetUsd = budgetToUsd(patch.budgetUsd) ?? null;
+  return update;
+}
+
+/**
+ * localStorage に残っている以前の値を、AppSettings の更新にする。値がなければ null。
+ * 壊れた値は空の更新(移すものはないが、鍵は消す)にする。
+ */
+export function legacyPreferencesToSettings(
+  raw: string | null | undefined
+): GenerationPreferencesUpdate | null {
+  if (raw === null || raw === undefined) return null;
+  let value: unknown;
   try {
-    raw = window.localStorage.getItem(STORAGE_KEY);
+    value = JSON.parse(raw);
   } catch {
-    raw = null;
+    return {};
   }
-  cached = parseGenerationPreferences(raw);
-  return cached;
+  if (!value || typeof value !== 'object') return {};
+  const legacy = value as { mode?: unknown; budgetUsd?: unknown };
+  const update: GenerationPreferencesUpdate = {};
+  const mode = toMode(legacy.mode);
+  if (mode) update.generationMode = mode;
+  if (typeof legacy.budgetUsd === 'string')
+    update.generationBudgetUsd = budgetToUsd(legacy.budgetUsd) ?? null;
+  return update;
 }
 
-export function getGenerationPreferences(): GenerationPreferences {
-  return read();
-}
+type LegacyStorage = Pick<Storage, 'getItem' | 'removeItem'>;
 
-export function setGenerationPreferences(patch: Partial<GenerationPreferences>): void {
-  cached = { ...read(), ...patch };
+/**
+ * 以前の値があれば AppSettings へ移し、localStorage から消す(移したら二度と移さない)。
+ * 保存に失敗したときは鍵を残し、次の起動でもう一度試す。移したら true。
+ */
+export async function migrateLegacyGenerationPreferences(
+  storage: LegacyStorage | null,
+  save: (update: GenerationPreferencesUpdate) => Promise<unknown>
+): Promise<boolean> {
+  if (!storage) return false;
+  let raw: string | null;
   try {
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(cached));
+    raw = storage.getItem(LEGACY_PREFERENCES_STORAGE_KEY);
   } catch {
-    /* 覚えられなくても今回の値は使える */
+    return false;
   }
-  listeners.forEach((listener) => listener());
+  const update = legacyPreferencesToSettings(raw);
+  if (update === null) return false;
+  if (Object.keys(update).length > 0) await save(update);
+  try {
+    storage.removeItem(LEGACY_PREFERENCES_STORAGE_KEY);
+  } catch {
+    /* 消せなくても、次の起動で同じ値をもう一度移すだけ */
+  }
+  return true;
 }
 
-function subscribe(listener: () => void) {
-  listeners.add(listener);
-  return () => {
-    listeners.delete(listener);
+function localStorageOrNull(): LegacyStorage | null {
+  try {
+    return window.localStorage;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 進め方と予算を設定に保存できたら、以前の値は消す。移行に失敗して鍵が残っていても、
+ * 次の起動で古い値を移し直して、新しく保存した値を上書きしないようにする。
+ */
+export function forgetLegacyGenerationPreferences(
+  storage: LegacyStorage | null = localStorageOrNull()
+): void {
+  try {
+    storage?.removeItem(LEGACY_PREFERENCES_STORAGE_KEY);
+  } catch {
+    /* 消せなくても、今回保存した値は使える */
+  }
+}
+
+let migration: Promise<void> | null = null;
+
+/**
+ * 以前の値の移行を、アプリの起動後に 1 回だけ行う(何度呼んでも同じ Promise を返す)。
+ * 進め方と予算を表示する画面は、設定を読む前にこれを待つ。
+ */
+export function ensureGenerationPreferencesMigrated(): Promise<void> {
+  migration ??= migrateLegacyGenerationPreferences(localStorageOrNull(), (update) =>
+    window.electronAPI.settings.set(update)
+  ).then(
+    () => undefined,
+    (error) => {
+      console.warn('Failed to migrate generation preferences:', error);
+    }
+  );
+  return migration;
+}
+
+/**
+ * 更新を 1 件ずつ順に保存する。保存中に届いた更新はまとめて次に送る
+ * (settings:set は読み込み→書き込みなので、同時に送ると古い値で上書きされることがある)。
+ */
+export function createSerialSettingsSaver(
+  save: (update: GenerationPreferencesUpdate) => Promise<unknown>
+) {
+  let pending: GenerationPreferencesUpdate | null = null;
+  let flushing: Promise<void> | null = null;
+  return (update: GenerationPreferencesUpdate): Promise<void> => {
+    pending = { ...pending, ...update };
+    flushing ??= (async () => {
+      try {
+        while (pending) {
+          const next: GenerationPreferencesUpdate = pending;
+          pending = null;
+          await save(next);
+        }
+      } finally {
+        flushing = null;
+      }
+    })();
+    return flushing;
   };
 }
 
-export function useGenerationPreferences() {
-  const preferences = useSyncExternalStore(subscribe, read);
-  return [preferences, setGenerationPreferences] as const;
+let saver: ReturnType<typeof createSerialSettingsSaver> | null = null;
+
+/** 記事画面から進め方と予算の既定値を保存する */
+export function saveGenerationPreferences(update: GenerationPreferencesUpdate): Promise<void> {
+  saver ??= createSerialSettingsSaver(async (next) => {
+    await window.electronAPI.settings.set(next);
+    forgetLegacyGenerationPreferences();
+  });
+  return saver(update);
 }

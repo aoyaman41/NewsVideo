@@ -5,11 +5,13 @@ import { useNavigate } from 'react-router-dom';
 import { Header } from '../components/layout';
 import { nextStepHint } from '../components/layout/workflowLabels';
 import { FriendlyError } from '../components/errors/FriendlyError';
+import { errorToastContent, explainError } from '../components/errors/explainError';
 import { isJobActive } from '../components/job/jobDisplay';
 import { MoreMenu } from '../components/project/MoreMenu';
 import {
   Button,
   Card,
+  Details,
   EmptyState,
   Skeleton,
   StatusChip,
@@ -30,6 +32,18 @@ const PURPOSE_DETAILS: Record<Purpose, string> = {
 
 // 一覧で最初に選ばれている種類を先頭にする
 const PURPOSE_ORDER: Purpose[] = ['news', 'explain', 'short'];
+
+type ManageAction = Parameters<typeof window.electronAPI.project.manage>[0]['action'];
+
+// 「…」メニューの操作に失敗したときの通知の見出し
+const MANAGE_FAILURE_TITLES: Record<ManageAction, string> = {
+  clone: '複製できませんでした',
+  archive: 'アーカイブを切り替えられませんでした',
+  export: 'バックアップを保存できませんでした',
+  import: 'バックアップから復元できませんでした',
+  trash: 'ごみ箱を開けませんでした',
+  restore: '元に戻せませんでした',
+};
 
 function formatDate(value: string): string {
   const date = new Date(value);
@@ -59,6 +73,14 @@ export function ProjectListPage() {
   const [search, setSearch] = useState('');
   const [showArchived, setShowArchived] = useState(false);
   const [trash, setTrash] = useState<Array<{ key: string; name: string }> | null>(null);
+
+  const showError = useCallback(
+    (error: unknown, title: string) => {
+      const content = errorToastContent(explainError(error), title);
+      toast.error(content.message, content.title);
+    },
+    [toast]
+  );
 
   const loadProjects = useCallback(async () => {
     setIsLoading(true);
@@ -99,9 +121,8 @@ export function ProjectListPage() {
       };
       toast.success(messages[request.action] ?? 'プロジェクトを更新しました');
     } catch (error) {
-      toast.error(
-        String(error).replace(/^Error invoking remote method '[^']*':\s*(Error:\s*)?/, '')
-      );
+      console.error('Failed to manage project:', error);
+      showError(error, MANAGE_FAILURE_TITLES[request.action]);
     }
   };
 
@@ -116,10 +137,7 @@ export function ProjectListPage() {
       navigate(`/projects/${created.id}/${sample ? 'video' : 'article'}`);
     } catch (error) {
       console.error('Failed to create project:', error);
-      toast.error(
-        error instanceof Error ? error.message : '不明なエラー',
-        sample ? 'サンプルを開けませんでした' : '作成できませんでした'
-      );
+      showError(error, sample ? 'サンプルを開けませんでした' : '作成できませんでした');
     } finally {
       setIsCreating(false);
     }
@@ -140,10 +158,7 @@ export function ProjectListPage() {
       toast.success('ごみ箱へ移動しました');
     } catch (error) {
       console.error('Failed to delete project:', error);
-      toast.error(
-        error instanceof Error ? error.message : '不明なエラー',
-        'ごみ箱へ移動できませんでした'
-      );
+      showError(error, 'ごみ箱へ移動できませんでした');
     }
   };
 
@@ -312,7 +327,11 @@ export function ProjectListPage() {
       <div className="flex-1 overflow-auto p-5">
         <div className="mx-auto flex w-full max-w-5xl flex-col gap-4">
           {loadError !== null && (
-            <FriendlyError error={loadError} onRetry={() => void loadProjects()} />
+            <FriendlyError
+              title="プロジェクトの一覧を読み込めませんでした"
+              error={loadError}
+              onRetry={() => void loadProjects()}
+            />
           )}
 
           {createOpen && createPanel}
@@ -430,14 +449,18 @@ export function ProjectListPage() {
                         {meta.join(' ・ ')}
                       </p>
                       {project.storageError && (
-                        <details className="mt-1 text-xs text-[var(--nv-color-danger)]">
-                          <summary className="nv-focus-ring w-fit cursor-pointer rounded-[var(--nv-radius-sm)]">
-                            保存データを読み込めませんでした
-                          </summary>
-                          <p className="mt-1 break-all text-[var(--nv-color-muted)]">
+                        <Details
+                          className="mt-2"
+                          summary={
+                            <span className="text-[var(--nv-color-danger)]">
+                              保存データを読み込めませんでした
+                            </span>
+                          }
+                        >
+                          <p className="break-all text-xs text-[var(--nv-color-muted)]">
                             {project.storageError}
                           </p>
-                        </details>
+                        </Details>
                       )}
                     </div>
                     <div className="flex shrink-0 items-center gap-2">

@@ -1,8 +1,12 @@
-import { stripRenderConflictMarker } from '../../../shared/project/renderIntent';
+import {
+  RENDER_CONFLICT_MARKER,
+  stripRenderConflictMarker,
+} from '../../../shared/project/renderIntent';
 
 /**
  * 例外の文字列をそのまま画面に出さず、原因と次の操作に言い換える(表示専用)。
  * 元の文字列は「詳しい内容」として折りたたみで見られるようにする。
+ * アプリ内のエラー表示(自動生成の進捗表示・記事画面・作業画面・設定画面・通知)はすべてこれを使う。
  */
 
 export type ErrorAction =
@@ -10,6 +14,8 @@ export type ErrorAction =
   | 'openApiKeys'
   /** 設定画面の生成モデルを開く(別のモデルで再実行する) */
   | 'chooseOtherModel'
+  /** 設定画面の動画を開く(動画の大きさを変える) */
+  | 'openVideoSettings'
   /** 同じ操作をもう一度試す(自動生成なら「続きから」) */
   | 'retry';
 
@@ -21,6 +27,7 @@ export type ErrorExplanation = {
     | 'refusal'
     | 'rate_limit'
     | 'network'
+    | 'stalled'
     | 'conflict'
     | 'input_changed'
     | 'busy'
@@ -29,12 +36,17 @@ export type ErrorExplanation = {
     | 'missing_assets'
     | 'cancelled'
     | 'unknown';
+  /** 原因(例:「AI サービスの利用上限に達しました」) */
   title: string;
+  /** 次にやること */
   description: string;
   actions: ErrorAction[];
-  /** 折りたたみで見せる元のエラー文(キーらしき文字列は伏せる)。言い換えと同じなら空文字 */
+  /** 折りたたみで見せる元のエラー文(キーらしき文字列は伏せる)。見せる必要がなければ空文字 */
   detail: string;
 };
+
+/** 画面に出しているエラー。何に失敗したか(title)と、その説明 */
+export type ReportedError = { title: string; explanation: ErrorExplanation };
 
 const SERVICE_NAMES: Array<[RegExp, string]> = [
   [/anthropic|claude/i, 'Anthropic'],
@@ -42,10 +54,13 @@ const SERVICE_NAMES: Array<[RegExp, string]> = [
   [/google|gemini/i, 'Google'],
 ];
 
+const JAPANESE = /[぀-ヿ一-鿿]/;
+
 function toMessage(error: unknown): string {
   if (error instanceof Error) return error.message;
   if (typeof error === 'string') return error;
-  if (error && typeof error === 'object' && 'message' in error) {
+  if (error === null || error === undefined) return '';
+  if (typeof error === 'object' && 'message' in error) {
     const message = (error as { message?: unknown }).message;
     if (typeof message === 'string') return message;
   }
@@ -62,12 +77,17 @@ export function cleanErrorMessage(error: unknown): string {
   message = message.replace(/^Error invoking remote method '[^']*':\s*/i, '');
   while (/^(?:[A-Za-z]*Error):\s*/.test(message))
     message = message.replace(/^[A-Za-z]*Error:\s*/, '');
-  message = stripRenderConflictMarker(message);
+  message = stripRenderConflictMarker(message).trim();
   message = message
     .replace(/sk-[A-Za-z0-9_-]{8,}/g, '[キーを伏せました]')
     .replace(/AIza[0-9A-Za-z_-]{20,}/g, '[キーを伏せました]')
     .replace(/(key=)[^&\s"']+/gi, '$1[キーを伏せました]');
   return message.length > 800 ? `${message.slice(0, 800)}…` : message;
+}
+
+/** 画面上の用語(シーン・台本)にそろえる */
+function toScreenTerms(text: string): string {
+  return text.replace(/パート/g, 'シーン').replace(/スクリプト|原稿/g, '台本');
 }
 
 function serviceIn(message: string): string | null {
@@ -90,10 +110,15 @@ function explanation(
  * @param hint 自動生成ジョブの分類(job.error.kind)が分かっている場合に渡す
  */
 export function explainError(error: unknown, hint?: { kind?: string }): ErrorExplanation {
+  const raw = toMessage(error);
   const detail = cleanErrorMessage(error);
   const kind = hint?.kind;
 
-  if (/APIキーが(?:設定されていません|未設定)|api.?key.*(?:not set|missing)/i.test(detail)) {
+  if (
+    /APIキーが(?:設定|登録)されていません|APIキーが未設定|api[\s_-]?key[^.]*(?:not set|missing|not configured)/i.test(
+      detail
+    )
+  ) {
     const service = serviceIn(detail);
     return explanation(
       'api_key_missing',
@@ -124,6 +149,7 @@ export function explainError(error: unknown, hint?: { kind?: string }): ErrorExp
     );
   }
 
+  // 文章の AI(Claude・GPT)が生成を断った
   if (/生成を拒否|AIが拒否|\brefusal\b/i.test(detail)) {
     return explanation(
       'refusal',
@@ -134,9 +160,22 @@ export function explainError(error: unknown, hint?: { kind?: string }): ErrorExp
     );
   }
 
+  // 画像などの安全上の判定(OpenAI の safety system、Gemini の PROHIBITED_CONTENT など)
+  if (/safety|PROHIBITED_CONTENT|content[\s_]policy|moderation/i.test(detail)) {
+    return explanation(
+      'refusal',
+      'AI が安全上の理由で生成を断りました',
+      '記事や指示の内容を見直すか、設定の「生成モデル」で別のモデルを選んでから、もう一度お試しください。',
+      ['chooseOtherModel', 'retry'],
+      detail
+    );
+  }
+
   if (
     kind === 'authentication' ||
-    /\b40[13]\b|unauthori[sz]ed|invalid.{0,12}(?:api.?)?key|authenticat|forbidden/i.test(detail)
+    /\b40[13]\b|unauthori[sz]ed|invalid.{0,12}(?:api.?)?key|incorrect api key|api key not valid|authenticat|forbidden|permission[\s_]denied/i.test(
+      detail
+    )
   ) {
     const service = serviceIn(detail);
     return explanation(
@@ -161,11 +200,36 @@ export function explainError(error: unknown, hint?: { kind?: string }): ErrorExp
     );
   }
 
+  // 書き出しの見張り(ウォッチドッグ)が、進まない書き出しを止めた。文に timeout を含むので接続の失敗より先に見る
+  if (/秒以上進まなかったため中断/.test(detail)) {
+    return explanation(
+      'stalled',
+      '動画の書き出しが進まなくなったため中断しました',
+      'Mac の負荷が高いときに起きることがあります。ほかのアプリを閉じるか、設定の「動画」で動画の大きさを小さくしてから、もう一度お試しください。',
+      ['openVideoSettings', 'retry'],
+      detail
+    );
+  }
+
   if (/生成中に入力が変更されました/.test(detail)) {
     return explanation(
       'input_changed',
       '生成中に記事や台本が変更されました',
       '作ったものは保存されています。「続きから」を押すと、変更に合わせて作り直します。',
+      ['retry'],
+      detail
+    );
+  }
+
+  // 書き出し・プレビューの順番を待つ間に、動画の内容が変わった([RENDER_CONFLICT])
+  if (raw.includes(RENDER_CONFLICT_MARKER) || /の順番を待つ間に、動画の内容/.test(detail)) {
+    const preview = /プレビューの順番/.test(detail);
+    return explanation(
+      'conflict',
+      preview
+        ? 'プレビューを待つ間にシーンの内容が変わりました'
+        : '書き出しを待つ間に動画の内容が変わりました',
+      'シーンの構成・画像・音声・字幕・締めの画面のどれかが、待っている間に変更されました。今の内容を確認してから、もう一度お試しください。',
       ['retry'],
       detail
     );
@@ -234,9 +298,29 @@ export function explainError(error: unknown, hint?: { kind?: string }): ErrorExp
     );
   }
 
+  if (/overloaded|\b529\b|\b50[23]\b|service unavailable/i.test(detail)) {
+    return explanation(
+      'network',
+      'AI サービスが混み合っています',
+      '少し時間をおいてから「もう一度試す」を押してください。',
+      ['retry'],
+      detail
+    );
+  }
+
+  if (/timed? ?out|タイムアウト/i.test(detail)) {
+    return explanation(
+      'network',
+      'AI サービスから応答がありませんでした',
+      'インターネット接続を確認し、少し時間をおいてから「もう一度試す」を押してください。',
+      ['retry'],
+      detail
+    );
+  }
+
   if (
     kind === 'transient' ||
-    /ECONNRESET|ECONNREFUSED|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|connection refused|fetch failed|network|timed? ?out|overloaded|(?:status|HTTP)\D{0,3}5\d\d|\b50[234]\b|\b529\b/i.test(
+    /ECONNRESET|ECONNREFUSED|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|connection refused|fetch failed|network|(?:status|HTTP)\D{0,3}5\d\d|\b504\b/i.test(
       detail
     )
   ) {
@@ -259,11 +343,50 @@ export function explainError(error: unknown, hint?: { kind?: string }): ErrorExp
     );
   }
 
+  // アプリが日本語で書いた短いエラー文(「画像は50MB以内で指定してください。」など)は、そのまま見せる
+  if (detail && JAPANESE.test(detail) && detail.length <= 160 && !/\n\s+at /.test(detail)) {
+    return explanation('unknown', '処理に失敗しました', toScreenTerms(detail), ['retry'], detail);
+  }
+
   return explanation(
     'unknown',
     '処理に失敗しました',
-    'もう一度お試しください。解決しない場合は、下の「詳しい内容」を添えてお知らせください。',
+    detail
+      ? 'もう一度お試しください。解決しない場合は、下の「詳しい内容」を添えてお知らせください。'
+      : 'もう一度お試しください。',
     ['retry'],
     detail
   );
+}
+
+/**
+ * まとめて作る処理で、一部のシーンが失敗したときの説明。
+ * 最初の失敗の原因と次の操作を示し、各シーンの元のエラー文は「詳しい内容」にまとめる。
+ */
+export function explainFailures(
+  failures: Array<{ label: string; error: unknown }>
+): ErrorExplanation {
+  const first = explainError(failures[0]?.error);
+  const labels = failures.map((failure) => failure.label);
+  const shown = labels.length > 5 ? `${labels.slice(0, 5).join('・')} ほか` : labels.join('・');
+  const lead = first.kind === 'unknown' ? '' : `${first.title}。`;
+  return {
+    ...first,
+    description: `${lead}${first.description}(うまくいかなかったシーン: ${shown})`,
+    detail: failures
+      .map((failure) => `${failure.label}: ${cleanErrorMessage(failure.error)}`)
+      .join('\n'),
+  };
+}
+
+/** 通知(トースト)に出す見出しと本文。title は「何に失敗したか」(省略すると原因を見出しにする) */
+export function errorToastContent(
+  explanation: ErrorExplanation,
+  title?: string
+): { title: string; message: string } {
+  if (!title) return { title: explanation.title, message: explanation.description };
+  return {
+    title,
+    message: explanation.kind === 'unknown' ? explanation.description : explanation.title,
+  };
 }
