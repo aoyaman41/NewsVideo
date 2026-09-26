@@ -123,6 +123,7 @@ export default defineConfig({
                 'fluent-ffmpeg',
                 /^openai(?:\/.*)?$/,
                 '@google/genai',
+                /^@anthropic-ai\/sdk(?:\/.*)?$/,
               ],
             },
           },

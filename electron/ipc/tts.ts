@@ -25,6 +25,7 @@ import {
   type TtsNarrationStylePreset,
 } from '../../shared/project/ttsNarrationStyles';
 import { splitScriptIntoSegments } from '../../shared/utils/ttsSegmentation';
+import { buildGeminiTtsRequest, decodeGeminiTtsAudio } from '../utils/geminiTts';
 
 const execFileAsync = promisify(execFile);
 const TTS_API_TIMEOUT_MS = 60_000;
@@ -159,31 +160,6 @@ function estimateDurationSec(text: string, speakingRate: number): number {
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(Math.max(value, min), max);
-}
-
-function pcm16leToWavBuffer(pcmData: Buffer, sampleRateHertz: number, channels: number): Buffer {
-  const bitsPerSample = 16;
-  const bytesPerSample = bitsPerSample / 8;
-  const byteRate = sampleRateHertz * channels * bytesPerSample;
-  const blockAlign = channels * bytesPerSample;
-  const dataSize = pcmData.length;
-
-  const header = Buffer.alloc(44);
-  header.write('RIFF', 0);
-  header.writeUInt32LE(36 + dataSize, 4);
-  header.write('WAVE', 8);
-  header.write('fmt ', 12);
-  header.writeUInt32LE(16, 16);
-  header.writeUInt16LE(1, 20); // PCM
-  header.writeUInt16LE(channels, 22);
-  header.writeUInt32LE(sampleRateHertz, 24);
-  header.writeUInt32LE(byteRate, 28);
-  header.writeUInt16LE(blockAlign, 32);
-  header.writeUInt16LE(bitsPerSample, 34);
-  header.write('data', 36);
-  header.writeUInt32LE(dataSize, 40);
-
-  return Buffer.concat([header, pcmData]);
 }
 
 function escapeSsmlText(text: string): string {
@@ -325,21 +301,16 @@ async function synthesizeGeminiTts(
   const modelId = isGeminiTtsModel(options.ttsModel) ? options.ttsModel : DEFAULT_GEMINI_TTS_MODEL;
 
   const ai = new GoogleGenAI({ apiKey });
+  const request = buildGeminiTtsRequest({
+    model: modelId,
+    text: promptText,
+    style: narrationInstruction,
+    voiceName,
+  });
 
   const response = await withRetry(
     async () => {
-      return ai.models.generateContent({
-        model: modelId,
-        contents: `${narrationInstruction}\n\n${promptText}`,
-        config: {
-          responseModalities: ['AUDIO'],
-          speechConfig: {
-            voiceConfig: {
-              prebuiltVoiceConfig: { voiceName },
-            },
-          },
-        },
-      });
+      return ai.models.generateContent(request);
     },
     2,
     1000
@@ -352,10 +323,8 @@ async function synthesizeGeminiTts(
     throw new Error('Gemini TTSの応答に音声データが含まれていません');
   }
 
-  const pcmData = Buffer.from(base64, 'base64');
-  const sampleRateHertz = 24000;
-  const channels = 1;
-  const wav = pcm16leToWavBuffer(pcmData, sampleRateHertz, channels);
+  // 3.8 系は RIFF ヘッダ付き WAV、3.1 以前はヘッダなし PCM を返す。実データで判定する。
+  const { wav, durationSec } = decodeGeminiTtsAudio(Buffer.from(base64, 'base64'));
 
   const now = new Date().toISOString();
   const audioId = randomUUID();
@@ -366,8 +335,6 @@ async function synthesizeGeminiTts(
   await fs.writeFile(filePath, wav);
   await fs.stat(filePath);
 
-  const durationSecRaw = pcmData.length / (sampleRateHertz * channels * 2);
-  const durationSec = Math.max(0.1, Math.round(durationSecRaw * 100) / 100);
   const segments = splitScriptIntoSegments(text);
   const audio: AudioAsset = {
     id: audioId,

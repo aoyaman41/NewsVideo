@@ -35,6 +35,13 @@ export const limitedOpenAIFetch: typeof fetch = (input, init) =>
     return fetch(input, init);
   });
 
+// Anthropic SDK の各試行(SDK 内蔵リトライを含む)を同時実行数の制御に乗せる
+export const limitedAnthropicFetch: typeof fetch = (input, init) =>
+  withProviderSlot('anthropic', () => {
+    init?.signal?.throwIfAborted();
+    return fetch(input, init);
+  });
+
 export async function retryTransient<T>(
   operation: () => Promise<T>,
   maxAttempts = 3,

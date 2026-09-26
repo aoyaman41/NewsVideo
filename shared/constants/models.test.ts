@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
   DEFAULT_GEMINI_TTS_MODEL,
+  GEMINI_TTS_MODELS,
   getSupportedGeminiThinkingLevels,
+  getGeminiTtsModelCapabilities,
   getGeminiTtsModelLabel,
   isGeminiTtsModel,
   GEMINI_TEXT_COMPLETION_MODELS,
@@ -16,12 +18,23 @@ import {
   isOpenAITextCompletionModel,
   supportsOpenAITemperature,
 } from './models';
+// Claude 関連は TTS 側の変更と衝突しないよう別の import にまとめる
+import {
+  ANTHROPIC_TEXT_COMPLETION_MODELS,
+  CLAUDE_EFFORTS,
+  getDefaultClaudeEffort,
+  getSupportedClaudeEfforts,
+  isAnthropicTextCompletionModel,
+  isClaudeEffort,
+  isGeminiTextCompletionModel,
+} from './models';
 
 describe('text completion models', () => {
-  it('composes the selector list from OpenAI and Gemini provider lists', () => {
+  it('composes the selector list from OpenAI, Gemini and Anthropic provider lists', () => {
     expect(TEXT_COMPLETION_MODELS).toEqual([
       ...OPENAI_TEXT_COMPLETION_MODELS,
       ...GEMINI_TEXT_COMPLETION_MODELS,
+      ...ANTHROPIC_TEXT_COMPLETION_MODELS,
     ]);
   });
 
@@ -33,6 +46,48 @@ describe('text completion models', () => {
     expect(isOpenAITextCompletionModel(model)).toBe(true);
     expect(getTextCompletionModelProvider(model)).toBe('openai');
     expect(getTextCompletionModelLabel(model)).toBe(label);
+  });
+});
+
+describe('Claude text completion models', () => {
+  it('registers Claude Opus 5.5 as a labeled Anthropic model without a date suffix', () => {
+    expect(ANTHROPIC_TEXT_COMPLETION_MODELS).toEqual(['claude-opus-5-5']);
+    expect(isAnthropicTextCompletionModel('claude-opus-5-5')).toBe(true);
+    expect(isOpenAITextCompletionModel('claude-opus-5-5')).toBe(false);
+    expect(isGeminiTextCompletionModel('claude-opus-5-5')).toBe(false);
+    expect(getTextCompletionModelLabel('claude-opus-5-5')).toBe('Claude Opus 5.5');
+  });
+
+  it.each([
+    ['gpt-5.2', 'openai'],
+    ['gemini-3.1-pro', 'gemini'],
+    ['claude-opus-5-5', 'anthropic'],
+  ] as const)('resolves the provider of %s to %s', (model, provider) => {
+    expect(getTextCompletionModelProvider(model)).toBe(provider);
+  });
+
+  it('rejects unknown Claude model ids', () => {
+    expect(isAnthropicTextCompletionModel('claude-opus-5-5-20260901')).toBe(false);
+    expect(isAnthropicTextCompletionModel(undefined)).toBe(false);
+  });
+
+  it('offers every documented effort for Opus 5.5 and defaults to high', () => {
+    expect(CLAUDE_EFFORTS).toEqual(['default', 'low', 'medium', 'high', 'xhigh', 'max']);
+    expect(getSupportedClaudeEfforts('claude-opus-5-5')).toEqual([
+      'low',
+      'medium',
+      'high',
+      'xhigh',
+      'max',
+    ]);
+    expect(getDefaultClaudeEffort('claude-opus-5-5')).toBe('high');
+  });
+
+  it('validates the persisted effort vocabulary', () => {
+    expect(isClaudeEffort('xhigh')).toBe(true);
+    expect(isClaudeEffort('default')).toBe(true);
+    expect(isClaudeEffort('none')).toBe(false);
+    expect(isClaudeEffort('minimal')).toBe(false);
   });
 });
 
@@ -128,11 +183,43 @@ describe('getSupportedGeminiThinkingLevels', () => {
 });
 
 describe('Gemini TTS models', () => {
-  it('includes Gemini 3.1 Flash TTS as the default selectable TTS model', () => {
-    expect(DEFAULT_GEMINI_TTS_MODEL).toBe('gemini-3.1-flash-tts-preview');
+  it('lists Gemini 3.8 Flash / Flash-Lite TTS first and uses 3.8 Flash TTS as the default', () => {
+    expect(GEMINI_TTS_MODELS.slice(0, 2)).toEqual([
+      'gemini-3.8-flash-tts',
+      'gemini-3.8-flash-lite-tts',
+    ]);
+    expect(DEFAULT_GEMINI_TTS_MODEL).toBe('gemini-3.8-flash-tts');
+    expect(isGeminiTtsModel('gemini-3.8-flash-tts')).toBe(true);
+    expect(isGeminiTtsModel('gemini-3.8-flash-lite-tts')).toBe(true);
+    expect(getGeminiTtsModelLabel('gemini-3.8-flash-tts')).toBe('Gemini 3.8 Flash TTS');
+    expect(getGeminiTtsModelLabel('gemini-3.8-flash-lite-tts')).toBe('Gemini 3.8 Flash-Lite TTS');
+  });
+
+  it('keeps Gemini 3.1 Flash TTS selectable', () => {
     expect(isGeminiTtsModel('gemini-3.1-flash-tts-preview')).toBe(true);
     expect(getGeminiTtsModelLabel('gemini-3.1-flash-tts-preview')).toBe(
       'Gemini 3.1 Flash TTS Preview'
     );
+  });
+
+  it('marks only the 3.8 models as verbatim-transcript models with WAV output', () => {
+    expect(getGeminiTtsModelCapabilities('gemini-3.8-flash-tts')).toEqual({
+      styleViaSpeechMetadata: true,
+      defaultAudioFormat: 'wav',
+    });
+    expect(getGeminiTtsModelCapabilities('gemini-3.8-flash-lite-tts')).toEqual({
+      styleViaSpeechMetadata: true,
+      defaultAudioFormat: 'wav',
+    });
+    for (const model of [
+      'gemini-3.1-flash-tts-preview',
+      'gemini-2.5-pro-preview-tts',
+      'gemini-2.5-flash-preview-tts',
+    ] as const) {
+      expect(getGeminiTtsModelCapabilities(model)).toEqual({
+        styleViaSpeechMetadata: false,
+        defaultAudioFormat: 'pcm',
+      });
+    }
   });
 });

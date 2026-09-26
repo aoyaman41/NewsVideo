@@ -426,3 +426,69 @@ describe('normalizeCostRates', () => {
     expect(legacyImageCost).toBeCloseTo(0.51, 10);
   });
 });
+
+describe('Gemini TTS cost', () => {
+  const ttsRecord = (model: string) =>
+    buildUsageRecord({
+      provider: 'gemini',
+      category: 'tts',
+      model,
+      inputTokens: 1_000_000,
+      outputTokens: 1_000_000,
+    });
+
+  it.each([
+    ['gemini-3.8-flash-tts', 0.5, 9],
+    ['gemini-3.8-flash-lite-tts', 0.5, 6],
+  ])('prices %s at the rate through 2026-12-31', (model, input, output) => {
+    expect(DEFAULT_COST_RATES.gemini.ttsRatesByModel[model]).toEqual({
+      inputPer1MTokensUsd: input,
+      outputPer1MTokensUsd: output,
+    });
+    expect(estimateUsageCostUsd(ttsRecord(model), normalizeCostRates(undefined))).toBeCloseTo(
+      input + output,
+      10
+    );
+  });
+
+  it('keeps pricing records without a known model at the previous default TTS rate', () => {
+    const rates = normalizeCostRates({});
+    expect(rates.gemini.ttsModel).toBe('gemini-3.1-flash-tts-preview');
+    for (const model of ['', 'gemini-unknown-tts']) {
+      expect(estimateUsageCostUsd(ttsRecord(model), rates)).toBeCloseTo(1 + 20, 10);
+    }
+    expect(estimateUsageCostUsd(ttsRecord('gemini-3.1-flash-tts-preview'), rates)).toBeCloseTo(
+      21,
+      10
+    );
+  });
+
+  it('applies legacy flat TTS rates to the previous default model, not the new default', () => {
+    const rates = normalizeCostRates({
+      gemini: { ttsInputPer1MTokensUsd: 2, ttsOutputPer1MTokensUsd: 30 },
+    });
+    expect(rates.gemini.ttsRatesByModel['gemini-3.1-flash-tts-preview']).toEqual({
+      inputPer1MTokensUsd: 2,
+      outputPer1MTokensUsd: 30,
+    });
+    expect(rates.gemini.ttsRatesByModel['gemini-3.8-flash-tts']).toEqual({
+      inputPer1MTokensUsd: 0.5,
+      outputPer1MTokensUsd: 9,
+    });
+  });
+
+  it('adds the 3.8 rates to saved cost settings that predate them', () => {
+    const rates = normalizeCostRates({
+      gemini: {
+        ttsModel: 'gemini-3.1-flash-tts-preview',
+        ttsRatesByModel: {
+          'gemini-3.1-flash-tts-preview': { inputPer1MTokensUsd: 1, outputPer1MTokensUsd: 20 },
+        },
+      },
+    });
+    expect(rates.gemini.ttsRatesByModel['gemini-3.8-flash-lite-tts']).toEqual({
+      inputPer1MTokensUsd: 0.5,
+      outputPer1MTokensUsd: 6,
+    });
+  });
+});

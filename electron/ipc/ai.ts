@@ -1,5 +1,10 @@
 import { scriptRequestSchema } from '../../shared/project/generationRequests';
-import { retryTransient, limitedOpenAIFetch } from '../utils/generationPolicy';
+import {
+  retryTransient,
+  limitedAnthropicFetch,
+  limitedOpenAIFetch,
+  withProviderSlot,
+} from '../utils/generationPolicy';
 import { generationSettings } from '../utils/generationContext';
 import { registerOperation } from './operations';
 import { app, safeStorage } from 'electron';
@@ -9,22 +14,31 @@ import OpenAI from 'openai';
 import { ContentFilterFinishReasonError, LengthFinishReasonError } from 'openai/core/error';
 import { zodResponseFormat } from 'openai/helpers/zod';
 import { GoogleGenAI, ThinkingLevel } from '@google/genai';
+import Anthropic, { type AutoParseableOutputFormat } from '@anthropic-ai/sdk';
+import { zodOutputFormat } from '@anthropic-ai/sdk/helpers/zod';
 import { z } from 'zod/v3';
+import { z as zv4 } from 'zod/v4';
 import {
   DEFAULT_IMAGE_PROMPT_TEXT_MODEL,
   DEFAULT_SCRIPT_TEXT_MODEL,
   GEMINI_TEXT_COMPLETION_MODEL,
+  getDefaultClaudeEffort,
   getDefaultGeminiThinkingLevel,
   getDefaultOpenAIReasoningEffort,
+  getSupportedClaudeEfforts,
   getSupportedGeminiThinkingLevels,
   getSupportedOpenAIReasoningEfforts,
+  isAnthropicTextCompletionModel,
   isOpenAITextCompletionModel,
   isTextCompletionModel,
   isGeminiTextCompletionModel,
   supportsOpenAITemperature,
+  type AnthropicTextCompletionModel,
+  type ClaudeEffort,
   type GeminiThinkingLevel,
   type OpenAITextCompletionModel,
   type OpenAIReasoningEffort,
+  type SelectableClaudeEffort,
   type TextCompletionModel,
 } from '../../shared/constants/models';
 import {
@@ -52,6 +66,7 @@ type TextGenerationConfig = {
   model: TextCompletionModel;
   openaiReasoningEffort: OpenAIReasoningEffort;
   geminiThinkingLevel: GeminiThinkingLevel;
+  claudeEffort: ClaudeEffort;
 };
 
 // APIキーを読み込み
@@ -73,7 +88,7 @@ async function readApiKey(service: string): Promise<string | null> {
 const withRetry = retryTransient;
 
 type OpenAIUsageSummary = {
-  provider?: 'openai' | 'gemini';
+  provider?: 'openai' | 'gemini' | 'anthropic';
   inputTokens?: number;
   outputTokens?: number;
   cachedInputTokens?: number;
@@ -140,6 +155,24 @@ function mapGeminiUsage(
       usage?.completionTokens ??
       usage?.candidates_token_count,
     totalTokens: usage?.totalTokenCount ?? usage?.totalTokens ?? usage?.total_token_count,
+    requestCount: 1,
+    model,
+  };
+}
+
+// OpenAI の規約に合わせ、inputTokens はキャッシュ読み取り・書き込みを含む合計にする
+function mapAnthropicUsage(usage: Anthropic.Messages.Usage, model: string): OpenAIUsageSummary {
+  const cacheReadTokens = usage.cache_read_input_tokens ?? 0;
+  const cacheWriteTokens = usage.cache_creation_input_tokens ?? 0;
+  const inputTokens = usage.input_tokens + cacheReadTokens + cacheWriteTokens;
+  return {
+    provider: 'anthropic',
+    inputTokens,
+    outputTokens: usage.output_tokens,
+    cachedInputTokens: cacheReadTokens,
+    cacheWriteTokens,
+    reasoningTokens: usage.output_tokens_details?.thinking_tokens,
+    totalTokens: inputTokens + usage.output_tokens,
     requestCount: 1,
     model,
   };
@@ -255,6 +288,110 @@ function resolveGeminiApiModel(selectedModel: TextCompletionModel): string {
   return selectedModel;
 }
 
+// 脚本生成はストリーミングで受け取り、thinking を含めて十分な出力枠を確保する
+const CLAUDE_STREAMING_MAX_TOKENS = 64_000;
+const CLAUDE_MAX_TOKENS = 16_000;
+
+function resolveClaudeEffort(value: ClaudeEffort): SelectableClaudeEffort | null {
+  return value === 'default' ? null : value;
+}
+
+function assertClaudeMessageCompleted(message: Anthropic.Messages.Message): void {
+  if (message.stop_reason === 'refusal') {
+    // サーバー側のフォールバックは使わず、拒否はそのままエラーとして表示する
+    const category = message.stop_details?.category ?? '不明';
+    throw new Error(
+      `Claudeが安全上の理由で生成を拒否しました(カテゴリ: ${category})。記事内容を確認するか、別のモデルで再実行してください。`
+    );
+  }
+  if (
+    message.stop_reason === 'max_tokens' ||
+    message.stop_reason === 'model_context_window_exceeded'
+  ) {
+    throw new Error(
+      'Claudeの出力が上限で途中終了しました。入力を短くするか、思考の深さを下げて再試行してください。'
+    );
+  }
+}
+
+/**
+ * Claude のテキスト生成。thinking は常にオンのため `thinking` と sampling パラメータは送らず、
+ * 思考の深さは output_config.effort だけで指定する。リトライは SDK 標準(maxRetries 2)に任せる。
+ */
+async function generateClaudeTextContent(params: {
+  model: AnthropicTextCompletionModel;
+  systemPrompt: string;
+  userPrompt: string;
+  effort: ClaudeEffort;
+  stream?: boolean;
+  cacheSystemPrompt?: boolean;
+  outputFormat?: Anthropic.Messages.JSONOutputFormat;
+}): Promise<{ text: string; usage: OpenAIUsageSummary }> {
+  const apiKey = await readApiKey('anthropic');
+  if (!apiKey) {
+    throw new Error(
+      'Anthropic APIキーが設定されていません。設定画面からAPIキーを入力してください。'
+    );
+  }
+
+  // 環境変数の ANTHROPIC_AUTH_TOKEN が混ざらないよう authToken は明示的に無効化する。
+  // ストリーミングは応答ヘッダーの受信時点で fetch が返り、fetch 単位の枠では生成中の同時実行数を
+  // 制御できないため、通常の fetch を使ってストリーム全体(SDK 内蔵リトライを含む)を 1 つの枠で包む
+  const client = new Anthropic({
+    apiKey,
+    authToken: null,
+    ...(params.stream ? {} : { fetch: limitedAnthropicFetch }),
+  });
+  const effort = resolveClaudeEffort(params.effort);
+  const outputConfig: Anthropic.Messages.OutputConfig = {
+    ...(effort ? { effort } : {}),
+    ...(params.outputFormat ? { format: params.outputFormat } : {}),
+  };
+  const request: Anthropic.Messages.MessageCreateParamsNonStreaming = {
+    model: params.model,
+    max_tokens: params.stream ? CLAUDE_STREAMING_MAX_TOKENS : CLAUDE_MAX_TOKENS,
+    system: params.cacheSystemPrompt
+      ? [{ type: 'text', text: params.systemPrompt, cache_control: { type: 'ephemeral' } }]
+      : params.systemPrompt,
+    messages: [{ role: 'user', content: params.userPrompt }],
+    ...(Object.keys(outputConfig).length > 0 ? { output_config: outputConfig } : {}),
+  };
+  const message = params.stream
+    ? await withProviderSlot('anthropic', () => client.messages.stream(request).finalMessage())
+    : await client.messages.create(request);
+
+  assertClaudeMessageCompleted(message);
+  const text = message.content
+    .filter((block): block is Anthropic.Messages.TextBlock => block.type === 'text')
+    .map((block) => block.text)
+    .join('')
+    .trim();
+  if (!text) {
+    throw new Error('AIからの応答が空でした');
+  }
+
+  return { text, usage: mapAnthropicUsage(message.usage, message.model) };
+}
+
+// SDK の自動パース(messages.parse / stream の parsed_output)は stop_reason を確認する前に
+// 途切れた JSON で例外を投げるため、リクエストにはスキーマだけを渡し、確認後に同じ zod で検証する
+function toClaudeOutputFormat<T>(
+  structuredOutput: AutoParseableOutputFormat<T>
+): Anthropic.Messages.JSONOutputFormat {
+  return { type: structuredOutput.type, schema: structuredOutput.schema };
+}
+
+function parseClaudeStructuredOutput<T>(
+  structuredOutput: AutoParseableOutputFormat<T>,
+  text: string
+): T {
+  try {
+    return structuredOutput.parse(text);
+  } catch (error) {
+    throw new Error('AIから構造化された応答を取得できませんでした', { cause: error });
+  }
+}
+
 function resolveOpenAIReasoningEffort(
   value: OpenAIReasoningEffort
 ): Exclude<OpenAIReasoningEffort, 'default'> | null {
@@ -303,6 +440,7 @@ async function readTextGenerationConfig(scope: TextGenerationScope): Promise<Tex
     model: fallbackModel,
     openaiReasoningEffort: DEFAULT_SETTINGS.openaiReasoningEffort,
     geminiThinkingLevel: DEFAULT_SETTINGS.geminiThinkingLevel,
+    claudeEffort: DEFAULT_SETTINGS.claudeEffort,
   };
   try {
     const settingsPath = getSettingsPath();
@@ -327,10 +465,16 @@ async function readTextGenerationConfig(scope: TextGenerationScope): Promise<Tex
         ? settings.geminiThinkingLevel
         : getDefaultGeminiThinkingLevel(model)
       : settings.geminiThinkingLevel;
+    const claudeEffort = isAnthropicTextCompletionModel(model)
+      ? getSupportedClaudeEfforts(model).includes(settings.claudeEffort as SelectableClaudeEffort)
+        ? settings.claudeEffort
+        : getDefaultClaudeEffort(model)
+      : settings.claudeEffort;
     return {
       model,
       openaiReasoningEffort,
       geminiThinkingLevel,
+      claudeEffort,
     };
   } catch {
     // 設定未作成時はデフォルトを利用
@@ -437,6 +581,24 @@ type ScriptGenerationPayload = z.infer<typeof ScriptGenerationPayloadSchema>;
 
 const ImagePromptCommentPayloadSchema = z.object({
   prompt: z.string().min(1),
+});
+
+// Claude の構造化出力用。SDK の zodOutputFormat は zod v4 のスキーマを受け取る
+const ClaudeScriptGenerationPayloadSchema = zv4.object({
+  parts: zv4
+    .array(
+      zv4.object({
+        title: zv4.string().min(1),
+        summary: zv4.string(),
+        scriptText: zv4.string().min(1),
+        durationEstimateSec: zv4.number().positive(),
+      })
+    )
+    .min(1),
+});
+
+const ClaudeImagePromptCommentPayloadSchema = zv4.object({
+  prompt: zv4.string().min(1),
 });
 
 // スクリプト生成プロンプト
@@ -578,6 +740,18 @@ registerOperation(
 
       parsed = choice.message.parsed;
       usage = mapOpenAIUsage(response.usage, response.model);
+    } else if (isAnthropicTextCompletionModel(selectedModel)) {
+      const structuredOutput = zodOutputFormat(ClaudeScriptGenerationPayloadSchema);
+      const claudeResult = await generateClaudeTextContent({
+        model: selectedModel,
+        systemPrompt: scriptSystemPrompt,
+        userPrompt: scriptUserPrompt,
+        effort: generationConfig.claudeEffort,
+        stream: true,
+        outputFormat: toClaudeOutputFormat(structuredOutput),
+      });
+      parsed = parseClaudeStructuredOutput(structuredOutput, claudeResult.text);
+      usage = claudeResult.usage;
     } else {
       const apiModel = resolveGeminiApiModel(selectedModel);
       const geminiResult = await generateGeminiTextContent({
@@ -1613,10 +1787,33 @@ ${partContext}
   return { systemPrompt, userPrompt };
 }
 
+function parseImagePromptExtractionText(textContent: string): ImagePromptExtraction {
+  const parsed = textContent ? tryParseJsonResponse<unknown>(textContent) : null;
+  if (parsed) {
+    return coerceImagePromptExtraction(parsed);
+  }
+  const slideSpec = normalizeSlideSpecText(textContent);
+  return {
+    prompts: [
+      {
+        topic: '',
+        entities: [],
+        locations: [],
+        quantFacts: [],
+        visualSlots: [],
+        heroSubject: '',
+        heroSetting: '',
+        compositionNote: slideSpec,
+      },
+    ],
+  };
+}
+
 async function extractSinglePartPromptCandidate(params: {
   articleContext: string;
   partContext: string;
   generationConfig: TextGenerationConfig;
+  cacheSystemPrompt?: boolean;
 }): Promise<{ candidate: Record<string, unknown> | undefined; usage: OpenAIUsageSummary | null }> {
   const { systemPrompt, userPrompt } = createSinglePartExtractionPrompts(
     params.articleContext,
@@ -1666,27 +1863,19 @@ async function extractSinglePartPromptCandidate(params: {
     }
 
     const textContent = normalizeString(message.content);
-    const parsed = textContent ? tryParseJsonResponse<unknown>(textContent) : null;
-    if (parsed) {
-      resolvedParsed = coerceImagePromptExtraction(parsed);
-    } else {
-      const slideSpec = normalizeSlideSpecText(textContent);
-      resolvedParsed = {
-        prompts: [
-          {
-            topic: '',
-            entities: [],
-            locations: [],
-            quantFacts: [],
-            visualSlots: [],
-            heroSubject: '',
-            heroSetting: '',
-            compositionNote: slideSpec,
-          },
-        ],
-      };
-    }
+    resolvedParsed = parseImagePromptExtractionText(textContent);
     usage = mapOpenAIUsage(response.usage, response.model);
+  } else if (isAnthropicTextCompletionModel(selectedModel)) {
+    // シーンごとに同じシステムプロンプトを繰り返し送るため、system ブロックをキャッシュする
+    const claudeResult = await generateClaudeTextContent({
+      model: selectedModel,
+      systemPrompt,
+      userPrompt,
+      effort: params.generationConfig.claudeEffort,
+      cacheSystemPrompt: params.cacheSystemPrompt,
+    });
+    resolvedParsed = parseImagePromptExtractionText(claudeResult.text);
+    usage = claudeResult.usage;
   } else {
     const apiModel = resolveGeminiApiModel(selectedModel);
     const geminiResult = await generateGeminiTextContent({
@@ -1697,26 +1886,7 @@ async function extractSinglePartPromptCandidate(params: {
       responseMimeType: 'application/json',
       thinkingLevel: params.generationConfig.geminiThinkingLevel,
     });
-    const parsed = tryParseJsonResponse<unknown>(geminiResult.text);
-    if (parsed) {
-      resolvedParsed = coerceImagePromptExtraction(parsed);
-    } else {
-      const slideSpec = normalizeSlideSpecText(geminiResult.text);
-      resolvedParsed = {
-        prompts: [
-          {
-            topic: '',
-            entities: [],
-            locations: [],
-            quantFacts: [],
-            visualSlots: [],
-            heroSubject: '',
-            heroSetting: '',
-            compositionNote: slideSpec,
-          },
-        ],
-      };
-    }
+    resolvedParsed = parseImagePromptExtractionText(geminiResult.text);
     usage = geminiResult.usage;
   }
 
@@ -1794,6 +1964,7 @@ registerOperation(
           articleContext,
           partContext,
           generationConfig,
+          cacheSystemPrompt: parts.length > 1,
         });
       }
     );
@@ -2031,6 +2202,28 @@ JSONのみを出力してください。`;
         }
         text = JSON.stringify(choice.message.parsed);
         usage = mapOpenAIUsage(response.usage, response.model);
+      }
+    } else if (isAnthropicTextCompletionModel(selectedModel)) {
+      if (isScriptTarget) {
+        const claudeResult = await generateClaudeTextContent({
+          model: selectedModel,
+          systemPrompt,
+          userPrompt,
+          effort: generationConfig.claudeEffort,
+        });
+        text = claudeResult.text;
+        usage = claudeResult.usage;
+      } else {
+        const structuredOutput = zodOutputFormat(ClaudeImagePromptCommentPayloadSchema);
+        const claudeResult = await generateClaudeTextContent({
+          model: selectedModel,
+          systemPrompt,
+          userPrompt,
+          effort: generationConfig.claudeEffort,
+          outputFormat: toClaudeOutputFormat(structuredOutput),
+        });
+        text = JSON.stringify(parseClaudeStructuredOutput(structuredOutput, claudeResult.text));
+        usage = claudeResult.usage;
       }
     } else {
       const apiModel = resolveGeminiApiModel(selectedModel);

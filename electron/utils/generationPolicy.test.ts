@@ -3,6 +3,7 @@ import {
   retryTransient,
   withProviderSlot,
   configureGenerationConcurrency,
+  limitedAnthropicFetch,
 } from './generationPolicy';
 
 afterEach(() => {
@@ -53,4 +54,30 @@ it('caps concurrent operations across callers and releases a failed slot', async
   release();
   await Promise.all([first, second]);
   expect(order).toEqual(['first', 'second']);
+});
+
+it('queues Anthropic SDK requests in their own provider slot', async () => {
+  configureGenerationConcurrency(1);
+  let respond!: (response: Response) => void;
+  const fetchMock = vi
+    .spyOn(globalThis, 'fetch')
+    .mockImplementationOnce(
+      () =>
+        new Promise<Response>((resolve) => {
+          respond = resolve;
+        })
+    )
+    .mockResolvedValueOnce(new Response('second'));
+
+  const first = limitedAnthropicFetch('https://api.anthropic.com/v1/messages');
+  const second = limitedAnthropicFetch('https://api.anthropic.com/v1/messages');
+  await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+  await withProviderSlot('openai', async () => {});
+  expect(fetchMock).toHaveBeenCalledTimes(1);
+
+  respond(new Response('first'));
+  await expect((await first).text()).resolves.toBe('first');
+  await expect((await second).text()).resolves.toBe('second');
+  expect(fetchMock).toHaveBeenCalledTimes(2);
+  fetchMock.mockRestore();
 });

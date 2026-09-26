@@ -17,6 +17,7 @@ NewsVideo のソースコード自体は [LICENSE](LICENSE) に記載のとお�
 - `electron-builder.json5` は配布物の `Contents/Resources/` に `LICENSE` と `THIRD_PARTY_NOTICES.md` も同梱します。
 - `ffmpeg-static` / `ffprobe-static` は現時点では開発用 fallback として依存関係に残していますが、GitHub Releases 向けの packaged app には同梱しません。
 - `npm run audit:licenses` はインストール済み依存を走査し、許可済みライセンスと既知例外以外を CI で検出します。
+- `fast-sha256`(`Unlicense`)は `@anthropic-ai/sdk` → `standardwebhooks` 経由の実行時依存です。パブリックドメイン相当のライセンスで、パッケージ単位の既知例外として承認しています(2026-09-26)。`Unlicense` 全体は許可リストに含めていません。
 
 ## Release Policy
 

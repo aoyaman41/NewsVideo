@@ -4,16 +4,19 @@ import { useAutoSave } from '../hooks';
 import { Header } from '../components/layout';
 import { Badge, Button, Card, ErrorDetailPanel, StatusChip, useToast } from '../components/ui';
 import {
+  ANTHROPIC_TEXT_COMPLETION_MODEL,
   DEFAULT_GEMINI_TTS_MODEL,
   DEFAULT_IMAGE_MODEL,
   DEFAULT_IMAGE_PROMPT_TEXT_MODEL,
   DEFAULT_IMAGE_RESOLUTION,
   DEFAULT_SCRIPT_TEXT_MODEL,
   getCommonSupportedOpenAIReasoningEfforts,
+  getDefaultClaudeEffort,
   getDefaultGeminiThinkingLevel,
   getDefaultOpenAIReasoningEffort,
   getGeminiTtsModelLabel,
   getImageModelLabel,
+  getSupportedClaudeEfforts,
   getSupportedGeminiThinkingLevels,
   getTextCompletionModelLabel,
   GEMINI_TTS_MODELS,
@@ -21,19 +24,22 @@ import {
   IMAGE_RESOLUTION_LABELS,
   IMAGE_RESOLUTIONS,
   TEXT_COMPLETION_MODELS,
+  type ClaudeEffort,
   type GeminiThinkingLevel,
   type GeminiTtsModel,
   type ImageModel,
   type ImageResolution,
   type OpenAITextCompletionModel,
   type OpenAIReasoningEffort,
+  type SelectableClaudeEffort,
   type SelectableOpenAIReasoningEffort,
+  isAnthropicTextCompletionModel,
   isGeminiTextCompletionModel,
   isOpenAITextCompletionModel,
   type TextCompletionModel,
 } from '../../shared/constants/models';
 
-type ApiKeyService = 'openai' | 'google_ai';
+type ApiKeyService = 'openai' | 'google_ai' | 'anthropic';
 
 interface ConnectionStatus {
   success: boolean;
@@ -59,6 +65,7 @@ interface Settings {
   imagePromptTextModel: TextCompletionModel;
   openaiReasoningEffort: OpenAIReasoningEffort;
   geminiThinkingLevel: GeminiThinkingLevel;
+  claudeEffort: ClaudeEffort;
   imageModel: ImageModel;
   imageResolution: ImageResolution;
   defaultAspectRatio: '16:9' | '1:1' | '9:16';
@@ -83,6 +90,7 @@ const defaultSettings: Settings = {
   imagePromptTextModel: DEFAULT_IMAGE_PROMPT_TEXT_MODEL,
   openaiReasoningEffort: getDefaultOpenAIReasoningEffort('gpt-5.2'),
   geminiThinkingLevel: getDefaultGeminiThinkingLevel('gemini-3.1-pro'),
+  claudeEffort: getDefaultClaudeEffort(ANTHROPIC_TEXT_COMPLETION_MODEL),
   imageModel: DEFAULT_IMAGE_MODEL,
   imageResolution: DEFAULT_IMAGE_RESOLUTION,
   defaultAspectRatio: '16:9',
@@ -127,6 +135,17 @@ function formatGeminiThinkingLabel(value: GeminiThinkingLevel): string {
   return value === 'default' ? 'モデル既定値' : labels[value];
 }
 
+function formatClaudeEffortLabel(value: ClaudeEffort): string {
+  const labels: Record<SelectableClaudeEffort, string> = {
+    low: '低',
+    medium: '中',
+    high: '高',
+    xhigh: '非常に高い',
+    max: '最大',
+  };
+  return value === 'default' ? 'モデル既定値' : labels[value];
+}
+
 export function SettingsPage() {
   const navigate = useNavigate();
   const location = useLocation();
@@ -142,20 +161,24 @@ export function SettingsPage() {
   const [apiKeys, setApiKeys] = useState<Record<ApiKeyService, string>>({
     openai: '',
     google_ai: '',
+    anthropic: '',
   });
   const [connectionStatus, setConnectionStatus] = useState<
     Record<ApiKeyService, ConnectionStatus | null>
   >({
     openai: null,
     google_ai: null,
+    anthropic: null,
   });
   const [isTesting, setIsTesting] = useState<Record<ApiKeyService, boolean>>({
     openai: false,
     google_ai: false,
+    anthropic: false,
   });
   const [isSaving, setIsSaving] = useState<Record<ApiKeyService, boolean>>({
     openai: false,
     google_ai: false,
+    anthropic: false,
   });
   const [settings, setSettings] = useState<Settings>(defaultSettings);
   const [ttsVoices, setTtsVoices] = useState<VoiceInfo[]>([]);
@@ -244,7 +267,7 @@ export function SettingsPage() {
   }, [hasLoadedSettings, settingsAutoSave.isDirty, settingsAutoSave.isSaving, settingsSaveError]);
 
   const loadApiKeys = async () => {
-    const services: ApiKeyService[] = ['openai', 'google_ai'];
+    const services: ApiKeyService[] = ['openai', 'google_ai', 'anthropic'];
     const keys: Record<string, string> = {};
 
     for (const service of services) {
@@ -321,6 +344,11 @@ export function SettingsPage() {
       description: 'Gemini系の画像・文章生成、Gemini TTS に使用します',
       url: 'https://aistudio.google.com/',
     },
+    anthropic: {
+      name: 'Anthropic',
+      description: 'Claude系の文章生成に使用します',
+      url: 'https://platform.claude.com/',
+    },
   };
 
   const activeOpenAIModels = useMemo(() => {
@@ -340,6 +368,13 @@ export function SettingsPage() {
   const activeGeminiModel = useMemo(() => {
     if (isGeminiTextCompletionModel(settings.scriptTextModel)) return settings.scriptTextModel;
     if (isGeminiTextCompletionModel(settings.imagePromptTextModel))
+      return settings.imagePromptTextModel;
+    return null;
+  }, [settings.imagePromptTextModel, settings.scriptTextModel]);
+
+  const activeAnthropicModel = useMemo(() => {
+    if (isAnthropicTextCompletionModel(settings.scriptTextModel)) return settings.scriptTextModel;
+    if (isAnthropicTextCompletionModel(settings.imagePromptTextModel))
       return settings.imagePromptTextModel;
     return null;
   }, [settings.imagePromptTextModel, settings.scriptTextModel]);
@@ -374,9 +409,17 @@ export function SettingsPage() {
         }
       }
 
+      if (activeAnthropicModel) {
+        const supported = getSupportedClaudeEfforts(activeAnthropicModel);
+        if (!supported.includes(prev.claudeEffort as SelectableClaudeEffort)) {
+          next.claudeEffort = getDefaultClaudeEffort(activeAnthropicModel);
+          changed = true;
+        }
+      }
+
       return changed ? next : prev;
     });
-  }, [activeGeminiModel, activeOpenAIModels, openAIReasoningOptions]);
+  }, [activeAnthropicModel, activeGeminiModel, activeOpenAIModels, openAIReasoningOptions]);
 
   const scriptOpenAIReasoningOptions = isOpenAITextCompletionModel(settings.scriptTextModel)
     ? openAIReasoningOptions
@@ -389,6 +432,12 @@ export function SettingsPage() {
     : [];
   const imageGeminiThinkingOptions = isGeminiTextCompletionModel(settings.imagePromptTextModel)
     ? getSupportedGeminiThinkingLevels(settings.imagePromptTextModel)
+    : [];
+  const scriptClaudeEffortOptions = isAnthropicTextCompletionModel(settings.scriptTextModel)
+    ? getSupportedClaudeEfforts(settings.scriptTextModel)
+    : [];
+  const imageClaudeEffortOptions = isAnthropicTextCompletionModel(settings.imagePromptTextModel)
+    ? getSupportedClaudeEfforts(settings.imagePromptTextModel)
     : [];
 
   const handleSelectVideoFile = async (field: 'openingVideoPath' | 'endingVideoPath') => {
@@ -830,6 +879,36 @@ export function SettingsPage() {
                         現在選択中のOpenAIモデルで共通して使える値だけを表示しています。
                       </p>
                     </div>
+                  ) : isAnthropicTextCompletionModel(settings.scriptTextModel) ? (
+                    <div>
+                      <label
+                        htmlFor="SettingsPage-field-claude-effort-script"
+                        className="mb-1 block text-xs font-semibold text-slate-600"
+                      >
+                        思考の深さ
+                      </label>
+                      <select
+                        id="SettingsPage-field-claude-effort-script"
+                        value={settings.claudeEffort}
+                        onChange={(e) =>
+                          setSettings((prev) => ({
+                            ...prev,
+                            claudeEffort: e.target.value as Settings['claudeEffort'],
+                          }))
+                        }
+                        className="nv-input"
+                      >
+                        {scriptClaudeEffortOptions.map((effort) => (
+                          <option key={effort} value={effort}>
+                            {formatClaudeEffortLabel(effort)}
+                          </option>
+                        ))}
+                      </select>
+                      <p className="mt-1 text-xs text-slate-600">
+                        選択中の {getTextCompletionModelLabel(settings.scriptTextModel)}{' '}
+                        で使える値だけを表示しています。高いほど品質が上がり、時間と費用が増えます。
+                      </p>
+                    </div>
                   ) : (
                     <div>
                       <label
@@ -1019,6 +1098,36 @@ export function SettingsPage() {
                       </select>
                       <p className="mt-1 text-xs text-slate-600">
                         現在選択中のOpenAIモデルで共通して使える値だけを表示しています。
+                      </p>
+                    </div>
+                  ) : isAnthropicTextCompletionModel(settings.imagePromptTextModel) ? (
+                    <div>
+                      <label
+                        htmlFor="SettingsPage-field-claude-effort-image"
+                        className="mb-1 block text-xs font-semibold text-slate-600"
+                      >
+                        思考の深さ
+                      </label>
+                      <select
+                        id="SettingsPage-field-claude-effort-image"
+                        value={settings.claudeEffort}
+                        onChange={(e) =>
+                          setSettings((prev) => ({
+                            ...prev,
+                            claudeEffort: e.target.value as Settings['claudeEffort'],
+                          }))
+                        }
+                        className="nv-input"
+                      >
+                        {imageClaudeEffortOptions.map((effort) => (
+                          <option key={effort} value={effort}>
+                            {formatClaudeEffortLabel(effort)}
+                          </option>
+                        ))}
+                      </select>
+                      <p className="mt-1 text-xs text-slate-600">
+                        選択中の {getTextCompletionModelLabel(settings.imagePromptTextModel)}{' '}
+                        で使える値だけを表示しています。高いほど品質が上がり、時間と費用が増えます。
                       </p>
                     </div>
                   ) : (

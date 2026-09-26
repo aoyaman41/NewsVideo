@@ -53,12 +53,12 @@
 
 - 設定画面の状態が `保存済み` になってから再実行してください
 - `Google AI` だけで始めたい場合は、文章生成モデルを両方とも `Gemini 3.1 Pro` に変更してください
-- OpenAI 系モデルを使うなら `OpenAI` キー、画像生成や Gemini TTS には `Google AI` キーが必要です
+- OpenAI 系モデルを使うなら `OpenAI` キー、`Claude Opus 5.5` を使うなら `Anthropic` キー、画像生成や Gemini TTS には `Google AI` キーが必要です
 - 失敗が続く場合は、エラーメッセージを控えて Issue を作成してください
 
 ## 課金は誰負担か
 
-- API 利用料は NewsVideo ではなく、ユーザー自身の OpenAI / Google AI 契約に対して直接発生します
+- API 利用料は NewsVideo ではなく、ユーザー自身の OpenAI / Google AI / Anthropic 契約に対して直接発生します
 - ローカルアプリの利用それ自体ではなく、生成時の API 呼び出しに対して課金されます
 - 詳細は各プロバイダの料金体系を確認してください
 

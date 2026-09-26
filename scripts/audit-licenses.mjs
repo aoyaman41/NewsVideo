@@ -29,6 +29,12 @@ const REVIEWED_PACKAGE_RULES = [
     allows: (license) => license === 'MPL-2.0',
     reason: 'Build-time CSS tooling pulled in by Vite/Tailwind.',
   },
+  {
+    matches: (name) => name === 'fast-sha256',
+    allows: (license) => license === 'Unlicense',
+    reason:
+      'Public-domain-equivalent transitive runtime dependency of @anthropic-ai/sdk (via standardwebhooks). Approved per package; Unlicense is not allowed globally.',
+  },
 ];
 
 function readJson(filePath) {

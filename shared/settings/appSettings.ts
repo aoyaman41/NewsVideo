@@ -1,6 +1,8 @@
 import { readingEntrySchema, type ReadingEntry } from '../project/narration';
 import { z } from 'zod';
 import {
+  ANTHROPIC_TEXT_COMPLETION_MODEL,
+  CLAUDE_EFFORTS,
   DEFAULT_GEMINI_TTS_MODEL,
   DEFAULT_IMAGE_MODEL,
   DEFAULT_IMAGE_PROMPT_TEXT_MODEL,
@@ -13,9 +15,13 @@ import {
   OPENAI_REASONING_EFFORTS,
   OPENAI_TEXT_COMPLETION_MODELS,
   TEXT_COMPLETION_MODELS,
+  getDefaultClaudeEffort,
   getDefaultGeminiThinkingLevel,
   getDefaultOpenAIReasoningEffort,
   getCommonSupportedOpenAIReasoningEfforts,
+  getSupportedClaudeEfforts,
+  isAnthropicTextCompletionModel,
+  isClaudeEffort,
   isGeminiThinkingLevel,
   isGeminiTtsModel,
   isImageModel,
@@ -23,11 +29,14 @@ import {
   isOpenAIReasoningEffort,
   isOpenAITextCompletionModel,
   isTextCompletionModel,
+  type AnthropicTextCompletionModel,
+  type ClaudeEffort,
   type GeminiThinkingLevel,
   type GeminiTtsModel,
   type ImageModel,
   type ImageResolution,
   type OpenAIReasoningEffort,
+  type SelectableClaudeEffort,
   type SelectableOpenAIReasoningEffort,
   type OpenAITextCompletionModel,
   type TextCompletionModel,
@@ -48,6 +57,7 @@ export type AppSettings = {
   imagePromptTextModel: TextCompletionModel;
   openaiReasoningEffort: OpenAIReasoningEffort;
   geminiThinkingLevel: GeminiThinkingLevel;
+  claudeEffort: ClaudeEffort;
   imageModel: ImageModel;
   imageResolution: ImageResolution;
   defaultAspectRatio: '16:9' | '1:1' | '9:16';
@@ -74,6 +84,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   imagePromptTextModel: DEFAULT_IMAGE_PROMPT_TEXT_MODEL,
   openaiReasoningEffort: getDefaultOpenAIReasoningEffort('gpt-5.2'),
   geminiThinkingLevel: getDefaultGeminiThinkingLevel('gemini-3.1-pro'),
+  claudeEffort: getDefaultClaudeEffort(ANTHROPIC_TEXT_COMPLETION_MODEL),
   imageModel: DEFAULT_IMAGE_MODEL,
   imageResolution: DEFAULT_IMAGE_RESOLUTION,
   defaultAspectRatio: '16:9',
@@ -100,6 +111,7 @@ export const settingsUpdateSchema = z
     imagePromptTextModel: z.enum(TEXT_COMPLETION_MODELS).optional(),
     openaiReasoningEffort: z.enum(OPENAI_REASONING_EFFORTS).optional(),
     geminiThinkingLevel: z.enum(GEMINI_THINKING_LEVELS).optional(),
+    claudeEffort: z.enum(CLAUDE_EFFORTS).optional(),
     imageModel: z.enum(IMAGE_MODELS).optional(),
     imageResolution: z.enum(IMAGE_RESOLUTIONS).optional(),
     defaultAspectRatio: z.enum(['16:9', '1:1', '9:16']).optional(),
@@ -148,6 +160,19 @@ function getCommonSettingsOpenAIReasoningEfforts(settings: {
   if (models.length === 0) return [];
 
   return getCommonSupportedOpenAIReasoningEfforts(models);
+}
+
+function resolveSettingsAnthropicModel(settings: {
+  scriptTextModel: TextCompletionModel;
+  imagePromptTextModel: TextCompletionModel;
+}): AnthropicTextCompletionModel {
+  if (isAnthropicTextCompletionModel(settings.scriptTextModel)) {
+    return settings.scriptTextModel;
+  }
+  if (isAnthropicTextCompletionModel(settings.imagePromptTextModel)) {
+    return settings.imagePromptTextModel;
+  }
+  return ANTHROPIC_TEXT_COMPLETION_MODEL;
 }
 
 export function normalizeSettings(input: unknown): AppSettings {
@@ -210,6 +235,17 @@ export function normalizeSettings(input: unknown): AppSettings {
     merged.geminiThinkingLevel = DEFAULT_SETTINGS.geminiThinkingLevel;
   } else if (merged.geminiThinkingLevel === 'default') {
     merged.geminiThinkingLevel = getDefaultGeminiThinkingLevel('gemini-3.1-pro');
+  }
+  // claudeEffort がない既存の settings.json は既定値で補う
+  const anthropicModel = resolveSettingsAnthropicModel(merged);
+  if (
+    !isClaudeEffort(merged.claudeEffort) ||
+    merged.claudeEffort === 'default' ||
+    !getSupportedClaudeEfforts(anthropicModel).includes(
+      merged.claudeEffort as SelectableClaudeEffort
+    )
+  ) {
+    merged.claudeEffort = getDefaultClaudeEffort(anthropicModel);
   }
 
   return merged;

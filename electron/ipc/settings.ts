@@ -3,6 +3,8 @@ import { registerOperation } from './operations';
 import { app, safeStorage, BrowserWindow } from 'electron';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
+import Anthropic from '@anthropic-ai/sdk';
+import { ANTHROPIC_TEXT_COMPLETION_MODEL } from '../../shared/constants/models';
 import {
   DEFAULT_SETTINGS,
   normalizeSettings,
@@ -18,7 +20,9 @@ const getSecretsPath = () => path.join(app.getPath('userData'), 'secrets.enc');
 type Settings = AppSettings;
 
 // APIキーの種類
-type ApiKeyService = 'openai' | 'google_ai' | 'google_tts';
+type ApiKeyService = 'openai' | 'google_ai' | 'google_tts' | 'anthropic';
+// Renderer から保存・確認・接続テストできるサービス
+const RENDERER_API_KEY_SERVICES: readonly string[] = ['openai', 'google_ai', 'anthropic'];
 
 // ============================================
 // 内部ロジック（共通関数）
@@ -53,6 +57,31 @@ async function readApiKey(service: ApiKeyService): Promise<string | null> {
   }
 }
 
+// Anthropic は公式 SDK 経由で Opus 5.5 のモデル情報を取得し、キーの有効性とモデルへのアクセス権を同時に確認する
+async function testAnthropicConnection(
+  apiKey: string,
+  startTime: number
+): Promise<{ success: boolean; message: string; latencyMs?: number }> {
+  // 環境変数の ANTHROPIC_AUTH_TOKEN が混ざらないよう authToken は明示的に無効化する
+  const client = new Anthropic({ apiKey, authToken: null, maxRetries: 0 });
+  try {
+    await client.models.retrieve(ANTHROPIC_TEXT_COMPLETION_MODEL);
+    return { success: true, message: '接続成功', latencyMs: Date.now() - startTime };
+  } catch (error) {
+    const latencyMs = Date.now() - startTime;
+    if (error instanceof Anthropic.APIError && typeof error.status === 'number') {
+      const body = error.error as { error?: { message?: unknown } } | undefined;
+      const detail = typeof body?.error?.message === 'string' ? body.error.message : error.message;
+      return { success: false, message: `接続失敗: ${error.status} ${detail}`, latencyMs };
+    }
+    return {
+      success: false,
+      message: `接続エラー: ${error instanceof Error ? error.message : '不明なエラー'}`,
+      latencyMs,
+    };
+  }
+}
+
 // ============================================
 // IPC ハンドラー
 // ============================================
@@ -77,6 +106,7 @@ registerOperation('settings:set', async (_, settings: unknown) => {
     'imagePromptTextModel',
     'openaiReasoningEffort',
     'geminiThinkingLevel',
+    'claudeEffort',
     'imageModel',
     'imageResolution',
     'ttsEngine',
@@ -115,7 +145,7 @@ registerOperation('settings:set', async (_, settings: unknown) => {
 
 // APIキー取得（暗号化ストレージから）
 registerOperation('settings:hasApiKey', async (_, service: ApiKeyService): Promise<boolean> => {
-  if (!['openai', 'google_ai'].includes(service)) throw new Error('未対応のサービスです。');
+  if (!RENDERER_API_KEY_SERVICES.includes(service)) throw new Error('未対応のサービスです。');
   return Boolean(await readApiKey(service));
 });
 
@@ -124,7 +154,7 @@ registerOperation(
   'settings:setApiKey',
   async (_, service: ApiKeyService, apiKey: string): Promise<{ success: boolean }> => {
     if (
-      !['openai', 'google_ai'].includes(service) ||
+      !RENDERER_API_KEY_SERVICES.includes(service) ||
       typeof apiKey !== 'string' ||
       apiKey.length > 4096
     )
@@ -163,7 +193,7 @@ registerOperation(
     inputApiKey?: string
   ): Promise<{ success: boolean; message: string; latencyMs?: number }> => {
     if (
-      !['openai', 'google_ai'].includes(service) ||
+      !RENDERER_API_KEY_SERVICES.includes(service) ||
       (inputApiKey !== undefined && typeof inputApiKey !== 'string')
     )
       throw new Error('未対応のサービスです。');
@@ -175,6 +205,10 @@ registerOperation(
 
       if (!apiKey) {
         return { success: false, message: 'APIキーが設定されていません' };
+      }
+
+      if (service === 'anthropic') {
+        return await testAnthropicConnection(apiKey, startTime);
       }
 
       let response: Response;

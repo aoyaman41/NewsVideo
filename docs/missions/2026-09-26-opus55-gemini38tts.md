@@ -180,3 +180,9 @@
 | 日付 | 内容 |
 |---|---|
 | 2026-09-26 | 指示書作成。ユーザー決定事項を確定。ミッション A / B を Opus サブエージェントに worktree 分離で発注 |
+| 2026-09-26 | B 完了(worktree `agent-a5ebf329aea1485a9`、未コミット)。`@google/genai` 1.43 のまま `httpOptions.extraBody` で `speechMetadata.style` を送信。WAV / PCM は応答の先頭で判定。コストの代替モデルは 3.1 に固定。メインループで typecheck と test を確認済み |
+| 2026-09-26 | A 完了(worktree `agent-a9edc1315fbe385c8`、ベースは origin/main 02a1a54 = fd05878 とツリーが同一、未コミット)。構造化出力は `zodOutputFormat` のスキーマだけを送り、`stop_reason` の確認後に検証。脚本生成のみストリーミング。メインループで typecheck / lint / test を確認済み |
+| 2026-09-26 | 統合の試し適用(一時 worktree): 衝突は `src/utils/cost.ts` の import 1 行のみ(`ANTHROPIC_TEXT_COMPLETION_MODEL` だけ残す)。統合後の typecheck / lint / test(223 件)は成功 |
+| 2026-09-26 | ユーザー判断待ち: (1) `fast-sha256@1.3.0`(Unlicense、`@anthropic-ai/sdk` の間接依存)のライセンス承認 (2) ストリーミング中の同時実行数の修正を入れるか (3) 統合先のブランチ(origin/main が PR #93 でこのブランチを取り込み済み)。試聴後に判断: 3.8 の style を短くするか、台本中の `<>` の扱い |
+| 2026-09-26 | ユーザー決定: (1) `fast-sha256` のみパッケージ単位で承認(Unlicense 全体は不許可) (3) origin/main から `feature/claude-opus55-gemini38-tts` を作成。メインループ判断: (2) ストリーミングは通常の fetch を使い、ストリーム全体を `withProviderSlot('anthropic')` で包む(テスト追加)。画像プロンプトの変更検知に effort は含めない(既存の OpenAI / Gemini と同じ扱い) |
+| 2026-09-26 | 統合: 指示書のコミットを cherry-pick し、B → A の順に適用。`cost.ts` の import 衝突を解決し、上記の修正を反映。typecheck / lint / test(224 件)/ audit:licenses はすべて成功。コミット済み(push なし)。次は実 API での E2E(§3.5 と A の確認項目) |
