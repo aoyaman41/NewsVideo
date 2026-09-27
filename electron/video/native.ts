@@ -4,6 +4,12 @@ import * as os from 'os';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
 import type { VideoJob } from './ffmpeg';
+import {
+  DEFAULT_STALL_TIMEOUT_MS,
+  createProgressObserver,
+  createStallWatchdog,
+  stallErrorMessage,
+} from './watchdog';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -59,6 +65,8 @@ export type NativeRenderClosingCardRequest = {
   height: number;
   fps: number;
   videoBitrate: string;
+  /** ほかの区間と同じ形式の無音トラックを付けるためのビットレート */
+  audioBitrate: string;
   durationSec: number;
   headline?: string;
   cta?: string;
@@ -217,11 +225,23 @@ async function runNativeTool(
 
       let stdoutBuffer = '';
       let stderr = '';
+      // レンダラーは映像 0.5 秒ごと(連結は 0.2 秒ごと)に進捗を出す。出力が止まったら固まったとみなして止める
+      let stalled = false;
+      const stallTimeoutMs = job.stallTimeoutMs ?? DEFAULT_STALL_TIMEOUT_MS;
+      const watchdog = createStallWatchdog(stallTimeoutMs, () => {
+        stalled = true;
+        proc.kill('SIGKILL');
+        // 子プロセスが出力をつかんだままでも待たずに失敗させる
+        cleanup();
+        reject(new Error(stallErrorMessage(stallTimeoutMs, command)));
+      });
 
       const cleanup = () => {
+        watchdog.stop();
         job.processes.delete(proc);
       };
 
+      const advanced = createProgressObserver();
       proc.stdout.on('data', (data) => {
         stdoutBuffer += data.toString('utf-8');
         const lines = stdoutBuffer.split(/\r?\n/);
@@ -233,6 +253,7 @@ async function runNativeTool(
           if (index <= 0) continue;
           const key = trimmed.slice(0, index);
           const value = trimmed.slice(index + 1);
+          if (advanced(key, value)) watchdog.reset();
           onProgress?.({ [key]: value });
         }
       });
@@ -251,6 +272,10 @@ async function runNativeTool(
         cleanup();
         if (job.canceled) {
           reject(new Error('キャンセルしました'));
+          return;
+        }
+        if (stalled) {
+          reject(new Error(stallErrorMessage(stallTimeoutMs, command)));
           return;
         }
         if (code === 0) {
@@ -287,13 +312,23 @@ export async function normalizeVideoClipNative(
   await runNativeTool(binaryPath, 'normalize-clip', request, job, onProgress);
 }
 
+/**
+ * 区間をつなぐ。すべての区間が同じ形式なら再エンコードせずにつなぐ(mode: passthrough)。
+ * 形式が違う区間があるときは、指定の設定で書き出し直す(mode: reencode)
+ */
 export async function concatSegmentsNative(
   binaryPath: string,
   request: NativeConcatSegmentsRequest,
   job: VideoJob,
   onProgress?: ProgressHandler
-): Promise<void> {
-  await runNativeTool(binaryPath, 'concat-segments', request, job, onProgress);
+): Promise<{ mode: 'passthrough' | 'reencode' | 'unknown' }> {
+  let mode: 'passthrough' | 'reencode' | 'unknown' = 'unknown';
+  await runNativeTool(binaryPath, 'concat-segments', request, job, (record) => {
+    if (record.concat_mode === 'passthrough' || record.concat_mode === 'reencode')
+      mode = record.concat_mode;
+    onProgress?.(record);
+  });
+  return { mode };
 }
 
 export async function renderClosingCardVideoNative(

@@ -1,4 +1,3 @@
-import { configureGenerationConcurrency } from '../utils/generationPolicy';
 import { registerOperation } from './operations';
 import { app, safeStorage, BrowserWindow } from 'electron';
 import * as fs from 'node:fs/promises';
@@ -32,9 +31,7 @@ async function readSettings(): Promise<Settings> {
   try {
     const settingsPath = getSettingsPath();
     const content = await fs.readFile(settingsPath, 'utf-8');
-    const settings = normalizeSettings(JSON.parse(content));
-    configureGenerationConcurrency(settings.generationConcurrency);
-    return settings;
+    return normalizeSettings(JSON.parse(content));
   } catch {
     return normalizeSettings(DEFAULT_SETTINGS);
   }
@@ -86,20 +83,41 @@ async function testAnthropicConnection(
 // IPC ハンドラー
 // ============================================
 
+// settings.json の「読み込み → 変更を重ねる → 書き込み」を 1 件ずつ行う。
+// 設定画面(全項目)と記事画面(進め方と予算だけ)の保存が重なると、先の変更が後の保存で消えるため。
+// 読み込みも、先に届いた保存が終わってから行う(画面を移った直後に古い値を読まないように)
+let settingsQueue: Promise<unknown> = Promise.resolve();
+function serializeSettingsAccess<T>(task: () => Promise<T>): Promise<T> {
+  const run = settingsQueue.then(task, task);
+  settingsQueue = run.catch(() => undefined);
+  return run;
+}
+
 // 設定取得
 registerOperation('settings:get', async (): Promise<Settings> => {
-  return readSettings();
+  return serializeSettingsAccess(readSettings);
 });
 
 // 設定保存
 registerOperation('settings:set', async (_, settings: unknown) => {
   const settingsPath = getSettingsPath();
-  const currentSettings = await readSettings();
-  const validatedSettings = parseSettingsUpdate(settings);
-  const newSettings = normalizeSettings({ ...currentSettings, ...validatedSettings });
-  configureGenerationConcurrency(newSettings.generationConcurrency);
-
-  await fs.writeFile(settingsPath, JSON.stringify(newSettings, null, 2));
+  const { currentSettings, newSettings } = await serializeSettingsAccess(async () => {
+    const currentSettings = await readSettings();
+    const validatedSettings = parseSettingsUpdate(settings);
+    const newSettings = normalizeSettings({
+      ...currentSettings,
+      ...validatedSettings,
+      // 「新しい動画」の既定値は項目ごとに更新できる(送られなかった項目は今の値を残す)
+      newProjectDefaults: {
+        ...currentSettings.newProjectDefaults,
+        ...validatedSettings.newProjectDefaults,
+      },
+    });
+    await fs.writeFile(settingsPath, JSON.stringify(newSettings, null, 2));
+    return { currentSettings, newSettings };
+  });
+  // 変えると実行中でない全プロジェクトの generationConfig に反映する項目(素材が「更新が必要」になる)。
+  // 「新しい動画」の既定値(newProjectDefaults)・進め方と予算・為替レートは入れない(作成済みの動画は変えない)
   const generationKeys = [
     'readingDictionary',
     'scriptTextModel',
@@ -107,6 +125,7 @@ registerOperation('settings:set', async (_, settings: unknown) => {
     'openaiReasoningEffort',
     'geminiThinkingLevel',
     'claudeEffort',
+    'claudeImagePromptEffort',
     'imageModel',
     'imageResolution',
     'ttsEngine',

@@ -1,34 +1,15 @@
 import { partFreshness } from '../../../shared/project/integrity';
 import { projectClient, useProjectState } from '../../stores/projectStore';
-import { useEffect, useMemo, useState } from 'react';
+import { Fragment, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import type { Project } from '../../schemas';
-import {
-  DEFAULT_COST_RATES,
-  formatUsd,
-  normalizeCostRates,
-  sumUsageCostUsd,
-  type CostRates,
-} from '../../utils/cost';
-import { nextActionLabel, summarizeProjectProgress } from '../../utils/projectHealth';
+import { summarizeProjectProgress } from '../../utils/projectHealth';
 import type { WorkflowStage } from '../../types/ui';
+import { cx } from '../../utils/cx';
+import { WORKFLOW_STAGE_LABELS, WORKFLOW_STAGES, nextStepHint } from './workflowLabels';
 
 type NonCurrentStepStatus = 'done' | 'warning' | 'todo';
 type StepStatus = NonCurrentStepStatus | 'current';
-
-type Step = {
-  key: WorkflowStage;
-  label: string;
-  to: (projectId: string) => string;
-};
-
-const steps: Step[] = [
-  { key: 'article', label: '記事', to: (id) => `/projects/${id}/article` },
-  { key: 'script', label: 'シーンと台本', to: (id) => `/projects/${id}/script` },
-  { key: 'image', label: '画像', to: (id) => `/projects/${id}/image` },
-  { key: 'audio', label: '音声', to: (id) => `/projects/${id}/audio` },
-  { key: 'video', label: '動画', to: (id) => `/projects/${id}/video` },
-];
 
 function hasText(value: string | undefined | null): boolean {
   return Boolean(value && value.trim().length > 0);
@@ -72,21 +53,33 @@ function computeStepStatuses(
   };
 }
 
-function stylesFor(status: StepStatus): string {
-  if (status === 'current') {
-    return 'border-[var(--nv-color-accent)] bg-blue-50 text-blue-800';
+const STATUS_TEXT: Record<StepStatus, string> = {
+  current: '表示中',
+  done: 'できています',
+  warning: '途中です',
+  todo: 'まだです',
+};
+
+function badgeClass(status: StepStatus): string {
+  switch (status) {
+    case 'current':
+      return 'border-[var(--nv-color-accent)] bg-[var(--nv-color-accent)] text-white';
+    case 'done':
+      return 'border-[var(--nv-color-success)] bg-[var(--nv-color-surface)] text-[var(--nv-color-success)]';
+    case 'warning':
+      return 'border-[var(--nv-color-warning)] bg-[var(--nv-color-surface)] text-[var(--nv-color-warning)]';
+    case 'todo':
+    default:
+      return 'border-[var(--nv-color-border)] bg-[var(--nv-color-surface)] text-[var(--nv-color-muted)]';
   }
-  if (status === 'done') {
-    return 'border-emerald-200 bg-emerald-50 text-emerald-700';
-  }
-  if (status === 'warning') {
-    return 'border-amber-200 bg-amber-50 text-amber-800';
-  }
-  return 'border-[var(--nv-color-border)] bg-white text-slate-600 hover:bg-slate-50';
 }
 
 export { type WorkflowStage };
 
+/**
+ * 工程ナビ(1 行)。記事 → 台本 → 画像 → 音声 → 動画 のどこにいるかと、各工程の状態を示す。
+ * 費用は常時は出さない(記事画面の見積もりと、自動生成の完成時の合計だけにする)。
+ */
 export function WorkflowNav({
   projectId,
   current,
@@ -97,7 +90,6 @@ export function WorkflowNav({
   project?: Project | null;
 }) {
   const navigate = useNavigate();
-  const [costRates, setCostRates] = useState<CostRates>(DEFAULT_COST_RATES);
   const [liveProject] = useProjectState(projectId);
   const displayProject = liveProject ?? project;
   const summary = useMemo(
@@ -109,77 +101,59 @@ export function WorkflowNav({
     [displayProject, summary]
   );
 
-  const usageRecords = useMemo(() => displayProject?.usage ?? [], [displayProject?.usage]);
-  const totalCost = useMemo(
-    () => sumUsageCostUsd(usageRecords, costRates),
-    [usageRecords, costRates]
-  );
-
-  useEffect(() => {
-    let cancelled = false;
-    const loadRates = async () => {
-      try {
-        const settings = await window.electronAPI.settings.get();
-        if (cancelled) return;
-        setCostRates(normalizeCostRates(settings?.cost));
-      } catch {
-        // noop
-      }
-    };
-    void loadRates();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
   useEffect(() => {
     if (projectId) void projectClient.load(projectId).catch(() => {});
   }, [projectId]);
 
   return (
     <nav
-      aria-label="制作工程"
-      className="titlebar-no-drag border-b border-[var(--nv-color-border)] bg-white px-5 py-2"
+      aria-label="制作の工程"
+      className="titlebar-no-drag flex shrink-0 items-center justify-between gap-3 border-b border-[var(--nv-color-border)] bg-[var(--nv-color-surface)] px-5 py-1.5"
     >
-      <div className="flex flex-wrap items-center justify-between gap-2 text-sm text-slate-600">
-        <span>
-          {summary?.hasVideoOutput
-            ? '現在の入力で完成'
-            : summary
-              ? `次: ${nextActionLabel(summary)}`
-              : '制作の工程'}
-        </span>
-        {displayProject && (
-          <span>
-            累計の推定費用 {formatUsd(totalCost)}
-            {usageRecords.some(
-              (record) => record.inputTokens === undefined && record.outputTokens === undefined
-            )
-              ? '＋料金未確定あり'
-              : ''}
-          </span>
-        )}
-      </div>
-
-      <ol className="mt-2 flex items-center gap-2 overflow-x-auto pb-1">
-        {steps.map((step) => {
-          const status: StepStatus = step.key === current ? 'current' : stepStatuses[step.key];
+      <ol className="flex min-w-0 items-center gap-1 overflow-x-auto">
+        {WORKFLOW_STAGES.map((stage, index) => {
+          const status: StepStatus = stage === current ? 'current' : stepStatuses[stage];
           return (
-            <li key={step.key}>
-              <button
-                type="button"
-                onClick={() => navigate(step.to(projectId))}
-                className={`titlebar-no-drag rounded-[8px] border px-3 py-1.5 text-xs font-semibold transition-colors duration-[var(--nv-duration-fast)] ${stylesFor(
-                  status
-                )}`}
-                aria-current={step.key === current ? 'step' : undefined}
-              >
-                {step.label}
-              </button>
-            </li>
+            <Fragment key={stage}>
+              {index > 0 && (
+                <li aria-hidden="true" className="px-0.5 text-xs text-[var(--nv-color-muted)]">
+                  ›
+                </li>
+              )}
+              <li>
+                <button
+                  type="button"
+                  onClick={() => navigate(`/projects/${projectId}/${stage}`)}
+                  aria-current={stage === current ? 'step' : undefined}
+                  aria-label={`${index + 1}. ${WORKFLOW_STAGE_LABELS[stage]}(${STATUS_TEXT[status]})`}
+                  className={cx(
+                    'nv-focus-ring flex items-center gap-1.5 rounded-[var(--nv-radius-sm)] px-2 py-1 text-sm transition-colors duration-[var(--nv-duration-fast)] hover:bg-[var(--nv-color-canvas)]',
+                    stage === current
+                      ? 'font-semibold text-[var(--nv-color-text)]'
+                      : 'text-[var(--nv-color-muted)]'
+                  )}
+                >
+                  <span
+                    aria-hidden="true"
+                    className={cx(
+                      'flex h-5 w-5 items-center justify-center rounded-full border text-[11px] font-bold',
+                      badgeClass(status)
+                    )}
+                  >
+                    {status === 'done' ? '✓' : index + 1}
+                  </span>
+                  {WORKFLOW_STAGE_LABELS[stage]}
+                </button>
+              </li>
+            </Fragment>
           );
         })}
       </ol>
+      {summary && (
+        <p className="hidden shrink-0 text-xs text-[var(--nv-color-muted)] lg:block">
+          {nextStepHint(summary)}
+        </p>
+      )}
     </nav>
   );
 }

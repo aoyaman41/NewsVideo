@@ -1,5 +1,11 @@
 import { expect, it } from 'vitest';
-import { renderOptionsSchema, resolutionForAspect } from './videoFormat';
+import {
+  autoVideoBitrate,
+  isVideoBitrate,
+  renderOptionsSchema,
+  resolutionForAspect,
+  resolveVideoBitrate,
+} from './videoFormat';
 
 it('maps each quality tier consistently across preview, portrait, square and landscape', () => {
   expect(resolutionForAspect('1280x720', '9:16')).toBe('720x1280');
@@ -22,4 +28,26 @@ it('rejects unbounded dimensions, frame rates and malformed encoders settings', 
     false
   );
   expect(renderOptionsSchema.safeParse({ ...valid, fps: 100000 }).success).toBe(false);
+});
+
+// M5: 映像のビットレートは解像度と fps から決める(YouTube の推奨値)
+it('chooses the video bitrate from the resolution and the frame rate', () => {
+  expect(autoVideoBitrate('1920x1080', 30)).toBe('8M');
+  expect(autoVideoBitrate('1920x1080', 60)).toBe('12M');
+  expect(autoVideoBitrate('1080x1920', 24)).toBe('8M');
+  expect(autoVideoBitrate('3840x2160', 30)).toBe('40M');
+  expect(autoVideoBitrate('2160x3840', 60)).toBe('60M');
+  expect(autoVideoBitrate('2560x1440', 30)).toBe('16M');
+  expect(autoVideoBitrate('1280x720', 30)).toBe('5M');
+  expect(autoVideoBitrate('720x720', 60)).toBe('7.5M');
+  for (const bitrate of ['8M', '12M', '40M', '60M', '7.5M'])
+    expect(renderOptionsSchema.shape.videoBitrate.safeParse(bitrate).success).toBe(true);
+});
+
+it('uses a saved bitrate only when it is chosen explicitly and well-formed', () => {
+  expect(resolveVideoBitrate('auto', '8M', '3840x2160', 60)).toBe('60M');
+  expect(resolveVideoBitrate('manual', '8M', '3840x2160', 60)).toBe('8M');
+  expect(resolveVideoBitrate('manual', 'fast', '1920x1080', 30)).toBe('8M');
+  expect(isVideoBitrate('12M')).toBe(true);
+  expect(isVideoBitrate('12 Mbps')).toBe(false);
 });

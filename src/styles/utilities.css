@@ -30,6 +30,12 @@
   box-shadow: 0 0 0 3px rgba(20, 93, 160, 0.2);
 }
 
+.nv-input:disabled {
+  background: #f8fafc;
+  color: var(--nv-color-muted);
+  cursor: not-allowed;
+}
+
 .nv-focus-ring:focus-visible {
   outline: none;
   box-shadow: 0 0 0 3px rgba(20, 93, 160, 0.25);
@@ -51,4 +57,125 @@
   color: #334155;
   letter-spacing: 0.04em;
   text-transform: uppercase;
+}
+
+/* 入力欄の見出し(ラベル) */
+.nv-label {
+  display: block;
+  margin-bottom: 4px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--nv-color-muted);
+}
+
+/* 補足の説明文 */
+.nv-help {
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--nv-color-muted);
+}
+
+/* 折りたたみ(<details>)の共通の見た目 */
+.nv-details {
+  border: 1px solid var(--nv-color-border);
+  border-radius: var(--nv-radius-sm);
+  background: var(--nv-color-surface);
+}
+
+.nv-details > summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: var(--nv-radius-sm);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--nv-color-text);
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+}
+
+.nv-details > summary::-webkit-details-marker {
+  display: none;
+}
+
+.nv-details > summary::before {
+  content: '';
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-right: 1.5px solid var(--nv-color-muted);
+  border-bottom: 1.5px solid var(--nv-color-muted);
+  transform: rotate(-45deg);
+  transition: transform var(--nv-duration-base) var(--nv-ease-standard);
+}
+
+.nv-details[open] > summary::before {
+  transform: rotate(45deg);
+}
+
+.nv-details > summary:hover {
+  background: #f8fafc;
+}
+
+.nv-details > summary:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(20, 93, 160, 0.25);
+}
+
+.nv-details[open] > summary {
+  border-bottom: 1px solid var(--nv-color-border);
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
+}
+
+.nv-details-body {
+  padding: 12px;
+}
+
+/* チェックボックスの共通の見た目 */
+.nv-checkbox {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: var(--nv-color-accent);
+  cursor: pointer;
+}
+
+.nv-checkbox:disabled {
+  cursor: not-allowed;
+}
+
+.nv-checkbox:focus-visible {
+  outline: 2px solid var(--nv-color-accent);
+  outline-offset: 2px;
+}
+
+/* 表の共通の見た目 */
+.nv-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.nv-table th {
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--nv-color-border);
+  background: #f8fafc;
+  color: var(--nv-color-muted);
+  font-size: 12px;
+  font-weight: 600;
+  text-align: left;
+}
+
+.nv-table td {
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--nv-color-border);
+  color: var(--nv-color-text);
+}
+
+.nv-table tr:last-child td {
+  border-bottom: none;
 }

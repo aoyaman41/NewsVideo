@@ -15,12 +15,14 @@ import * as path from 'path';
 import { GoogleGenAI } from '@google/genai';
 import {
   DEFAULT_GEMINI_TTS_MODEL,
+  getGeminiTtsModelCapabilities,
   isGeminiTtsModel,
   type GeminiTtsModel,
 } from '../../shared/constants/models';
 import {
   DEFAULT_TTS_NARRATION_STYLE_PRESET,
   buildTtsNarrationInstruction,
+  buildTtsStyleDescriptor,
   isTtsNarrationStylePreset,
   type TtsNarrationStylePreset,
 } from '../../shared/project/ttsNarrationStyles';
@@ -175,7 +177,9 @@ function buildSsmlWithMarks(segments: string[]): string {
   const body = segments.map((seg, i) => `<mark name="m${i}"/>${escapeSsmlText(seg)}`).join('');
   return `<speak>${body}</speak>`;
 }
-const withRetry = retryTransient;
+// 音声合成は、テキスト・画像とは別の「音声」の枠で同時実行数を制御する
+const withRetry = <T>(operation: () => Promise<T>, maxAttempts?: number, baseDelay?: number) =>
+  retryTransient(operation, maxAttempts, baseDelay, 'gemini:tts');
 
 async function synthesizeGoogleTts(
   text: string,
@@ -294,11 +298,11 @@ async function synthesizeGeminiTts(
   const narrationStylePreset = isTtsNarrationStylePreset(options.narrationStylePreset)
     ? options.narrationStylePreset
     : DEFAULT_TTS_NARRATION_STYLE_PRESET;
-  const narrationInstruction = buildTtsNarrationInstruction(
-    narrationStylePreset,
-    options.narrationStyleNote
-  );
   const modelId = isGeminiTtsModel(options.ttsModel) ? options.ttsModel : DEFAULT_GEMINI_TTS_MODEL;
+  // 3.8 は短いスタイル記述子を speechMetadata.style で渡す。3.1 / 2.5 は日本語の命令文を本文の前に付ける
+  const narrationInstruction = getGeminiTtsModelCapabilities(modelId).styleViaSpeechMetadata
+    ? buildTtsStyleDescriptor(narrationStylePreset, options.narrationStyleNote)
+    : buildTtsNarrationInstruction(narrationStylePreset, options.narrationStyleNote);
 
   const ai = new GoogleGenAI({ apiKey });
   const request = buildGeminiTtsRequest({

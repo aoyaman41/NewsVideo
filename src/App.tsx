@@ -1,7 +1,10 @@
-import { Suspense, lazy } from 'react';
+import { Suspense, lazy, useEffect } from 'react';
 import { HashRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { MainLayout } from './components/layout';
+import { JobNotifier } from './components/job/JobNotifier';
+import { OnboardingGate } from './components/onboarding/OnboardingGate';
 import { FeedbackProvider } from './components/ui';
+import { ensureGenerationPreferencesMigrated } from './stores/generationPreferences';
 
 const ProjectListPage = lazy(async () => ({
   default: (await import('./pages/ProjectListPage')).ProjectListPage,
@@ -24,14 +27,29 @@ const AudioManagePage = lazy(async () => ({
 const VideoManagePage = lazy(async () => ({
   default: (await import('./pages/VideoManagePage')).VideoManagePage,
 }));
+const WelcomePage = lazy(async () => ({
+  default: (await import('./components/onboarding/WelcomePage')).WelcomePage,
+}));
 
 function App() {
+  // 以前の版が画面側(localStorage)に覚えていた進め方と予算を、起動後に 1 回だけ設定へ移す
+  useEffect(() => {
+    void ensureGenerationPreferencesMigrated();
+  }, []);
+
   return (
     <HashRouter>
       <FeedbackProvider>
-        <Suspense fallback={<div className="p-6 text-sm text-slate-500">ページを読み込み中...</div>}>
+        <OnboardingGate />
+        <JobNotifier />
+        <Suspense
+          fallback={
+            <div className="p-6 text-sm text-[var(--nv-color-muted)]">ページを読み込み中...</div>
+          }
+        >
           <Routes>
             <Route path="/" element={<Navigate to="/projects" replace />} />
+            <Route path="/welcome" element={<WelcomePage />} />
             <Route element={<MainLayout />}>
               <Route path="/projects" element={<ProjectListPage />} />
               <Route path="/projects/:projectId/article" element={<ArticleInputPage />} />

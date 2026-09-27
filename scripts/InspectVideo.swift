@@ -38,7 +38,26 @@ struct InspectVideo {
       } }
       samples.append(["time": actual.seconds, "rgb": Array(pixel.prefix(3)).map(Int.init), "brightTop": brightTop, "brightBottom": brightBottom])
     }
-    let output: [String: Any] = ["videoTracks": video.count, "audioTracks": audio.count, "width": size.width, "height": size.height, "duration": duration, "samples": samples]
+    // フレームレート・フレーム数・ビットレート・音声の形式(書き出し設定が反映されているかの確認用)
+    var videoFrames = 0
+    if let track = video.first {
+      let reader = try AVAssetReader(asset: asset)
+      let output = AVAssetReaderTrackOutput(track: track, outputSettings: nil)
+      reader.add(output)
+      reader.startReading()
+      while let sample = output.copyNextSampleBuffer() { videoFrames += CMSampleBufferGetNumSamples(sample) }
+    }
+    let fps = try await video.first?.load(.nominalFrameRate) ?? 0
+    let videoDataRate = try await video.first?.load(.estimatedDataRate) ?? 0
+    let audioDataRate = try await audio.first?.load(.estimatedDataRate) ?? 0
+    var audioSampleRate = 0.0
+    var audioChannels = 0
+    if let description = try await audio.first?.load(.formatDescriptions).first,
+       let basic = CMAudioFormatDescriptionGetStreamBasicDescription(description)?.pointee {
+      audioSampleRate = basic.mSampleRate
+      audioChannels = Int(basic.mChannelsPerFrame)
+    }
+    let output: [String: Any] = ["videoTracks": video.count, "audioTracks": audio.count, "width": size.width, "height": size.height, "duration": duration, "samples": samples, "fps": fps, "videoFrames": videoFrames, "videoDataRate": videoDataRate, "audioDataRate": audioDataRate, "audioSampleRate": audioSampleRate, "audioChannels": audioChannels]
     let data = try JSONSerialization.data(withJSONObject: output, options: [.sortedKeys])
     print(String(decoding: data, as: UTF8.self))
   }

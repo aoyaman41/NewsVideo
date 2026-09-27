@@ -10,6 +10,7 @@ enum RendererError: LocalizedError {
   case appendFrameFailed
   case exportFailed(String)
   case missingVideoTrack(String)
+  case readFailed(String)
 
   var errorDescription: String? {
     switch self {
@@ -20,11 +21,13 @@ enum RendererError: LocalizedError {
     case .createWriterFailed(let message):
       return message
     case .appendFrameFailed:
-      return "Failed to append frame to video writer."
+      return "Failed to append a sample to the video writer."
     case .exportFailed(let message):
       return message
     case .missingVideoTrack(let path):
       return "Video track not found: \(path)"
+    case .readFailed(let message):
+      return message
     }
   }
 }
@@ -79,6 +82,8 @@ struct RenderClosingCardRequest: Codable {
   let height: Int
   let fps: Int
   let videoBitrate: String
+  /// 古い呼び出し元は送らない。省略時は 128k の無音トラックを付ける
+  let audioBitrate: String?
   let durationSec: Double
   let headline: String?
   let cta: String?
@@ -115,10 +120,6 @@ func removeItemIfExists(_ url: URL) throws {
 func decodeRequest<T: Decodable>(_ type: T.Type, from path: String) throws -> T {
   let data = try Data(contentsOf: URL(fileURLWithPath: path))
   return try JSONDecoder().decode(T.self, from: data)
-}
-
-func makeFrameDuration(fps: Int) -> CMTime {
-  CMTime(seconds: 1.0 / Double(max(1, fps)), preferredTimescale: 600)
 }
 
 func awaitFinishWriting(_ writer: AVAssetWriter) async throws {
@@ -170,6 +171,359 @@ func awaitExport(_ session: AVAssetExportSession) async throws {
     throw RendererError.exportFailed("Unexpected export status: \(session.status.rawValue)")
   }
 }
+
+// MARK: - Encoding settings
+
+/// 出力する音声の形式。すべての区間を同じ形式にして、連結を再エンコードなし(passthrough)で行えるようにする
+let outputAudioSampleRate = 48_000
+let outputAudioChannels = 2
+
+struct EncodeSettings {
+  let width: Int
+  let height: Int
+  let fps: Int
+  let videoBitrate: Int
+  let audioBitrate: Int
+
+  init(width: Int, height: Int, fps: Int, videoBitrate: String, audioBitrate: String) {
+    self.width = width
+    self.height = height
+    self.fps = max(1, fps)
+    self.videoBitrate = max(100_000, parseBitrate(videoBitrate))
+    // AAC-LC 48kHz ステレオが受け付ける範囲に収める
+    self.audioBitrate = min(320_000, max(64_000, parseBitrate(audioBitrate)))
+  }
+
+  func frameTime(_ index: Int) -> CMTime {
+    CMTime(value: CMTimeValue(index), timescale: CMTimeScale(fps))
+  }
+
+  func frameCount(seconds: Double) -> Int {
+    max(1, Int((seconds * Double(fps)).rounded()))
+  }
+
+  /// 映像のフレーム数と同じ長さの音声のサンプル数
+  func audioFrameCount(videoFrames: Int) -> Int {
+    Int((Double(videoFrames) * Double(outputAudioSampleRate) / Double(fps)).rounded())
+  }
+
+  var progressInterval: Int { max(1, fps / 2) }
+
+  var colorProperties: [String: Any] {
+    [
+      AVVideoColorPrimariesKey: AVVideoColorPrimaries_ITU_R_709_2,
+      AVVideoTransferFunctionKey: AVVideoTransferFunction_ITU_R_709_2,
+      AVVideoYCbCrMatrixKey: AVVideoYCbCrMatrix_ITU_R_709_2,
+    ]
+  }
+
+  var videoOutputSettings: [String: Any] {
+    [
+      AVVideoCodecKey: AVVideoCodecType.h264,
+      AVVideoWidthKey: width,
+      AVVideoHeightKey: height,
+      AVVideoColorPropertiesKey: colorProperties,
+      AVVideoCompressionPropertiesKey: [
+        AVVideoAverageBitRateKey: videoBitrate,
+        AVVideoProfileLevelKey: AVVideoProfileLevelH264HighAutoLevel,
+        AVVideoExpectedSourceFrameRateKey: fps,
+        AVVideoMaxKeyFrameIntervalKey: fps * 2,
+        // B フレームを使わない(表示と復号の順序が同じになり、連結時の編集リストが単純になる。静止画中心なので画質への影響はほぼない)
+        AVVideoAllowFrameReorderingKey: false,
+      ] as [String: Any],
+    ]
+  }
+
+  var audioOutputSettings: [String: Any] {
+    var layout = AudioChannelLayout()
+    layout.mChannelLayoutTag = kAudioChannelLayoutTag_Stereo
+    return [
+      AVFormatIDKey: kAudioFormatMPEG4AAC,
+      AVSampleRateKey: outputAudioSampleRate,
+      AVNumberOfChannelsKey: outputAudioChannels,
+      AVChannelLayoutKey: Data(bytes: &layout, count: MemoryLayout<AudioChannelLayout>.size),
+      AVEncoderBitRateKey: audioBitrate,
+      // 設定したビットレートどおりにする(既定の可変方式では、無音の多い読み上げで大きく下回る)
+      AVEncoderBitRateStrategyKey: AVAudioBitRateStrategy_Constant,
+    ]
+  }
+}
+
+// MARK: - Audio
+
+let pcmReadSettings: [String: Any] = [
+  AVFormatIDKey: kAudioFormatLinearPCM,
+  AVSampleRateKey: outputAudioSampleRate,
+  AVNumberOfChannelsKey: outputAudioChannels,
+  AVLinearPCMBitDepthKey: 16,
+  AVLinearPCMIsFloatKey: false,
+  AVLinearPCMIsBigEndianKey: false,
+  AVLinearPCMIsNonInterleaved: false,
+]
+
+/// 素材の音声を 48kHz・ステレオ・16bit に変換しながら読む
+final class PCMReader {
+  private let reader: AVAssetReader
+  private let output: AVAssetReaderAudioMixOutput
+  private var pending: [Int16] = []
+  private var offset = 0
+  private var finished = false
+
+  init?(asset: AVAsset, tracks: [AVAssetTrack], duration: CMTime) throws {
+    if tracks.isEmpty { return nil }
+    reader = try AVAssetReader(asset: asset)
+    reader.timeRange = CMTimeRange(start: .zero, duration: duration)
+    output = AVAssetReaderAudioMixOutput(audioTracks: tracks, audioSettings: pcmReadSettings)
+    output.alwaysCopiesSampleData = false
+    guard reader.canAdd(output) else {
+      throw RendererError.readFailed("Cannot read the audio track.")
+    }
+    reader.add(output)
+    guard reader.startReading() else {
+      throw RendererError.readFailed(reader.error?.localizedDescription ?? "Failed to read the audio track.")
+    }
+  }
+
+  /// frames 個まで読み、読めた数を返す(終わりに達したら 0)
+  func read(into destination: UnsafeMutablePointer<Int16>, frames: Int) throws -> Int {
+    var written = 0
+    while written < frames {
+      if offset >= pending.count {
+        if finished { break }
+        guard let sample = output.copyNextSampleBuffer() else {
+          finished = true
+          if reader.status == .failed {
+            throw RendererError.readFailed(reader.error?.localizedDescription ?? "Failed to read the audio track.")
+          }
+          break
+        }
+        guard let block = CMSampleBufferGetDataBuffer(sample) else { continue }
+        let length = CMBlockBufferGetDataLength(block)
+        pending = [Int16](repeating: 0, count: length / MemoryLayout<Int16>.size)
+        let status = pending.withUnsafeMutableBytes { bytes in
+          CMBlockBufferCopyDataBytes(block, atOffset: 0, dataLength: length, destination: bytes.baseAddress!)
+        }
+        if status != kCMBlockBufferNoErr { throw RendererError.readFailed("Failed to copy audio samples.") }
+        offset = 0
+      }
+      let available = (pending.count - offset) / outputAudioChannels
+      let count = min(available, frames - written)
+      if count <= 0 {
+        offset = pending.count
+        continue
+      }
+      pending.withUnsafeBufferPointer { source in
+        (destination + written * outputAudioChannels).update(
+          from: source.baseAddress! + offset,
+          count: count * outputAudioChannels
+        )
+      }
+      offset += count * outputAudioChannels
+      written += count
+    }
+    return written
+  }
+}
+
+/// 映像と同じ長さの音声を、書き込み用のサンプルとして少しずつ作る。
+/// 先頭に leadFrames 分の無音を置き、素材が足りない分(素材なしを含む)は無音で埋める
+final class AudioFeeder {
+  private let totalFrames: Int
+  private let leadFrames: Int
+  private let source: PCMReader?
+  private var position = 0
+  private let chunkFrames = 4096
+  private let format: CMAudioFormatDescription
+
+  init(totalFrames: Int, leadFrames: Int = 0, source: PCMReader?) throws {
+    self.totalFrames = max(0, totalFrames)
+    self.leadFrames = max(0, leadFrames)
+    self.source = source
+    var description = AudioStreamBasicDescription(
+      mSampleRate: Float64(outputAudioSampleRate),
+      mFormatID: kAudioFormatLinearPCM,
+      mFormatFlags: kLinearPCMFormatFlagIsSignedInteger | kLinearPCMFormatFlagIsPacked,
+      mBytesPerPacket: UInt32(outputAudioChannels * 2),
+      mFramesPerPacket: 1,
+      mBytesPerFrame: UInt32(outputAudioChannels * 2),
+      mChannelsPerFrame: UInt32(outputAudioChannels),
+      mBitsPerChannel: 16,
+      mReserved: 0
+    )
+    var formatOut: CMAudioFormatDescription?
+    let status = CMAudioFormatDescriptionCreate(
+      allocator: kCFAllocatorDefault,
+      asbd: &description,
+      layoutSize: 0,
+      layout: nil,
+      magicCookieSize: 0,
+      magicCookie: nil,
+      extensions: nil,
+      formatDescriptionOut: &formatOut
+    )
+    guard status == noErr, let formatOut else {
+      throw RendererError.createWriterFailed("Failed to create the audio format.")
+    }
+    format = formatOut
+  }
+
+  func next() throws -> CMSampleBuffer? {
+    if position >= totalFrames { return nil }
+    let count = min(chunkFrames, totalFrames - position)
+    var samples = [Int16](repeating: 0, count: count * outputAudioChannels)
+    let sourceStart = max(position, leadFrames)
+    if let source, sourceStart < position + count {
+      let skip = sourceStart - position
+      _ = try samples.withUnsafeMutableBufferPointer { buffer in
+        try source.read(into: buffer.baseAddress! + skip * outputAudioChannels, frames: position + count - sourceStart)
+      }
+    }
+    let presentationTime = CMTime(value: CMTimeValue(position), timescale: CMTimeScale(outputAudioSampleRate))
+    position += count
+    return try makeSampleBuffer(samples, frames: count, presentationTime: presentationTime)
+  }
+
+  private func makeSampleBuffer(_ samples: [Int16], frames: Int, presentationTime: CMTime) throws -> CMSampleBuffer {
+    let byteCount = samples.count * MemoryLayout<Int16>.size
+    var block: CMBlockBuffer?
+    var status = CMBlockBufferCreateWithMemoryBlock(
+      allocator: kCFAllocatorDefault,
+      memoryBlock: nil,
+      blockLength: byteCount,
+      blockAllocator: kCFAllocatorDefault,
+      customBlockSource: nil,
+      offsetToData: 0,
+      dataLength: byteCount,
+      flags: kCMBlockBufferAssureMemoryNowFlag,
+      blockBufferOut: &block
+    )
+    guard status == kCMBlockBufferNoErr, let block else {
+      throw RendererError.createWriterFailed("Failed to allocate audio samples.")
+    }
+    status = samples.withUnsafeBytes { bytes in
+      CMBlockBufferReplaceDataBytes(with: bytes.baseAddress!, blockBuffer: block, offsetIntoDestination: 0, dataLength: byteCount)
+    }
+    guard status == kCMBlockBufferNoErr else {
+      throw RendererError.createWriterFailed("Failed to copy audio samples.")
+    }
+    var sample: CMSampleBuffer?
+    status = CMAudioSampleBufferCreateReadyWithPacketDescriptions(
+      allocator: kCFAllocatorDefault,
+      dataBuffer: block,
+      formatDescription: format,
+      sampleCount: frames,
+      presentationTimeStamp: presentationTime,
+      packetDescriptions: nil,
+      sampleBufferOut: &sample
+    )
+    guard status == noErr, let sample else {
+      throw RendererError.createWriterFailed("Failed to create audio samples.")
+    }
+    return sample
+  }
+}
+
+// MARK: - Writer
+
+/// 1 つの区間(パート・締めカード・オープニングなど)を、映像と音声を 1 回ずつエンコードして書き出す。
+/// 映像は指定のビットレートの H.264(一定フレームレート)、音声は指定のビットレートの AAC 48kHz ステレオ
+final class SegmentWriter {
+  private let writer: AVAssetWriter
+  private let videoInput: AVAssetWriterInput
+  private let adaptor: AVAssetWriterInputPixelBufferAdaptor
+  private let audioInput: AVAssetWriterInput
+  let settings: EncodeSettings
+
+  init(outputURL: URL, settings: EncodeSettings) throws {
+    self.settings = settings
+    try FileManager.default.createDirectory(
+      at: outputURL.deletingLastPathComponent(),
+      withIntermediateDirectories: true
+    )
+    try removeItemIfExists(outputURL)
+    writer = try AVAssetWriter(outputURL: outputURL, fileType: .mp4)
+    writer.shouldOptimizeForNetworkUse = true
+    videoInput = AVAssetWriterInput(mediaType: .video, outputSettings: settings.videoOutputSettings)
+    videoInput.expectsMediaDataInRealTime = false
+    // 12 / 24 / 25 / 30 / 60fps のどれでも 1 フレームが整数になる時間の単位
+    videoInput.mediaTimeScale = 90_000
+    adaptor = AVAssetWriterInputPixelBufferAdaptor(
+      assetWriterInput: videoInput,
+      sourcePixelBufferAttributes: [
+        kCVPixelBufferPixelFormatTypeKey as String: Int(kCVPixelFormatType_32BGRA),
+        kCVPixelBufferWidthKey as String: settings.width,
+        kCVPixelBufferHeightKey as String: settings.height,
+      ]
+    )
+    audioInput = AVAssetWriterInput(mediaType: .audio, outputSettings: settings.audioOutputSettings)
+    audioInput.expectsMediaDataInRealTime = false
+    guard writer.canAdd(videoInput), writer.canAdd(audioInput) else {
+      throw RendererError.createWriterFailed("Cannot attach inputs to AVAssetWriter.")
+    }
+    writer.add(videoInput)
+    writer.add(audioInput)
+  }
+
+  /// frame(i) は i 番目のフレームの画像を返す(同じ画像を返してよい)。onFrame は書き込んだフレーム数を受け取る
+  func write(
+    totalFrames: Int,
+    audio: AudioFeeder,
+    frame: (Int) throws -> CVPixelBuffer,
+    onFrame: (Int) -> Void
+  ) async throws {
+    guard writer.startWriting() else {
+      throw RendererError.createWriterFailed(writer.error?.localizedDescription ?? "startWriting failed")
+    }
+    writer.startSession(atSourceTime: .zero)
+    var nextFrame = 0
+    var videoDone = false
+    var audioDone = false
+    do {
+      // 映像と音声を交互に、書き込める方から書き込む(AVAssetWriter が両者の時刻を揃えて待たせる)
+      while !(videoDone && audioDone) {
+        if writer.status == .failed {
+          throw writer.error ?? RendererError.appendFrameFailed
+        }
+        var progressed = false
+        if !videoDone && videoInput.isReadyForMoreMediaData {
+          if nextFrame >= totalFrames {
+            videoInput.markAsFinished()
+            videoDone = true
+          } else {
+            let buffer = try frame(nextFrame)
+            guard adaptor.append(buffer, withPresentationTime: settings.frameTime(nextFrame)) else {
+              throw writer.error ?? RendererError.appendFrameFailed
+            }
+            nextFrame += 1
+            onFrame(nextFrame)
+          }
+          progressed = true
+        }
+        if !audioDone && audioInput.isReadyForMoreMediaData {
+          if let sample = try audio.next() {
+            guard audioInput.append(sample) else {
+              throw writer.error ?? RendererError.appendFrameFailed
+            }
+          } else {
+            audioInput.markAsFinished()
+            audioDone = true
+          }
+          progressed = true
+        }
+        if !progressed {
+          try await Task.sleep(nanoseconds: 1_000_000)
+        }
+      }
+    } catch {
+      if writer.status == .writing { writer.cancelWriting() }
+      throw error
+    }
+    writer.endSession(atSourceTime: settings.frameTime(totalFrames))
+    try await awaitFinishWriting(writer)
+  }
+}
+
+// MARK: - Frames
 
 func makePixelBuffer(width: Int, height: Int) throws -> CVPixelBuffer {
   var pixelBuffer: CVPixelBuffer?
@@ -272,119 +626,200 @@ func drawCGImageToPixelBuffer(cgImage: CGImage, width: Int, height: Int, caption
   return pixelBuffer
 }
 
-func renderImageSequenceVideo(
+/// 静止画の並びを一定フレームレートの映像にする。字幕が変わらない間は同じ画像を使い回す(描画は切り替わりの時だけ)
+func imageSequenceFrames(
   entries: [ImageEntry],
-  width: Int,
-  height: Int,
-  fps: Int,
-  videoBitrate: Int,
-  outputURL: URL,
-  captions: [CaptionCue] = [],
-  graphic: GraphicOverlay? = nil
-) async throws -> CMTime {
-  try removeItemIfExists(outputURL)
-
-  let writer = try AVAssetWriter(outputURL: outputURL, fileType: .mp4)
-  let compressionProperties: [String: Any] = [
-    AVVideoAverageBitRateKey: videoBitrate,
-    AVVideoProfileLevelKey: AVVideoProfileLevelH264HighAutoLevel,
-  ]
-  let outputSettings: [String: Any] = [
-    AVVideoCodecKey: AVVideoCodecType.h264,
-    AVVideoWidthKey: width,
-    AVVideoHeightKey: height,
-    AVVideoCompressionPropertiesKey: compressionProperties,
-  ]
-  let input = AVAssetWriterInput(mediaType: .video, outputSettings: outputSettings)
-  input.expectsMediaDataInRealTime = false
-  let adaptor = AVAssetWriterInputPixelBufferAdaptor(assetWriterInput: input, sourcePixelBufferAttributes: nil)
-
-  guard writer.canAdd(input) else {
-    throw RendererError.createWriterFailed("Cannot attach video input to AVAssetWriter.")
-  }
-  writer.add(input)
-
-  guard writer.startWriting() else {
-    throw RendererError.createWriterFailed(writer.error?.localizedDescription ?? "startWriting failed")
-  }
-  writer.startSession(atSourceTime: .zero)
-
-  let frameDuration = makeFrameDuration(fps: fps)
-  var presentationTime = CMTime.zero
-  let totalDurationSec = max(0.1, entries.reduce(0.0) { $0 + $1.durationSec })
-  var renderedDurationSec = 0.0
-  var imageCache: [String: CGImage] = [:]
-
+  settings: EncodeSettings,
+  totalFrames: Int,
+  captions: [CaptionCue],
+  graphic: GraphicOverlay?
+) -> (Int) throws -> CVPixelBuffer {
+  var boundaries: [Int] = []
+  var cumulative = 0.0
   for entry in entries {
-    let frameCount = max(1, Int(round(entry.durationSec * Double(fps))))
-    let cgImage: CGImage
-    if let cached = imageCache[entry.filePath] {
-      cgImage = cached
-    } else {
-      let loaded = try loadCGImage(imagePath: entry.filePath)
-      imageCache[entry.filePath] = loaded
-      cgImage = loaded
-    }
-
-    for frameIndex in 0 ..< frameCount {
-      while !input.isReadyForMoreMediaData {
-        try? await Task.sleep(nanoseconds: 5_000_000)
-      }
-
-      let pixelBuffer = try drawCGImageToPixelBuffer(
-        cgImage: cgImage,
-        width: width,
-        height: height,
-        caption: captions.first(where: { $0.start <= CMTimeGetSeconds(presentationTime) && $0.end > CMTimeGetSeconds(presentationTime) })?.text,
-        graphic: graphic
-      )
-
-      guard adaptor.append(pixelBuffer, withPresentationTime: presentationTime) else {
-        throw writer.error ?? RendererError.appendFrameFailed
-      }
-
-      renderedDurationSec = min(totalDurationSec, CMTimeGetSeconds(presentationTime))
-      if frameIndex == 0 || frameIndex == frameCount - 1 {
-        let outTimeUs = Int64(renderedDurationSec * 1_000_000.0)
-        writeProgress("out_time_ms", String(outTimeUs))
-      }
-
-      presentationTime = CMTimeAdd(presentationTime, frameDuration)
-    }
+    cumulative += max(0, entry.durationSec)
+    boundaries.append(min(totalFrames, Int((cumulative * Double(settings.fps)).rounded())))
   }
-
-  input.markAsFinished()
-  try await awaitFinishWriting(writer)
-  let finalDuration = CMTime(seconds: totalDurationSec, preferredTimescale: 600)
-  writeProgress("out_time_ms", String(Int64(totalDurationSec * 1_000_000.0)))
-  return finalDuration
+  if !boundaries.isEmpty { boundaries[boundaries.count - 1] = totalFrames }
+  var images: [String: CGImage] = [:]
+  var entryIndex = 0
+  var cachedKey: String?
+  var cachedBuffer: CVPixelBuffer?
+  return { index in
+    while entryIndex < boundaries.count - 1 && index >= boundaries[entryIndex] {
+      entryIndex += 1
+    }
+    let entry = entries[entryIndex]
+    let time = Double(index) / Double(settings.fps)
+    let caption = captions.first(where: { $0.start <= time && $0.end > time })?.text
+    let key = "\(entryIndex)\u{1}\(caption ?? "")"
+    if let cachedBuffer, cachedKey == key { return cachedBuffer }
+    let image: CGImage
+    if let loaded = images[entry.filePath] {
+      image = loaded
+    } else {
+      image = try loadCGImage(imagePath: entry.filePath)
+      images[entry.filePath] = image
+    }
+    let buffer = try drawCGImageToPixelBuffer(
+      cgImage: image,
+      width: settings.width,
+      height: settings.height,
+      caption: caption,
+      graphic: graphic
+    )
+    cachedKey = key
+    cachedBuffer = buffer
+    return buffer
+  }
 }
 
-func exportComposition(
-  composition: AVMutableComposition,
+/// 動画(またはコンポジション)を、映像合成の設定どおりに一定フレームレートで読み出す
+final class CompositionFrameSource {
+  private let reader: AVAssetReader
+  private let output: AVAssetReaderVideoCompositionOutput
+  private let fps: Int
+  private var last: CVPixelBuffer?
+  private var pending: (buffer: CVPixelBuffer, time: CMTime)?
+  private var finished = false
+  private let label: String
+
+  init(asset: AVAsset, tracks: [AVAssetTrack], videoComposition: AVVideoComposition, duration: CMTime, fps: Int, label: String) throws {
+    self.fps = fps
+    self.label = label
+    reader = try AVAssetReader(asset: asset)
+    reader.timeRange = CMTimeRange(start: .zero, duration: duration)
+    output = AVAssetReaderVideoCompositionOutput(
+      videoTracks: tracks,
+      videoSettings: [kCVPixelBufferPixelFormatTypeKey as String: Int(kCVPixelFormatType_32BGRA)]
+    )
+    output.videoComposition = videoComposition
+    output.alwaysCopiesSampleData = false
+    guard reader.canAdd(output) else {
+      throw RendererError.readFailed("Cannot read the video track: \(label)")
+    }
+    reader.add(output)
+    guard reader.startReading() else {
+      throw RendererError.readFailed(reader.error?.localizedDescription ?? "Failed to read the video track: \(label)")
+    }
+  }
+
+  /// index 番目のフレームの時刻に表示されている画像(元の動画が短い場合は最後の画像を使い続ける)
+  func frame(_ index: Int) throws -> CVPixelBuffer {
+    let target = CMTime(value: CMTimeValue(index), timescale: CMTimeScale(fps))
+    while true {
+      if let candidate = pending {
+        if CMTimeCompare(candidate.time, target) <= 0 {
+          last = candidate.buffer
+          pending = nil
+        } else {
+          break
+        }
+      }
+      if finished { break }
+      guard let sample = output.copyNextSampleBuffer() else {
+        finished = true
+        if reader.status == .failed {
+          throw RendererError.readFailed(reader.error?.localizedDescription ?? "Failed to read the video track: \(label)")
+        }
+        continue
+      }
+      if let buffer = CMSampleBufferGetImageBuffer(sample) {
+        pending = (buffer, CMSampleBufferGetPresentationTimeStamp(sample))
+      }
+    }
+    if last == nil, let candidate = pending { last = candidate.buffer }
+    guard let last else { throw RendererError.missingVideoTrack(label) }
+    return last
+  }
+}
+
+func applyColorProperties(_ composition: AVMutableVideoComposition) {
+  composition.colorPrimaries = AVVideoColorPrimaries_ITU_R_709_2
+  composition.colorTransferFunction = AVVideoTransferFunction_ITU_R_709_2
+  composition.colorYCbCrMatrix = AVVideoYCbCrMatrix_ITU_R_709_2
+}
+
+/// 動画(またはコンポジション)を指定の設定で書き出し直す。音声がなければ無音を付ける
+func transcode(
+  asset: AVAsset,
+  videoTracks: [AVAssetTrack],
+  audioTracks: [AVAssetTrack],
+  videoComposition: AVVideoComposition,
+  duration: CMTime,
+  settings: EncodeSettings,
   outputURL: URL,
-  fileType: AVFileType = .mp4,
-  presetName: String = AVAssetExportPresetHighestQuality,
-  videoComposition: AVVideoComposition? = nil,
-  timeRange: CMTimeRange? = nil
+  label: String
 ) async throws {
-  try removeItemIfExists(outputURL)
-  guard let session = AVAssetExportSession(
-    asset: composition,
-    presetName: presetName
-  ) else {
-    throw RendererError.exportFailed("Failed to create AVAssetExportSession.")
-  }
+  let totalFrames = settings.frameCount(seconds: CMTimeGetSeconds(duration))
+  let frames = try CompositionFrameSource(
+    asset: asset,
+    tracks: videoTracks,
+    videoComposition: videoComposition,
+    duration: duration,
+    fps: settings.fps,
+    label: label
+  )
+  let audio = try AudioFeeder(
+    totalFrames: settings.audioFrameCount(videoFrames: totalFrames),
+    source: try PCMReader(asset: asset, tracks: audioTracks, duration: duration)
+  )
+  let writer = try SegmentWriter(outputURL: outputURL, settings: settings)
+  try await writer.write(
+    totalFrames: totalFrames,
+    audio: audio,
+    frame: { try frames.frame($0) },
+    onFrame: { written in
+      if written % settings.progressInterval == 0 || written == totalFrames {
+        writeProgress("progress", String(format: "%.4f", Double(written) / Double(totalFrames)))
+      }
+    }
+  )
+}
 
-  session.outputURL = outputURL
-  session.outputFileType = fileType
-  session.shouldOptimizeForNetworkUse = true
-  session.videoComposition = videoComposition
-  if let timeRange {
-    session.timeRange = timeRange
-  }
+// MARK: - Commands
 
-  try await awaitExport(session)
+func exportPartVideo(_ request: RenderPartRequest) async throws {
+  guard !request.imageEntries.isEmpty else {
+    throw RendererError.invalidArguments("No images for the part.")
+  }
+  let settings = EncodeSettings(
+    width: request.width,
+    height: request.height,
+    fps: request.fps,
+    videoBitrate: request.videoBitrate,
+    audioBitrate: request.audioBitrate
+  )
+  let totalDurationSec = max(0.1, request.imageEntries.reduce(0.0) { $0 + max(0, $1.durationSec) })
+  let totalFrames = settings.frameCount(seconds: totalDurationSec)
+  let frames = imageSequenceFrames(
+    entries: request.imageEntries,
+    settings: settings,
+    totalFrames: totalFrames,
+    captions: request.captions ?? [],
+    graphic: request.graphic
+  )
+  let audioAsset = AVURLAsset(url: URL(fileURLWithPath: request.audioPath))
+  let audioTracks = try await audioAsset.loadTracks(withMediaType: .audio)
+  let audioDuration = try await audioAsset.load(.duration)
+  let audio = try AudioFeeder(
+    totalFrames: settings.audioFrameCount(videoFrames: totalFrames),
+    leadFrames: Int((Double(max(0, request.audioDelayMs)) / 1000.0 * Double(outputAudioSampleRate)).rounded()),
+    source: try PCMReader(asset: audioAsset, tracks: audioTracks, duration: audioDuration)
+  )
+  let writer = try SegmentWriter(outputURL: URL(fileURLWithPath: request.outputPath), settings: settings)
+  // 進捗は ffmpeg の -progress と同じ形式(out_time_ms はマイクロ秒)で、映像 0.5 秒ごとに出す
+  try await writer.write(
+    totalFrames: totalFrames,
+    audio: audio,
+    frame: frames,
+    onFrame: { written in
+      if written % settings.progressInterval == 0 {
+        writeProgress("out_time_ms", String(Int64(Double(written) / Double(settings.fps) * 1_000_000.0)))
+      }
+    }
+  )
+  writeProgress("out_time_ms", String(Int64(Double(totalFrames) / Double(settings.fps) * 1_000_000.0)))
 }
 
 func orientedSize(for track: AVAssetTrack) -> CGSize {
@@ -407,116 +842,44 @@ func aspectFitTransform(for track: AVAssetTrack, renderSize: CGSize) -> CGAffine
   return transform
 }
 
-func exportPartVideo(_ request: RenderPartRequest) async throws {
-  let outputURL = URL(fileURLWithPath: request.outputPath)
-  try FileManager.default.createDirectory(
-    at: outputURL.deletingLastPathComponent(),
-    withIntermediateDirectories: true
-  )
-
-  let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-  try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
-  defer { try? FileManager.default.removeItem(at: tempDir) }
-
-  let tempVideoURL = tempDir.appendingPathComponent("part-video-only.mp4")
-  let videoDuration = try await renderImageSequenceVideo(
-    entries: request.imageEntries,
+func exportNormalizedClip(_ request: NormalizeClipRequest) async throws {
+  let settings = EncodeSettings(
     width: request.width,
     height: request.height,
     fps: request.fps,
-    videoBitrate: parseBitrate(request.videoBitrate),
-    outputURL: tempVideoURL,
-    captions: request.captions ?? [],
-    graphic: request.graphic
+    videoBitrate: request.videoBitrate,
+    audioBitrate: request.audioBitrate
   )
-
-  let composition = AVMutableComposition()
-  let videoAsset = AVURLAsset(url: tempVideoURL)
-  guard let videoTrack = videoAsset.tracks(withMediaType: .video).first else {
-    throw RendererError.missingVideoTrack(tempVideoURL.path)
-  }
-
-  let compositionVideoTrack = composition.addMutableTrack(withMediaType: .video, preferredTrackID: kCMPersistentTrackID_Invalid)
-  try compositionVideoTrack?.insertTimeRange(
-    CMTimeRange(start: .zero, duration: videoDuration),
-    of: videoTrack,
-    at: .zero
-  )
-
-  let audioAsset = AVURLAsset(url: URL(fileURLWithPath: request.audioPath))
-  if let audioTrack = audioAsset.tracks(withMediaType: .audio).first {
-    let delay = CMTime(milliseconds: request.audioDelayMs)
-    let compositionAudioTrack = composition.addMutableTrack(withMediaType: .audio, preferredTrackID: kCMPersistentTrackID_Invalid)
-    try compositionAudioTrack?.insertTimeRange(
-      CMTimeRange(start: .zero, duration: min(audioAsset.duration, CMTimeSubtract(videoDuration, delay))),
-      of: audioTrack,
-      at: delay
-    )
-  }
-
-  try await exportComposition(
-    composition: composition,
-    outputURL: outputURL,
-    timeRange: CMTimeRange(start: .zero, duration: videoDuration)
-  )
-  writeProgress("out_time_ms", String(Int64(CMTimeGetSeconds(videoDuration) * 1_000_000.0)))
-}
-
-func exportNormalizedClip(_ request: NormalizeClipRequest) async throws {
-  let inputURL = URL(fileURLWithPath: request.inputPath)
-  let outputURL = URL(fileURLWithPath: request.outputPath)
-  try FileManager.default.createDirectory(
-    at: outputURL.deletingLastPathComponent(),
-    withIntermediateDirectories: true
-  )
-
-  let asset = AVURLAsset(url: inputURL)
-  guard let sourceVideoTrack = asset.tracks(withMediaType: .video).first else {
+  let asset = AVURLAsset(url: URL(fileURLWithPath: request.inputPath))
+  let videoTracks = try await asset.loadTracks(withMediaType: .video)
+  guard let sourceVideoTrack = videoTracks.first else {
     throw RendererError.missingVideoTrack(request.inputPath)
   }
-
-  let composition = AVMutableComposition()
+  let audioTracks = try await asset.loadTracks(withMediaType: .audio)
+  let duration = try await asset.load(.duration)
   let renderSize = CGSize(width: request.width, height: request.height)
-  let duration = asset.duration
-
-  let compositionVideoTrack = composition.addMutableTrack(withMediaType: .video, preferredTrackID: kCMPersistentTrackID_Invalid)
-  try compositionVideoTrack?.insertTimeRange(
-    CMTimeRange(start: .zero, duration: duration),
-    of: sourceVideoTrack,
-    at: .zero
-  )
-
-  if let sourceAudioTrack = asset.tracks(withMediaType: .audio).first {
-    let compositionAudioTrack = composition.addMutableTrack(withMediaType: .audio, preferredTrackID: kCMPersistentTrackID_Invalid)
-    try compositionAudioTrack?.insertTimeRange(
-      CMTimeRange(start: .zero, duration: duration),
-      of: sourceAudioTrack,
-      at: .zero
-    )
-  }
 
   let instruction = AVMutableVideoCompositionInstruction()
   instruction.timeRange = CMTimeRange(start: .zero, duration: duration)
-
-  if let compositionVideoTrack {
-    let layerInstruction = AVMutableVideoCompositionLayerInstruction(assetTrack: compositionVideoTrack)
-    layerInstruction.setTransform(
-      aspectFitTransform(for: sourceVideoTrack, renderSize: renderSize),
-      at: .zero
-    )
-    instruction.layerInstructions = [layerInstruction]
-  }
+  let layerInstruction = AVMutableVideoCompositionLayerInstruction(assetTrack: sourceVideoTrack)
+  layerInstruction.setTransform(aspectFitTransform(for: sourceVideoTrack, renderSize: renderSize), at: .zero)
+  instruction.layerInstructions = [layerInstruction]
 
   let videoComposition = AVMutableVideoComposition()
   videoComposition.instructions = [instruction]
   videoComposition.renderSize = renderSize
-  videoComposition.frameDuration = makeFrameDuration(fps: request.fps)
+  videoComposition.frameDuration = settings.frameTime(1)
+  applyColorProperties(videoComposition)
 
-  try await exportComposition(
-    composition: composition,
-    outputURL: outputURL,
+  try await transcode(
+    asset: asset,
+    videoTracks: [sourceVideoTrack],
+    audioTracks: audioTracks.isEmpty ? [] : [audioTracks[0]],
     videoComposition: videoComposition,
-    timeRange: CMTimeRange(start: .zero, duration: duration)
+    duration: duration,
+    settings: settings,
+    outputURL: URL(fileURLWithPath: request.outputPath),
+    label: request.inputPath
   )
 }
 
@@ -587,6 +950,13 @@ func renderClosingCardImage(
 }
 
 func renderClosingCard(_ request: RenderClosingCardRequest) async throws {
+  let settings = EncodeSettings(
+    width: request.width,
+    height: request.height,
+    fps: request.fps,
+    videoBitrate: request.videoBitrate,
+    audioBitrate: request.audioBitrate ?? "128k"
+  )
   let image = renderClosingCardImage(
     width: request.width,
     height: request.height,
@@ -594,26 +964,23 @@ func renderClosingCard(_ request: RenderClosingCardRequest) async throws {
     cta: request.cta,
     source: request.source
   )
-
-  let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-  try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
-  defer { try? FileManager.default.removeItem(at: tempDir) }
-
-  let tempPng = tempDir.appendingPathComponent("closing-card.png")
-  guard let tiffData = image.tiffRepresentation,
-        let bitmapRep = NSBitmapImageRep(data: tiffData),
-        let pngData = bitmapRep.representation(using: .png, properties: [:]) else {
+  guard let cgImage = image.cgImage(forProposedRect: nil, context: nil, hints: nil) else {
     throw RendererError.createWriterFailed("Failed to render closing card image.")
   }
-  try pngData.write(to: tempPng)
-
-  _ = try await renderImageSequenceVideo(
-    entries: [ImageEntry(filePath: tempPng.path, durationSec: request.durationSec)],
-    width: request.width,
-    height: request.height,
-    fps: request.fps,
-    videoBitrate: parseBitrate(request.videoBitrate),
-    outputURL: URL(fileURLWithPath: request.outputPath)
+  let buffer = try drawCGImageToPixelBuffer(cgImage: cgImage, width: request.width, height: request.height)
+  let totalFrames = settings.frameCount(seconds: request.durationSec)
+  // ほかの区間と同じ形式にそろえるため、無音の音声トラックを付ける
+  let audio = try AudioFeeder(totalFrames: settings.audioFrameCount(videoFrames: totalFrames), source: nil)
+  let writer = try SegmentWriter(outputURL: URL(fileURLWithPath: request.outputPath), settings: settings)
+  try await writer.write(
+    totalFrames: totalFrames,
+    audio: audio,
+    frame: { _ in buffer },
+    onFrame: { written in
+      if written % settings.progressInterval == 0 || written == totalFrames {
+        writeProgress("out_time_ms", String(Int64(Double(written) / Double(settings.fps) * 1_000_000.0)))
+      }
+    }
   )
 }
 
@@ -623,54 +990,93 @@ func concatSegments(_ request: ConcatSegmentsRequest) async throws {
     at: outputURL.deletingLastPathComponent(),
     withIntermediateDirectories: true
   )
+  let settings = EncodeSettings(
+    width: request.width,
+    height: request.height,
+    fps: request.fps,
+    videoBitrate: request.videoBitrate,
+    audioBitrate: request.audioBitrate
+  )
 
   let composition = AVMutableComposition()
-  let compositionVideoTrack = composition.addMutableTrack(
+  guard let compositionVideoTrack = composition.addMutableTrack(
     withMediaType: .video,
     preferredTrackID: kCMPersistentTrackID_Invalid
-  )
-  let compositionAudioTrack = composition.addMutableTrack(
+  ), let compositionAudioTrack = composition.addMutableTrack(
     withMediaType: .audio,
     preferredTrackID: kCMPersistentTrackID_Invalid
-  )
+  ) else {
+    throw RendererError.exportFailed("Failed to create composition tracks.")
+  }
   var cursor = CMTime.zero
+  var videoFormats: [CMFormatDescription] = []
+  var audioFormats: [CMFormatDescription] = []
+  var everySegmentHasAudio = true
 
   for segmentPath in request.segmentPaths {
     let asset = AVURLAsset(url: URL(fileURLWithPath: segmentPath))
-    let duration = asset.duration
+    let duration = try await asset.load(.duration)
 
-    guard let sourceVideoTrack = asset.tracks(withMediaType: .video).first else {
+    guard let sourceVideoTrack = try await asset.loadTracks(withMediaType: .video).first else {
       throw RendererError.missingVideoTrack(segmentPath)
     }
-
-    try compositionVideoTrack?.insertTimeRange(
+    try compositionVideoTrack.insertTimeRange(
       CMTimeRange(start: .zero, duration: duration),
       of: sourceVideoTrack,
       at: cursor
     )
+    videoFormats.append(contentsOf: try await sourceVideoTrack.load(.formatDescriptions))
 
-    if let sourceAudioTrack = asset.tracks(withMediaType: .audio).first {
-      try compositionAudioTrack?.insertTimeRange(
-        CMTimeRange(start: .zero, duration: duration),
+    if let sourceAudioTrack = try await asset.loadTracks(withMediaType: .audio).first {
+      let audioDuration = try await sourceAudioTrack.load(.timeRange).duration
+      try compositionAudioTrack.insertTimeRange(
+        CMTimeRange(start: .zero, duration: CMTimeMinimum(duration, audioDuration)),
         of: sourceAudioTrack,
         at: cursor
       )
+      audioFormats.append(contentsOf: try await sourceAudioTrack.load(.formatDescriptions))
+    } else {
+      everySegmentHasAudio = false
     }
 
     cursor = CMTimeAdd(cursor, duration)
   }
 
-  try await exportComposition(
-    composition: composition,
-    outputURL: outputURL,
-    timeRange: CMTimeRange(start: .zero, duration: cursor)
-  )
-}
-
-extension CMTime {
-  init(milliseconds: Int) {
-    self = CMTime(seconds: Double(milliseconds) / 1000.0, preferredTimescale: 600)
+  // すべての区間がこのレンダラーの同じ設定で書き出したもの(形式が完全に一致する)なら、再エンコードせずにつなぐ
+  func allEqual(_ formats: [CMFormatDescription]) -> Bool {
+    guard let first = formats.first else { return false }
+    return formats.allSatisfy { CMFormatDescriptionEqual($0, otherFormatDescription: first) }
   }
+  let passthrough = everySegmentHasAudio && allEqual(videoFormats) && allEqual(audioFormats)
+  writeProgress("concat_mode", passthrough ? "passthrough" : "reencode")
+
+  if passthrough {
+    try removeItemIfExists(outputURL)
+    guard let session = AVAssetExportSession(asset: composition, presetName: AVAssetExportPresetPassthrough) else {
+      throw RendererError.exportFailed("Failed to create AVAssetExportSession.")
+    }
+    session.outputURL = outputURL
+    session.outputFileType = .mp4
+    session.shouldOptimizeForNetworkUse = true
+    session.timeRange = CMTimeRange(start: .zero, duration: cursor)
+    try await awaitExport(session)
+    return
+  }
+
+  let videoComposition = AVMutableVideoComposition(propertiesOf: composition)
+  videoComposition.renderSize = CGSize(width: request.width, height: request.height)
+  videoComposition.frameDuration = settings.frameTime(1)
+  applyColorProperties(videoComposition)
+  try await transcode(
+    asset: composition,
+    videoTracks: [compositionVideoTrack],
+    audioTracks: compositionAudioTrack.segments.isEmpty ? [] : [compositionAudioTrack],
+    videoComposition: videoComposition,
+    duration: cursor,
+    settings: settings,
+    outputURL: outputURL,
+    label: "concat"
+  )
 }
 
 @main

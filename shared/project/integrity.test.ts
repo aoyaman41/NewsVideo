@@ -148,3 +148,32 @@ it('marks Claude scripts stale when the Claude effort changes', () => {
 
   expect(sourceInputs(project, project.parts[0]).script).not.toBe(high);
 });
+
+it('keeps existing prompt fingerprints when the image prompt model is not Claude', () => {
+  const project = completed();
+  project.generationConfig = { imagePromptTextModel: 'gpt-5.2' };
+  const before = sourceInputs(project, project.parts[0]).prompt;
+
+  project.generationConfig = { ...project.generationConfig, claudeImagePromptEffort: 'low' };
+
+  expect(sourceInputs(project, project.parts[0]).prompt).toBe(before);
+});
+
+it('marks Claude image prompts stale only when the image prompt effort changes', () => {
+  const project = completed();
+  project.generationConfig = {
+    scriptTextModel: 'claude-opus-5-5',
+    imagePromptTextModel: 'claude-opus-5-5',
+    claudeEffort: 'medium',
+    claudeImagePromptEffort: 'medium',
+  };
+  const before = sourceInputs(project, project.parts[0]);
+
+  // 台本用の effort を変えても画像プロンプトの指紋は変わらない
+  project.generationConfig = { ...project.generationConfig, claudeEffort: 'high' };
+  expect(sourceInputs(project, project.parts[0]).prompt).toBe(before.prompt);
+  expect(sourceInputs(project, project.parts[0]).script).not.toBe(before.script);
+
+  project.generationConfig = { ...project.generationConfig, claudeImagePromptEffort: 'low' };
+  expect(sourceInputs(project, project.parts[0]).prompt).not.toBe(before.prompt);
+});

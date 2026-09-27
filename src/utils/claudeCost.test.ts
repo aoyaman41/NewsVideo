@@ -129,7 +129,8 @@ describe('Claude generation estimates', () => {
     const settings = { ...DEFAULT_SETTINGS, scriptTextModel: 'claude-opus-5-5' as const };
     const text = '文'.repeat(300);
     const inputTokens = Math.ceil(text.length / 1.5) + 1500;
-    const outputTokens = 3000 * 2;
+    // M5: 台本の出力は 1 シーンあたり 450 トークンで見込む(実測 211〜436)
+    const outputTokens = 450 * 2;
 
     expect(estimateGenerationUsd('script', text, settings, 2)).toBeCloseTo(
       (inputTokens * 4 + outputTokens * 20) / 1_000_000,

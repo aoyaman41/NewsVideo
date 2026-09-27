@@ -18,7 +18,10 @@ import type {
   type OpenAIReasoningEffort,
   type TextCompletionModel,
 } from '../../shared/constants/models';
-import type { type TTSEngine } from '../../shared/settings/appSettings';
+import type { type NewProjectDefaults, type TTSEngine } from '../../shared/settings/appSettings';
+import type { type PurposeId } from '../../shared/project/purposes';
+import type { type UsageSummary } from '../../shared/project/usageLedger';
+import type { type VideoBitrateMode } from '../../shared/project/videoFormat';
 
 import type {
   type ImageAspectRatio,
@@ -70,8 +73,18 @@ interface ElectronAPI {
     ) => Promise<{ success: boolean; savedAt: string; revision: number; project: Project }>;
     delete: (projectId: string) => Promise<{ success: boolean }>;
     create: (
-      name: string | { name: string; purpose?: 'short' | 'explain' | 'news'; sample?: boolean }
+      name: string | { name: string; purpose?: PurposeId; sample?: boolean }
     ) => Promise<ProjectMeta>;
+    /** 台本がまだない動画に「新しい動画」の既定値を入れ直す。dryRun は数えるだけ */
+    applyNewProjectDefaults: (request: {
+      defaults: Partial<NewProjectDefaults>;
+      dryRun?: boolean;
+    }) => Promise<{ count: number }>;
+  };
+
+  /** 使った費用(全体の台帳の集計) */
+  usage: {
+    summary: () => Promise<UsageSummary>;
   };
 
   jobs: {
@@ -170,8 +183,13 @@ interface ElectronAPI {
       options: RenderOptions,
       outputPath: string
     ) => Promise<{ outputPath: string }>;
-    preview: (partId: string) => Promise<{ previewPath: string }>;
-    cancelRender: () => Promise<{ success: boolean }>;
+    /** intended を渡すと、Main 側でそのパートの内容が保存済みの最新と一致するかを確かめてから作る */
+    preview: (partId: string, intended?: Project) => Promise<{ previewPath: string }>;
+    /**
+     * 画面から依頼した書き出し・プレビューを止める(projectId を渡すとそのプロジェクトのものだけ)。
+     * 自動生成ジョブの書き出しは止めない(ジョブの停止 jobs.cancel で止める)
+     */
+    cancelRender: (projectId?: string) => Promise<{ success: boolean }>;
   };
 
   file: {
@@ -223,6 +241,8 @@ interface ImageBatchGenerationResult {
 interface Settings {
   readingDictionary?: Array<{ word: string; reading: string }>;
   generationConcurrency: number;
+  generationMode: 'automatic' | 'review';
+  generationBudgetUsd: number | null;
   ttsEngine: TTSEngine;
   ttsModel: GeminiTtsModel;
   ttsVoice: string;
@@ -233,17 +253,21 @@ interface Settings {
   openaiReasoningEffort: OpenAIReasoningEffort;
   geminiThinkingLevel: GeminiThinkingLevel;
   claudeEffort: ClaudeEffort;
+  claudeImagePromptEffort: ClaudeEffort;
   imageModel: ImageModel;
   imageResolution: ImageResolution;
   defaultAspectRatio: ImageAspectRatio;
   videoResolution: '1920x1080' | '1280x720' | '3840x2160';
   videoFps: number;
+  videoBitrateMode: VideoBitrateMode;
   videoBitrate: string;
   audioBitrate: string;
   videoPartLeadInSec: number;
   openingVideoPath: string;
   endingVideoPath: string;
   defaultProjectDir: string;
+  jpyPerUsd: number;
+  newProjectDefaults: NewProjectDefaults;
   cost?: CostRates;
 }
 

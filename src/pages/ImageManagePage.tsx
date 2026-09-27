@@ -1,41 +1,69 @@
 import { useScrollMemory } from '../hooks/useScrollMemory';
 import { useSceneSelection, rememberedScene } from '../stores/sceneSelection';
 import { projectClient, useProjectState } from '../stores/projectStore';
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { Header, WorkflowNav } from '../components/layout';
-import { ImageAssignment, ImageGallery, PromptEditor } from '../components/image';
+import { ImageGallery, SceneImages } from '../components/image';
+import type { SlotTarget } from '../components/image/panelSlots';
+import { normalizeTarget, placeImage } from '../components/image/panelSlots';
 import {
   Badge,
   Button,
   Card,
+  Details,
   EmptyState,
-  ErrorDetailPanel,
+  ProgressBar,
   useConfirm,
   useToast,
 } from '../components/ui';
-import type { Project, ImageAssetRef, ImagePrompt } from '../schemas';
+import { SceneList } from '../components/common/SceneList';
+import { StaleNotice } from '../components/common/StaleNotice';
+import { FriendlyError } from '../components/errors/FriendlyError';
+import { ProjectLoadFailure } from '../components/errors/ProjectLoadFailure';
+import { useErrorReport } from '../components/errors/useErrorReport';
+import { JOB_ACTIVE_MESSAGE, useJobActive } from '../components/common/useJobActive';
+import { useProjectCommit } from '../components/common/useProjectCommit';
+import { runLimited } from '../components/common/runLimited';
+import type { Project, ImageAssetRef, ImagePrompt, Part } from '../schemas';
 import { createGeminiImageUsageRecordFromAssets, createOpenAIUsageRecord } from '../utils/usage';
+import { partFreshness } from '../../shared/project/integrity';
 import {
   IMAGE_ASPECT_RATIO_LABELS,
   IMAGE_STYLE_PRESET_LABELS,
 } from '../../shared/project/imageStylePresets';
 
-type ImageBatchErrorLike = {
-  index: number;
-  partId?: string;
-  error: string;
-};
+type BatchState = { phase: 'prompt' | 'image'; done: number; total: number };
 
-function formatImageBatchErrors(errors: ImageBatchErrorLike[], project: Project): string {
-  return errors
-    .slice(0, 3)
-    .map((error) => {
-      const part = error.partId ? project.parts.find((item) => item.id === error.partId) : null;
-      const label = part ? `パート${part.index + 1}` : `項目${error.index + 1}`;
-      return `${label}: ${error.error}`;
-    })
-    .join(' / ');
+function latestPromptFor(project: Project, partId: string): ImagePrompt | undefined {
+  let latest: ImagePrompt | undefined;
+  for (const prompt of project.prompts) {
+    if (prompt.partId !== partId) continue;
+    if (!latest || prompt.createdAt >= latest.createdAt) latest = prompt;
+  }
+  return latest;
+}
+
+function styleOptions(project: Project) {
+  return {
+    stylePreset: project.presentationProfile.imageStylePreset,
+    aspectRatio: project.presentationProfile.aspectRatio,
+    styleReferenceImageIds: project.presentationProfile.styleReferenceImageIds,
+    styleReferenceNote: project.presentationProfile.styleReferenceNote,
+  };
+}
+
+function needsPrompt(project: Project, part: Part): boolean {
+  return !latestPromptFor(project, part.id) || partFreshness(project, part).prompt !== 'current';
+}
+
+/** 作り始めたときと比べて、台本か画像の並びが変わったか(変わったら、できた画像は候補に足すだけにする) */
+function sceneSnapshot(part: Part): string {
+  return JSON.stringify({ script: part.scriptText, images: part.panelImages });
+}
+
+function appendUsage(project: Project, record: Project['usage'][number] | null) {
+  return record ? [...(project.usage ?? []), record] : (project.usage ?? []);
 }
 
 export function ImageManagePage() {
@@ -47,340 +75,391 @@ export function ImageManagePage() {
   const [project, setProject] = useProjectState(projectId);
   const [selectedPartId, setSelectedPartId] = useSceneSelection(projectId);
   const scrollRef = useScrollMemory(`${projectId}:ImageManagePage`);
+  const commit = useProjectCommit(projectId);
+  const jobActive = useJobActive(projectId, project);
+
   const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [isGeneratingPrompts, setIsGeneratingPrompts] = useState(false);
-  const [isGeneratingSinglePrompt, setIsGeneratingSinglePrompt] = useState(false);
-  const [isGeneratingImage, setIsGeneratingImage] = useState(false);
-  const [isGeneratingImageBatch, setIsGeneratingImageBatch] = useState(false);
+  const [loadError, setLoadError] = useState<unknown>(null);
+  const {
+    reported: error,
+    report: reportError,
+    reportFailures,
+    clear: clearError,
+  } = useErrorReport();
+  const [busy, setBusy] = useState<{ partId: string; label: string } | null>(null);
+  const [batch, setBatch] = useState<BatchState | null>(null);
+  const batchCancelRef = useRef(false);
+  const [instructionOpen, setInstructionOpen] = useState(false);
+  const [instruction, setInstruction] = useState('');
+  const [target, setTarget] = useState<{ partId: string; slot: SlotTarget } | null>(null);
 
-  const reportError = useCallback(
-    (message: string, title?: string) => {
-      setError(message);
-      toast.error(message, title);
-    },
-    [toast]
-  );
-
-  const latestPromptByPartId = useMemo(() => {
-    const map = new Map<string, ImagePrompt>();
-    if (!project) return map;
-
-    const activePartIds = new Set(project.parts.map((part) => part.id));
-
-    for (const prompt of project.prompts) {
-      if (!activePartIds.has(prompt.partId)) continue;
-
-      const current = map.get(prompt.partId);
-      if (!current || prompt.createdAt >= current.createdAt) {
-        map.set(prompt.partId, prompt);
-      }
-    }
-
-    return map;
-  }, [project]);
-
-  const activePrompts = useMemo(() => {
-    if (!project) return [];
-    const partPrompts = project.parts
-      .map((part) => latestPromptByPartId.get(part.id))
-      .filter((prompt): prompt is ImagePrompt => !!prompt);
-    return partPrompts;
-  }, [project, latestPromptByPartId]);
-
-  const promptIdsWithAnyImage = useMemo(() => {
-    const set = new Set<string>();
-    if (!project) return set;
-    for (const image of project.images) {
-      if (image.metadata.promptId) set.add(image.metadata.promptId);
-    }
-    return set;
-  }, [project]);
-
-  const missingImagePromptCount = useMemo(() => {
-    let missing = 0;
-    for (const prompt of activePrompts) {
-      if (!promptIdsWithAnyImage.has(prompt.id)) missing += 1;
-    }
-    return missing;
-  }, [activePrompts, promptIdsWithAnyImage]);
-
-  const allProjectImages = useMemo(() => {
-    if (!project) return [];
-    return [...project.article.importedImages, ...project.images];
-  }, [project]);
-
-  const styleReferenceImageIds = project?.presentationProfile.styleReferenceImageIds ?? [];
-
-  // プロジェクト読み込み
   useEffect(() => {
     const loadProject = async () => {
       if (!projectId) return;
-
       try {
         setIsLoading(true);
         const loadedProject = await projectClient.load(projectId);
         setProject(loadedProject);
-
-        // 最初のパートを選択
         if (loadedProject.parts.length > 0) {
           setSelectedPartId(rememberedScene(projectId, loadedProject.parts));
         }
       } catch (err) {
         console.error('Failed to load project:', err);
-        reportError(
-          err instanceof Error ? err.message : 'プロジェクトの読み込みに失敗しました',
-          '読み込みに失敗しました'
-        );
+        setLoadError(err);
       } finally {
         setIsLoading(false);
       }
     };
+    void loadProject();
+  }, [projectId, setProject, setSelectedPartId]);
 
-    loadProject();
-  }, [projectId, reportError, setProject, setSelectedPartId]);
+  const selectedPart = project?.parts.find((p) => p.id === selectedPartId) ?? null;
 
-  // 画像プロンプト生成
-  const handleGeneratePrompts = useCallback(async () => {
-    if (!project || project.parts.length === 0) return;
+  // シーンを切り替えたら、指示の入力欄は閉じる
+  useEffect(() => {
+    setInstructionOpen(false);
+    setInstruction('');
+  }, [selectedPartId]);
 
-    try {
-      setIsGeneratingPrompts(true);
-      setError(null);
+  const imageById = useMemo(() => {
+    const map = new Map<string, Project['images'][number]>();
+    if (!project) return map;
+    for (const image of [...project.images, ...project.article.importedImages]) {
+      map.set(image.id, image);
+    }
+    return map;
+  }, [project]);
+  const getImageById = useCallback((imageId: string) => imageById.get(imageId), [imageById]);
 
-      const result = await window.electronAPI.ai.generateImagePrompts(
-        project.parts,
-        project.article,
-        {
-          stylePreset: project.presentationProfile.imageStylePreset,
-          aspectRatio: project.presentationProfile.aspectRatio,
-          styleReferenceImageIds: project.presentationProfile.styleReferenceImageIds,
-          styleReferenceNote: project.presentationProfile.styleReferenceNote,
-        }
+  // 候補: このシーン用に作った画像 + 記事に取り込んだ画像 + いま使っている画像
+  const candidateImages = useMemo(() => {
+    if (!project || !selectedPart) return [];
+    const promptIds = new Set(
+      project.prompts.filter((p) => p.partId === selectedPart.id).map((p) => p.id)
+    );
+    const generated = project.images.filter(
+      (img) => img.metadata.promptId && promptIds.has(img.metadata.promptId)
+    );
+    const used = selectedPart.panelImages
+      .map((ref) => imageById.get(ref.imageId))
+      .filter((img): img is NonNullable<typeof img> => Boolean(img));
+    return [...generated, ...used, ...project.article.importedImages];
+  }, [imageById, project, selectedPart]);
+
+  const batchTargets = useMemo(() => {
+    if (!project) return { parts: [] as Part[], missing: 0, stale: 0 };
+    let missing = 0;
+    let stale = 0;
+    const parts = project.parts.filter((part) => {
+      if (!part.scriptText.trim()) return false;
+      const state = partFreshness(project, part).image;
+      if (state === 'missing') missing += 1;
+      if (state === 'stale') stale += 1;
+      return state !== 'current';
+    });
+    return { parts, missing, stale };
+  }, [project]);
+
+  const slot: SlotTarget = selectedPart
+    ? normalizeTarget(
+        selectedPart.panelImages,
+        target && target.partId === selectedPart.id ? target.slot : 0
+      )
+    : 'new';
+  const setSlot = useCallback(
+    (next: SlotTarget) => {
+      if (selectedPartId) setTarget({ partId: selectedPartId, slot: next });
+    },
+    [selectedPartId]
+  );
+
+  /** シーンの画像への指示を用意する(ないか古いときだけ作る) */
+  const ensurePrompt = useCallback(
+    async (partId: string): Promise<ImagePrompt> => {
+      if (!projectId) throw new Error('プロジェクトが見つかりません。');
+      const latest = await projectClient.load(projectId);
+      const part = latest.parts.find((item) => item.id === partId);
+      if (!part) throw new Error('シーンが見つかりません。');
+      const existing = latestPromptFor(latest, partId);
+      if (existing && !needsPrompt(latest, part)) return existing;
+      const result = await window.electronAPI.ai.generateImagePromptForTarget(
+        latest.parts,
+        latest.article,
+        partId,
+        styleOptions(latest)
       );
-      const usageRecord = createOpenAIUsageRecord('image_prompt_generate', result.usage);
-
-      // プロジェクトを更新
-      const updatedProject = {
-        ...project,
-        prompts: [...project.prompts, ...result.prompts],
-        usage: usageRecord ? [...(project.usage ?? []), usageRecord] : (project.usage ?? []),
+      const usage = createOpenAIUsageRecord('image_prompt_generate', result.usage);
+      await commit((p) => ({
+        ...p,
+        prompts: [...p.prompts, result.prompt],
+        usage: appendUsage(p, usage),
         updatedAt: new Date().toISOString(),
-      };
-
-      await projectClient.save(updatedProject);
-      setProject(updatedProject);
-    } catch (err) {
-      console.error('Failed to generate prompts:', err);
-      reportError(err instanceof Error ? err.message : 'プロンプト生成に失敗しました');
-    } finally {
-      setIsGeneratingPrompts(false);
-    }
-  }, [project, reportError, setProject]);
-
-  const handleGeneratePromptForTarget = useCallback(
-    async (targetId: string) => {
-      if (!project) return;
-
-      try {
-        setIsGeneratingSinglePrompt(true);
-        setError(null);
-
-        const result = await window.electronAPI.ai.generateImagePromptForTarget(
-          project.parts,
-          project.article,
-          targetId,
-          {
-            stylePreset: project.presentationProfile.imageStylePreset,
-            aspectRatio: project.presentationProfile.aspectRatio,
-            styleReferenceImageIds: project.presentationProfile.styleReferenceImageIds,
-            styleReferenceNote: project.presentationProfile.styleReferenceNote,
-          }
-        );
-        const usageRecord = createOpenAIUsageRecord('image_prompt_regenerate', result.usage);
-
-        const updatedProject: Project = {
-          ...project,
-          prompts: [...project.prompts, result.prompt],
-          usage: usageRecord ? [...(project.usage ?? []), usageRecord] : (project.usage ?? []),
-          updatedAt: new Date().toISOString(),
-        };
-
-        await projectClient.save(updatedProject);
-        setProject(updatedProject);
-      } catch (err) {
-        console.error('Failed to generate prompt:', err);
-        reportError(err instanceof Error ? err.message : 'プロンプト生成に失敗しました');
-      } finally {
-        setIsGeneratingSinglePrompt(false);
-      }
-    },
-    [project, reportError, setProject]
-  );
-
-  // 画像生成
-  const handleGenerateImage = useCallback(
-    async (prompt: ImagePrompt) => {
-      if (!project || !projectId) return;
-
-      try {
-        setIsGeneratingImage(true);
-        setError(null);
-
-        const savedPromptProject: Project = {
-          ...project,
-          prompts: project.prompts.some((item) => item.id === prompt.id)
-            ? project.prompts.map((item) => (item.id === prompt.id ? prompt : item))
-            : [...project.prompts, prompt],
-          updatedAt: new Date().toISOString(),
-        };
-        await projectClient.save(savedPromptProject);
-        setProject(savedPromptProject);
-
-        const promptWithReferences: ImagePrompt = {
-          ...prompt,
-          styleReferenceImageIds: savedPromptProject.presentationProfile.styleReferenceImageIds,
-        };
-        const imageAsset = await window.electronAPI.image.generate(promptWithReferences, projectId);
-        const usageRecord = createGeminiImageUsageRecordFromAssets([imageAsset], 'image_generate');
-
-        // プロジェクトを更新
-        const now = new Date().toISOString();
-        const updatedParts = savedPromptProject.parts.map((part) => {
-          if (part.id !== prompt.partId) return part;
-          // 初回は自動で割り当て（既に割り当てがある場合はユーザーの選択を尊重して変更しない）
-          if ((part.panelImages?.length ?? 0) > 0) return part;
-          return { ...part, panelImages: [{ imageId: imageAsset.id }], updatedAt: now };
-        });
-
-        const updatedProject: Project = {
-          ...savedPromptProject,
-          parts: updatedParts,
-          images: [...savedPromptProject.images, imageAsset],
-          usage: usageRecord
-            ? [...(savedPromptProject.usage ?? []), usageRecord]
-            : (savedPromptProject.usage ?? []),
-          updatedAt: now,
-        };
-
-        await projectClient.save(updatedProject);
-        setProject(updatedProject);
-      } catch (err) {
-        console.error('Failed to generate image:', err);
-        reportError(err instanceof Error ? err.message : '画像生成に失敗しました');
-      } finally {
-        setIsGeneratingImage(false);
-      }
-    },
-    [project, projectId, reportError, setProject]
-  );
-
-  // 全パートの画像を一括生成
-  const handleGenerateAllImages = useCallback(async () => {
-    if (!project || !projectId) return;
-
-    const targetPrompts = activePrompts
-      .filter((prompt) => !promptIdsWithAnyImage.has(prompt.id))
-      .map((prompt) => ({
-        ...prompt,
-        styleReferenceImageIds: project.presentationProfile.styleReferenceImageIds,
       }));
+      return result.prompt;
+    },
+    [commit, projectId]
+  );
 
-    if (targetPrompts.length === 0) {
-      setError(null);
-      toast.info(
-        '未生成の画像はありません。必要なら各パートで個別に生成してください。',
-        '生成対象はありません'
-      );
-      return;
-    }
+  /** 1 シーンの画像を作る。instruction があれば、指示を足してから作る */
+  const handleCreateImage = useCallback(
+    async (withInstruction?: string) => {
+      if (!projectId || !selectedPart || jobActive || busy || batch) return;
+      const partId = selectedPart.id;
+      const targetSlot = slot;
+      const startedWith = sceneSnapshot(selectedPart);
+      clearError();
+      try {
+        setBusy({ partId, label: '画像の内容を考えています…' });
+        let prompt = await ensurePrompt(partId);
 
+        const text = withInstruction?.trim();
+        if (text) {
+          setBusy({ partId, label: '指示を反映しています…' });
+          const revised = await window.electronAPI.ai.applyComment(
+            { type: 'imagePrompt', id: prompt.id, currentText: prompt.prompt },
+            text
+          );
+          const usage = createOpenAIUsageRecord('image_prompt_comment', revised.usage);
+          const nextPrompt: ImagePrompt = {
+            ...prompt,
+            id: crypto.randomUUID(),
+            prompt: revised.text,
+            version: prompt.version + 1,
+            createdAt: new Date().toISOString(),
+          };
+          await commit((p) => ({
+            ...p,
+            prompts: [...p.prompts, nextPrompt],
+            usage: appendUsage(p, usage),
+            updatedAt: new Date().toISOString(),
+          }));
+          prompt = nextPrompt;
+        }
+
+        setBusy({ partId, label: '画像を作っています…' });
+        const latest = await projectClient.load(projectId);
+        const asset = await window.electronAPI.image.generate(
+          { ...prompt, styleReferenceImageIds: latest.presentationProfile.styleReferenceImageIds },
+          projectId
+        );
+        const usage = createGeminiImageUsageRecordFromAssets([asset], 'image_generate');
+        let placedIndex = -1;
+        await commit((p) => {
+          const now = new Date().toISOString();
+          return {
+            ...p,
+            images: [...p.images, asset],
+            parts: p.parts.map((part) => {
+              if (part.id !== partId || sceneSnapshot(part) !== startedWith) return part;
+              const panelImages = placeImage(part.panelImages, targetSlot, asset.id);
+              placedIndex = panelImages.findIndex((ref, i) =>
+                targetSlot === 'new' ? i === panelImages.length - 1 : ref.imageId === asset.id
+              );
+              return { ...part, panelImages, updatedAt: now };
+            }),
+            usage: appendUsage(p, usage),
+            updatedAt: now,
+          };
+        });
+        setInstructionOpen(false);
+        setInstruction('');
+        if (placedIndex < 0) {
+          toast.info(
+            '作っている間にシーンが変更されたため、できた画像は「候補の画像」に追加しました。',
+            '候補に追加しました'
+          );
+        } else {
+          if (targetSlot === 'new') setTarget({ partId, slot: placedIndex });
+          toast.success('画像を作りました');
+        }
+      } catch (err) {
+        reportError(err, '画像を作れませんでした');
+      } finally {
+        setBusy(null);
+      }
+    },
+    [
+      batch,
+      busy,
+      clearError,
+      commit,
+      ensurePrompt,
+      jobActive,
+      projectId,
+      reportError,
+      selectedPart,
+      slot,
+      toast,
+    ]
+  );
+
+  /** 画像がない・古いシーンの画像をまとめて作る */
+  const handleBatch = useCallback(async () => {
+    if (!projectId || jobActive || busy || batch) return;
+    const targetIds = batchTargets.parts.map((part) => part.id);
+    if (targetIds.length === 0) return;
+    batchCancelRef.current = false;
+    clearError();
+    const failures: Array<{ label: string; error: unknown }> = [];
     try {
-      setIsGeneratingImage(true);
-      setIsGeneratingImageBatch(true);
-      setError(null);
-
-      const batchResult = await window.electronAPI.image.generateBatch(targetPrompts, projectId);
-      const imageAssets = batchResult.images;
-      const usageRecord = createGeminiImageUsageRecordFromAssets(
-        imageAssets,
-        'image_generate_batch'
+      // 1. 画像の内容(指示)を用意する
+      const latest = await projectClient.load(projectId);
+      const startedWith = new Map(
+        latest.parts
+          .filter((part) => targetIds.includes(part.id))
+          .map((part) => [part.id, sceneSnapshot(part)])
       );
-
-      // プロジェクトを更新
-      const now = new Date().toISOString();
-      const promptById = new Map(targetPrompts.map((p) => [p.id, p]));
-      const nextPartsById = new Map(project.parts.map((p) => [p.id, p]));
-
-      for (const imageAsset of imageAssets) {
-        const promptId = imageAsset.metadata.promptId;
-        if (!promptId) continue;
-        const p = promptById.get(promptId);
-        if (!p) continue;
-
-        const part = nextPartsById.get(p.partId);
-        if (!part) continue;
-        if ((part.panelImages?.length ?? 0) > 0) continue;
-
-        nextPartsById.set(p.partId, {
-          ...part,
-          panelImages: [{ imageId: imageAsset.id }],
-          updatedAt: now,
+      const promptTargets = latest.parts.filter(
+        (part) => targetIds.includes(part.id) && needsPrompt(latest, part)
+      );
+      setBatch({ phase: 'prompt', done: 0, total: promptTargets.length });
+      if (promptTargets.length > 0 && promptTargets.length === latest.parts.length) {
+        const result = await window.electronAPI.ai.generateImagePrompts(
+          latest.parts,
+          latest.article,
+          styleOptions(latest)
+        );
+        const usage = createOpenAIUsageRecord('image_prompt_generate', result.usage);
+        await commit((p) => ({
+          ...p,
+          prompts: [...p.prompts, ...result.prompts],
+          usage: appendUsage(p, usage),
+          updatedAt: new Date().toISOString(),
+        }));
+        setBatch({ phase: 'prompt', done: promptTargets.length, total: promptTargets.length });
+      } else {
+        let done = 0;
+        await runLimited(promptTargets, 3, async (part) => {
+          if (batchCancelRef.current) return;
+          try {
+            await ensurePrompt(part.id);
+          } catch (err) {
+            failures.push({ label: `シーン${part.index + 1}`, error: err });
+          } finally {
+            done += 1;
+            setBatch({ phase: 'prompt', done, total: promptTargets.length });
+          }
         });
       }
+      if (batchCancelRef.current) {
+        toast.info('まとめて作るのを止めました。', '止めました');
+        return;
+      }
 
-      const updatedProject: Project = {
-        ...project,
-        parts: project.parts.map((p) => nextPartsById.get(p.id) ?? p),
-        images: [...project.images, ...imageAssets],
-        usage: usageRecord ? [...(project.usage ?? []), usageRecord] : (project.usage ?? []),
-        updatedAt: now,
-      };
+      // 2. 画像を作る
+      const current = await projectClient.load(projectId);
+      const prompts = current.parts
+        .filter((part) => targetIds.includes(part.id))
+        .map((part) => latestPromptFor(current, part.id))
+        .filter((prompt): prompt is ImagePrompt => Boolean(prompt))
+        .map((prompt) => ({
+          ...prompt,
+          styleReferenceImageIds: current.presentationProfile.styleReferenceImageIds,
+        }));
+      if (prompts.length > 0) {
+        setBatch({ phase: 'image', done: 0, total: prompts.length });
+        const result = await window.electronAPI.image.generateBatch(prompts, projectId);
+        const usage = createGeminiImageUsageRecordFromAssets(result.images, 'image_generate_batch');
+        const partByPrompt = new Map(prompts.map((prompt) => [prompt.id, prompt.partId]));
+        let keptAsCandidates = 0;
+        await commit((p) => {
+          const now = new Date().toISOString();
+          const assetByPart = new Map<string, string>();
+          for (const asset of result.images) {
+            const partId = asset.metadata.promptId
+              ? partByPrompt.get(asset.metadata.promptId)
+              : undefined;
+            if (partId) assetByPart.set(partId, asset.id);
+          }
+          return {
+            ...p,
+            images: [...p.images, ...result.images],
+            parts: p.parts.map((part) => {
+              const imageId = assetByPart.get(part.id);
+              if (!imageId) return part;
+              // 作っている間にシーンが変わったら、候補に足すだけにする
+              if (sceneSnapshot(part) !== startedWith.get(part.id)) {
+                keptAsCandidates += 1;
+                return part;
+              }
+              // 1 枚目を新しい画像に差し替える(2 枚目以降はそのまま残す)
+              return {
+                ...part,
+                panelImages: placeImage(part.panelImages, 0, imageId),
+                updatedAt: now,
+              };
+            }),
+            usage: appendUsage(p, usage),
+            updatedAt: now,
+          };
+        });
+        setBatch({ phase: 'image', done: prompts.length, total: prompts.length });
+        if (keptAsCandidates > 0) {
+          toast.info(
+            `作っている間に変更された ${keptAsCandidates} シーンは、できた画像を「候補の画像」に追加しました。`,
+            '候補に追加しました'
+          );
+        }
+        for (const failure of result.errors) {
+          const part = failure.partId
+            ? current.parts.find((item) => item.id === failure.partId)
+            : null;
+          failures.push({
+            label: part ? `シーン${part.index + 1}` : `${failure.index + 1} 件目`,
+            error: failure.error,
+          });
+        }
+      }
 
-      await projectClient.save(updatedProject);
-      setProject(updatedProject);
-      if (batchResult.errors.length > 0) {
-        const head = formatImageBatchErrors(batchResult.errors, updatedProject);
-        const tail =
-          batchResult.errors.length > 3 ? `（他${batchResult.errors.length - 3}件）` : '';
-        reportError(
-          `一部の画像生成に失敗しました。成功 ${imageAssets.length}/${batchResult.requestedCount}: ${head}${tail}`,
-          '一部失敗しました'
-        );
+      if (batchCancelRef.current) {
+        toast.info('まとめて作るのを止めました。できた画像は使われています。', '止めました');
+      } else if (failures.length > 0) {
+        reportFailures('一部の画像を作れませんでした', failures);
+      } else {
+        toast.success('画像をまとめて作りました');
       }
     } catch (err) {
-      console.error('Failed to generate images:', err);
-      reportError(err instanceof Error ? err.message : '画像生成に失敗しました');
+      reportError(err, '画像をまとめて作れませんでした');
     } finally {
-      setIsGeneratingImageBatch(false);
-      setIsGeneratingImage(false);
+      setBatch(null);
+      batchCancelRef.current = false;
     }
-  }, [project, projectId, activePrompts, promptIdsWithAnyImage, toast, setProject, reportError]);
+  }, [
+    batch,
+    batchTargets.parts,
+    busy,
+    clearError,
+    commit,
+    ensurePrompt,
+    jobActive,
+    projectId,
+    reportError,
+    reportFailures,
+    toast,
+  ]);
 
-  const handleCancelImageBatch = useCallback(async () => {
+  const handleCancelBatch = useCallback(async () => {
     if (!projectId) return;
-
+    batchCancelRef.current = true;
     try {
       await window.electronAPI.image.cancelBatch(projectId);
-      toast.info('画像一括生成のキャンセルを要求しました', 'キャンセル中');
+      toast.info('止めています。作成中の画像が終わるまでお待ちください。', '止めています');
     } catch (err) {
-      reportError(err instanceof Error ? err.message : '画像生成のキャンセルに失敗しました');
+      reportError(err, '止められませんでした');
     }
   }, [projectId, reportError, toast]);
 
-  // 画像削除
   const handleDeleteImage = useCallback(
     async (imageId: string) => {
       if (!project) return;
-
       const image =
         project.images.find((img) => img.id === imageId) ||
         project.article.importedImages.find((img) => img.id === imageId);
       if (!image) return;
 
       const accepted = await confirm({
-        title: '画像を削除しますか？',
-        description: 'この画像を削除すると、パートへの割り当ても自動的に解除されます。',
+        title: '画像を削除しますか?',
+        description: 'この画像を使っているシーンからも外れます。元に戻せません。',
         confirmLabel: '削除',
         confirmVariant: 'danger',
       });
@@ -391,212 +470,153 @@ export function ImageManagePage() {
         if (!result.success) {
           console.warn('Failed to delete image file:', image.filePath);
         }
-
-        const now = new Date().toISOString();
-
-        const updatedParts = project.parts.map((part) => {
-          const nextPanelImages = part.panelImages.filter((ref) => ref.imageId !== imageId);
-          if (nextPanelImages.length === part.panelImages.length) return part;
-          return { ...part, panelImages: nextPanelImages, updatedAt: now };
+        await commit((p) => {
+          const now = new Date().toISOString();
+          return {
+            ...p,
+            article: {
+              ...p.article,
+              importedImages: p.article.importedImages.filter((img) => img.id !== imageId),
+            },
+            presentationProfile: {
+              ...p.presentationProfile,
+              styleReferenceImageIds: p.presentationProfile.styleReferenceImageIds.filter(
+                (id) => id !== imageId
+              ),
+            },
+            parts: p.parts.map((part) => {
+              const panelImages = part.panelImages.filter((ref) => ref.imageId !== imageId);
+              return panelImages.length === part.panelImages.length
+                ? part
+                : { ...part, panelImages, updatedAt: now };
+            }),
+            images: p.images.filter((img) => img.id !== imageId),
+            thumbnail: p.thumbnail?.imageId === imageId ? undefined : p.thumbnail,
+            updatedAt: now,
+          };
         });
-
-        const updatedProject: Project = {
-          ...project,
-          article: {
-            ...project.article,
-            importedImages: project.article.importedImages.filter((img) => img.id !== imageId),
-          },
-          presentationProfile: {
-            ...project.presentationProfile,
-            styleReferenceImageIds: project.presentationProfile.styleReferenceImageIds.filter(
-              (id) => id !== imageId
-            ),
-          },
-          parts: updatedParts,
-          images: project.images.filter((img) => img.id !== imageId),
-          thumbnail: project.thumbnail?.imageId === imageId ? undefined : project.thumbnail,
-          updatedAt: now,
-        };
-
-        await projectClient.save(updatedProject);
-        setProject(updatedProject);
         toast.success('画像を削除しました');
       } catch (err) {
-        console.error('Failed to delete image:', err);
-        reportError(err instanceof Error ? err.message : '画像の削除に失敗しました');
+        reportError(err, '画像を削除できませんでした');
       }
     },
-    [confirm, project, reportError, setProject, toast]
+    [commit, confirm, project, reportError, toast]
   );
 
-  // プロンプト更新
-  const handleUpdatePrompt = useCallback(
-    async (updatedPrompt: ImagePrompt) => {
-      if (!project) return;
-
-      const updatedProject = {
-        ...project,
-        prompts: project.prompts.map((p) => (p.id === updatedPrompt.id ? updatedPrompt : p)),
-        updatedAt: new Date().toISOString(),
-      };
-
-      await projectClient.save(updatedProject);
-      setProject(updatedProject);
+  const handleUpdatePanelImages = useCallback(
+    (partId: string, panelImages: ImageAssetRef[]) => {
+      const now = new Date().toISOString();
+      setProject((prev) =>
+        prev
+          ? {
+              ...prev,
+              parts: prev.parts.map((p) =>
+                p.id === partId ? { ...p, panelImages, updatedAt: now } : p
+              ),
+              updatedAt: now,
+            }
+          : prev
+      );
     },
-    [project, setProject]
+    [setProject]
   );
 
   const handleToggleStyleReference = useCallback(
-    async (imageId: string) => {
-      if (!project) return;
-
-      const currentIds = project.presentationProfile.styleReferenceImageIds;
-      const nextIds = currentIds.includes(imageId)
-        ? currentIds.filter((id) => id !== imageId)
-        : [...currentIds, imageId].slice(-3);
-
-      const updatedProject: Project = {
-        ...project,
-        presentationProfile: {
-          ...project.presentationProfile,
-          styleReferenceImageIds: nextIds,
-        },
-        updatedAt: new Date().toISOString(),
-      };
-
-      await projectClient.save(updatedProject);
-      setProject(updatedProject);
+    (imageId: string) => {
+      setProject((prev) => {
+        if (!prev) return prev;
+        const currentIds = prev.presentationProfile.styleReferenceImageIds;
+        const nextIds = currentIds.includes(imageId)
+          ? currentIds.filter((id) => id !== imageId)
+          : [...currentIds, imageId].slice(-3);
+        return {
+          ...prev,
+          presentationProfile: { ...prev.presentationProfile, styleReferenceImageIds: nextIds },
+          updatedAt: new Date().toISOString(),
+        };
+      });
     },
-    [project, setProject]
+    [setProject]
   );
 
   const handleUpdateStyleReferenceNote = useCallback(
-    async (styleReferenceNote: string) => {
-      if (!project) return;
-
-      const updatedProject: Project = {
-        ...project,
-        presentationProfile: {
-          ...project.presentationProfile,
-          styleReferenceNote,
-        },
-        updatedAt: new Date().toISOString(),
-      };
-
-      await projectClient.save(updatedProject);
-      setProject(updatedProject);
+    (styleReferenceNote: string) => {
+      setProject((prev) =>
+        prev && prev.presentationProfile.styleReferenceNote !== styleReferenceNote
+          ? {
+              ...prev,
+              presentationProfile: { ...prev.presentationProfile, styleReferenceNote },
+              updatedAt: new Date().toISOString(),
+            }
+          : prev
+      );
     },
-    [project, setProject]
+    [setProject]
   );
 
   const handleImportStyleReference = useCallback(async () => {
-    if (!project || !projectId) return;
-
+    if (!projectId) return;
     try {
       const sourcePath = await window.electronAPI.file.selectFile({
-        title: 'スタイル参照に使うスライド画像を選択',
-        filters: [{ name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'webp'] }],
+        title: '見た目の参考にする画像を選択',
+        filters: [{ name: '画像', extensions: ['png', 'jpg', 'jpeg', 'webp'] }],
         properties: ['openFile'],
       });
       if (!sourcePath) return;
-
       const imported = await window.electronAPI.image.import(sourcePath, projectId);
-      const nextIds = [...project.presentationProfile.styleReferenceImageIds, imported.id].slice(
-        -3
-      );
-      const updatedProject: Project = {
-        ...project,
-        article: {
-          ...project.article,
-          importedImages: [...project.article.importedImages, imported],
-        },
+      await commit((p) => ({
+        ...p,
+        article: { ...p.article, importedImages: [...p.article.importedImages, imported] },
         presentationProfile: {
-          ...project.presentationProfile,
-          styleReferenceImageIds: nextIds,
+          ...p.presentationProfile,
+          styleReferenceImageIds: [
+            ...p.presentationProfile.styleReferenceImageIds,
+            imported.id,
+          ].slice(-3),
         },
         updatedAt: new Date().toISOString(),
-      };
-
-      await projectClient.save(updatedProject);
-      setProject(updatedProject);
-      toast.success('スタイル参照画像を追加しました');
+      }));
+      toast.success('参考画像を追加しました');
     } catch (err) {
-      console.error('Failed to import style reference:', err);
-      reportError(err instanceof Error ? err.message : 'スタイル参照画像の追加に失敗しました');
+      reportError(err, '参考画像を追加できませんでした');
     }
-  }, [project, projectId, reportError, setProject, toast]);
-
-  // 選択中のパート
-  const selectedPart = project?.parts.find((p) => p.id === selectedPartId);
-
-  const imageById = useMemo(() => {
-    const map = new Map<string, Project['images'][number]>();
-    if (!project) return map;
-    for (const image of [...project.images, ...project.article.importedImages]) {
-      map.set(image.id, image);
-    }
-    return map;
-  }, [project]);
-
-  const getImageById = useCallback((imageId: string) => imageById.get(imageId), [imageById]);
-
-  // 選択中のパートのプロンプト
-  const selectedPartPrompt = selectedPartId ? latestPromptByPartId.get(selectedPartId) : undefined;
-
-  // 選択中のパートの画像
-  const candidateImagesForPart = useMemo(() => {
-    if (!project) return [];
-    const generatedForPart = project.images.filter(
-      (img) =>
-        img.metadata.promptId &&
-        project.prompts.some((p) => p.id === img.metadata.promptId && p.partId === selectedPartId)
-    );
-    return [...project.article.importedImages, ...generatedForPart];
-  }, [project, selectedPartId]);
-  // パートへの割り当て（panelImages）更新
-  const handleUpdatePanelImages = useCallback(
-    async (partId: string, panelImages: ImageAssetRef[]) => {
-      if (!project) return;
-
-      try {
-        const now = new Date().toISOString();
-        const updatedProject: Project = {
-          ...project,
-          parts: project.parts.map((p) =>
-            p.id === partId ? { ...p, panelImages, updatedAt: now } : p
-          ),
-          updatedAt: now,
-        };
-
-        await projectClient.save(updatedProject);
-        setProject(updatedProject);
-      } catch (err) {
-        console.error('Failed to update panel images:', err);
-        reportError(err instanceof Error ? err.message : '画像の割り当て更新に失敗しました');
-      }
-    },
-    [project, reportError, setProject]
-  );
+  }, [commit, projectId, reportError, toast]);
 
   if (isLoading) {
     return (
       <div className="flex flex-1 items-center justify-center">
-        <p className="text-slate-600">読み込み中...</p>
+        <p className="text-[var(--nv-color-muted)]">読み込み中...</p>
       </div>
     );
   }
 
   if (!project) {
-    return (
-      <div className="flex flex-1 items-center justify-center">
-        <EmptyState
-          title="プロジェクトを読み込めません"
-          description={error || 'プロジェクトが見つかりません'}
-          action={<Button onClick={() => navigate('/projects')}>プロジェクト一覧に戻る</Button>}
-        />
-      </div>
-    );
+    return <ProjectLoadFailure error={loadError} onBack={() => navigate('/projects')} />;
   }
+
+  const busyHere = busy && selectedPart && busy.partId === selectedPart.id ? busy : null;
+  const hasImages = (selectedPart?.panelImages.length ?? 0) > 0;
+  const createLabel = !hasImages
+    ? '画像を作る'
+    : slot === 'new'
+      ? '画像を作って足す'
+      : `${slot + 1} 枚目を作り直す`;
+  const createBlockedReason = jobActive
+    ? JOB_ACTIVE_MESSAGE
+    : batch
+      ? 'まとめて作成中です。終わるまでお待ちください。'
+      : busy && !busyHere
+        ? 'ほかのシーンの画像を作成中です。'
+        : selectedPart && !selectedPart.scriptText.trim()
+          ? '台本が空のため、画像を作れません。台本画面で文章を入れてください。'
+          : null;
+  const batchBlockedReason = jobActive
+    ? JOB_ACTIVE_MESSAGE
+    : busy
+      ? 'シーンの画像を作成中です。終わるまでお待ちください。'
+      : batchTargets.parts.length === 0
+        ? 'すべてのシーンに最新の画像があります。'
+        : null;
 
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
@@ -604,192 +624,205 @@ export function ImageManagePage() {
 
       {projectId && <WorkflowNav projectId={projectId} current="image" project={project} />}
 
-      {error && (
-        <div className="px-4 pt-4">
-          <ErrorDetailPanel message={error} onDismiss={() => setError(null)} />
-        </div>
-      )}
+      <div className="flex min-h-0 flex-1 gap-4 p-4">
+        <SceneList
+          className="w-56 shrink-0"
+          scenes={project.parts}
+          selectedId={selectedPartId}
+          onSelect={setSelectedPartId}
+          subtitle={`全 ${project.parts.length} シーン`}
+          renderStatus={(part) => {
+            const state = partFreshness(project, part).image;
+            if (part.panelImages.length === 0) return <Badge tone="warning">画像なし</Badge>;
+            if (state === 'missing') return <Badge tone="danger">ファイルなし</Badge>;
+            return (
+              <>
+                <Badge tone="neutral">{part.panelImages.length} 枚</Badge>
+                {state === 'stale' && <Badge tone="warning">古い可能性</Badge>}
+              </>
+            );
+          }}
+        />
 
-      <div className="px-4 pt-3">
-        <Card
-          title="一括操作"
-          subtitle={`画像待ち ${missingImagePromptCount} / 生成済みプロンプト ${activePrompts.length}`}
-          actions={
-            <div className="flex items-center gap-2">
+        <div
+          ref={scrollRef}
+          className="@container nv-scrollbar min-h-0 min-w-0 flex-1 space-y-4 overflow-auto pr-1"
+        >
+          {error && (
+            <FriendlyError
+              title={error.title}
+              explanation={error.explanation}
+              onDismiss={clearError}
+            />
+          )}
+
+          <Card
+            title="まとめて作る"
+            subtitle={
+              batchTargets.parts.length === 0
+                ? 'すべてのシーンに最新の画像があります'
+                : `画像がないシーン ${batchTargets.missing} 件・古くなった可能性があるシーン ${batchTargets.stale} 件`
+            }
+          >
+            <div className="flex flex-wrap items-center gap-3">
               <Button
-                variant="secondary"
-                onClick={handleGeneratePrompts}
-                disabled={isGeneratingPrompts}
+                onClick={() => void handleBatch()}
+                disabled={Boolean(batchBlockedReason) || Boolean(batch)}
               >
-                {isGeneratingPrompts
-                  ? '生成中...'
-                  : `プロンプト一括生成 (${activePrompts.length}/${project.parts.length})`}
+                {batch ? '作成中…' : `足りない画像を作る（${batchTargets.parts.length}）`}
               </Button>
-              <Button
-                variant="success"
-                onClick={handleGenerateAllImages}
-                disabled={
-                  isGeneratingImage || activePrompts.length === 0 || missingImagePromptCount === 0
-                }
-              >
-                {isGeneratingImage
-                  ? '画像生成中...'
-                  : `画像一括生成 (未生成 ${missingImagePromptCount}/${activePrompts.length})`}
-              </Button>
-              {isGeneratingImageBatch && (
-                <Button variant="secondary" onClick={handleCancelImageBatch}>
-                  キャンセル
+              {batch && (
+                <Button variant="secondary" onClick={() => void handleCancelBatch()}>
+                  止める
                 </Button>
               )}
+              {!batch && batchBlockedReason && batchTargets.parts.length > 0 && (
+                <p className="nv-help">{batchBlockedReason}</p>
+              )}
             </div>
-          }
-        >
-          <div className="mb-3 flex flex-wrap items-center gap-2">
-            <Badge tone="neutral">
-              {IMAGE_STYLE_PRESET_LABELS[project.presentationProfile.imageStylePreset]}
-            </Badge>
-            <Badge tone="info">
-              {IMAGE_ASPECT_RATIO_LABELS[project.presentationProfile.aspectRatio]}
-            </Badge>
-          </div>
-          <details className="text-sm">
-            <summary className="cursor-pointer">スタイル参照（色・余白・見出しを揃える）</summary>
-            <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
-              <div>
-                <h3 className="text-sm font-semibold text-slate-900">スタイル参照</h3>
-                <p className="text-xs text-slate-600">
-                  最大3枚のスライドサンプルを画像生成時に渡し、色・余白・文字階層を揃えます。
-                </p>
-              </div>
-              <Button variant="secondary" size="sm" onClick={handleImportStyleReference}>
-                参照画像を追加
-              </Button>
-            </div>
-            <textarea
-              aria-label="スタイル参照に合わせたい点"
-              key={project.presentationProfile.styleReferenceNote}
-              defaultValue={project.presentationProfile.styleReferenceNote}
-              onBlur={(e) => handleUpdateStyleReferenceNote(e.target.value)}
-              className="nv-input mb-3 min-h-[72px] resize-y text-sm"
-              placeholder="任意: サンプルから特に合わせたい点（例: 太い見出し、左上ロゴ風の余白、青いカード背景など）"
-            />
-            {allProjectImages.length > 0 ? (
-              <ImageGallery
-                images={allProjectImages}
-                selectedImageIds={styleReferenceImageIds}
-                onSelectImage={handleToggleStyleReference}
-                selectLabel="参照"
-                emptyMessage="参照に使える画像がありません"
-              />
-            ) : (
-              <div className="rounded-[8px] border border-dashed border-slate-300 bg-slate-50 px-3 py-6 text-center text-xs text-slate-600">
-                参照に使える画像がありません。スライドサンプルを追加してください。
-              </div>
-            )}
-          </details>
-        </Card>
-      </div>
-
-      <div
-        ref={scrollRef}
-        className="grid min-h-0 flex-1 grid-cols-1 xl:grid-cols-[220px_minmax(0,1fr)_minmax(0,1fr)] auto-rows-max xl:auto-rows-auto gap-4 overflow-auto p-4"
-      >
-        <Card
-          title="パート一覧"
-          subtitle={`${project.parts.length}パート`}
-          className="overflow-hidden"
-        >
-          <ul className="nv-scrollbar max-h-[calc(100vh-280px)] space-y-2 overflow-auto pr-1">
-            {project.parts.map((part, index) => {
-              const partPrompt = latestPromptByPartId.get(part.id);
-              const assignedCount = part.panelImages.length;
-              return (
-                <li key={part.id}>
-                  <button
-                    onClick={() => setSelectedPartId(part.id)}
-                    className={`w-full rounded-[8px] border px-3 py-2 text-left transition-colors ${
-                      selectedPartId === part.id
-                        ? 'border-[var(--nv-color-accent)] bg-blue-50'
-                        : 'border-[var(--nv-color-border)] bg-white hover:bg-slate-50'
-                    }`}
-                  >
-                    <div className="flex items-center gap-2">
-                      <span className="text-xs text-slate-600">{index + 1}</span>
-                      <span className="truncate text-sm font-semibold text-slate-900">
-                        {part.title}
-                      </span>
-                    </div>
-                    <div className="mt-1 flex items-center gap-1 text-xs">
-                      <Badge tone={partPrompt ? 'success' : 'warning'}>
-                        {partPrompt ? 'プロンプト済み' : '未プロンプト'}
-                      </Badge>
-                      <Badge tone={assignedCount > 0 ? 'success' : 'warning'}>
-                        {assignedCount}枚
-                      </Badge>
-                    </div>
-                  </button>
-                </li>
-              );
-            })}
-          </ul>
-        </Card>
-
-        <Card
-          title={selectedPart ? selectedPart.title : 'プロンプト'}
-          subtitle={
-            selectedPart
-              ? selectedPart.summary || '選択シーンの画像プロンプト'
-              : 'シーンを選択してください'
-          }
-          className="min-h-0 overflow-auto"
-        >
-          {selectedPart ? (
-            selectedPartPrompt ? (
-              <PromptEditor
-                key={selectedPartPrompt.id}
-                prompt={selectedPartPrompt}
-                onSave={handleUpdatePrompt}
-                onGenerate={handleGenerateImage}
-                onRegenerate={() => handleGeneratePromptForTarget(selectedPart.id)}
-                isGenerating={isGeneratingImage}
-                isRegenerating={isGeneratingSinglePrompt}
-              />
-            ) : (
-              <EmptyState
-                title="このパートのプロンプトがありません"
-                description="先にプロンプトを生成すると画像生成できます。"
-                action={
-                  <Button
-                    onClick={() => handleGeneratePromptForTarget(selectedPart.id)}
-                    disabled={isGeneratingSinglePrompt}
-                  >
-                    {isGeneratingSinglePrompt ? '生成中...' : 'プロンプトを生成'}
-                  </Button>
+            {batch && (
+              <ProgressBar
+                className="mt-3"
+                value={batch.done}
+                max={Math.max(1, batch.total)}
+                label={
+                  batch.phase === 'prompt'
+                    ? `画像の内容を考えています（${batch.done}/${batch.total}）`
+                    : `画像を作っています（${batch.total} 枚）`
                 }
               />
-            )
-          ) : (
-            <EmptyState title="パートを選択してください" />
-          )}
-        </Card>
+            )}
+            <p className="nv-help mt-3">
+              見た目: {IMAGE_STYLE_PRESET_LABELS[project.presentationProfile.imageStylePreset]}・
+              {IMAGE_ASPECT_RATIO_LABELS[project.presentationProfile.aspectRatio]}
+            </p>
+            <Details className="mt-3" summary="見た目をそろえる参考画像（任意）">
+              <div className="space-y-3">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <p className="nv-help max-w-prose">
+                    参考にしたい画像を 3 枚まで選ぶと、色・余白・文字の大きさをそろえて作ります。
+                  </p>
+                  <Button variant="secondary" size="sm" onClick={handleImportStyleReference}>
+                    参考画像を追加
+                  </Button>
+                </div>
+                <label className="block">
+                  <span className="nv-label">特に合わせたい点（任意）</span>
+                  <textarea
+                    key={project.presentationProfile.styleReferenceNote}
+                    defaultValue={project.presentationProfile.styleReferenceNote}
+                    onBlur={(e) => handleUpdateStyleReferenceNote(e.target.value)}
+                    className="nv-input min-h-[64px] resize-y text-sm"
+                    placeholder="例: 太い見出し、青いカード背景"
+                  />
+                </label>
+                <ImageGallery
+                  images={[...project.article.importedImages, ...project.images]}
+                  selectedImageIds={project.presentationProfile.styleReferenceImageIds}
+                  onSelectImage={handleToggleStyleReference}
+                  selectLabel="参考にする"
+                  selectedLabel="参考から外す"
+                  emptyMessage="参考にできる画像がありません。「参考画像を追加」から選んでください。"
+                />
+              </div>
+            </Details>
+          </Card>
 
-        <Card
-          title="画像割り当て"
-          subtitle="候補をクリックで即割り当て（右上アイコンで拡大）"
-          className="min-h-0 overflow-auto"
-        >
           {selectedPart ? (
-            <ImageAssignment
-              panelImages={selectedPart.panelImages}
-              candidateImages={candidateImagesForPart}
-              getImageById={getImageById}
-              onChange={(next) => handleUpdatePanelImages(selectedPart.id, next)}
-              onDeleteImage={handleDeleteImage}
-            />
+            <Card
+              emphasis
+              title={`シーン ${selectedPart.index + 1}：${selectedPart.title}`}
+              subtitle={selectedPart.summary || undefined}
+            >
+              <div className="space-y-4">
+                <StaleNotice
+                  project={project}
+                  part={selectedPart}
+                  kinds={['image']}
+                  onChange={setProject}
+                />
+
+                <div className="space-y-2">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Button
+                      onClick={() => void handleCreateImage()}
+                      disabled={Boolean(createBlockedReason) || Boolean(busyHere)}
+                    >
+                      {busyHere ? '作成中…' : createLabel}
+                    </Button>
+                    {hasImages && (
+                      <Button
+                        variant="secondary"
+                        onClick={() => setInstructionOpen((open) => !open)}
+                        disabled={Boolean(createBlockedReason) || Boolean(busyHere)}
+                        aria-expanded={instructionOpen}
+                      >
+                        指示を足して作り直す
+                      </Button>
+                    )}
+                  </div>
+                  {busyHere ? (
+                    <p className="nv-help" role="status">
+                      {busyHere.label}
+                    </p>
+                  ) : (
+                    createBlockedReason && <p className="nv-help">{createBlockedReason}</p>
+                  )}
+                </div>
+
+                {instructionOpen && (
+                  <div className="nv-surface-muted space-y-2 p-3">
+                    <label className="block">
+                      <span className="nv-label">どう直したいかを書いてください</span>
+                      <textarea
+                        value={instruction}
+                        onChange={(e) => setInstruction(e.target.value)}
+                        rows={2}
+                        className="nv-input resize-y text-sm"
+                        placeholder="例: 背景を明るく、数字を大きく、人物は入れない"
+                      />
+                    </label>
+                    <div className="flex justify-end gap-2">
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => {
+                          setInstructionOpen(false);
+                          setInstruction('');
+                        }}
+                      >
+                        やめる
+                      </Button>
+                      <Button
+                        size="sm"
+                        onClick={() => void handleCreateImage(instruction)}
+                        disabled={
+                          !instruction.trim() || Boolean(createBlockedReason) || Boolean(busyHere)
+                        }
+                      >
+                        この指示で作り直す
+                      </Button>
+                    </div>
+                  </div>
+                )}
+
+                <SceneImages
+                  key={selectedPart.id}
+                  panelImages={selectedPart.panelImages}
+                  candidateImages={candidateImages}
+                  getImageById={getImageById}
+                  target={slot}
+                  onTargetChange={setSlot}
+                  onChange={(next) => handleUpdatePanelImages(selectedPart.id, next)}
+                  onDeleteImage={handleDeleteImage}
+                  disabled={Boolean(busyHere) || Boolean(batch)}
+                />
+              </div>
+            </Card>
           ) : (
-            <EmptyState title="パートを選択してください" />
+            <EmptyState title="シーンを選んでください" />
           )}
-        </Card>
+        </div>
       </div>
     </div>
   );

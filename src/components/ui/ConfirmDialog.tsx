@@ -27,7 +27,7 @@ export function ConfirmDialog({
   if (!open) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/45 p-4">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-[var(--nv-color-text)]/45 p-4">
       <div
         ref={ref}
         tabIndex={-1}
@@ -37,11 +37,11 @@ export function ConfirmDialog({
         aria-describedby={description ? descriptionId : undefined}
         className="nv-surface w-full max-w-md p-5"
       >
-        <h3 id={titleId} className="text-base font-semibold text-slate-900">
+        <h3 id={titleId} className="text-base font-semibold text-[var(--nv-color-text)]">
           {title}
         </h3>
         {description && (
-          <p id={descriptionId} className="mt-2 text-sm text-slate-600">
+          <p id={descriptionId} className="mt-2 text-sm text-[var(--nv-color-muted)]">
             {description}
           </p>
         )}

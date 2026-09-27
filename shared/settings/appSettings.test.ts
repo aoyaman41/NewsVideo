@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_SETTINGS, normalizeSettings, parseSettingsUpdate } from './appSettings';
+import {
+  DEFAULT_NEW_PROJECT_DEFAULTS,
+  DEFAULT_SETTINGS,
+  normalizeNewProjectDefaults,
+  normalizeSettings,
+  parseSettingsUpdate,
+} from './appSettings';
 
 describe('parseSettingsUpdate', () => {
   it('accepts valid fields and strips unknown keys', () => {
@@ -7,7 +13,7 @@ describe('parseSettingsUpdate', () => {
       scriptTextModel: 'gpt-5.6-sol',
       imagePromptTextModel: 'gpt-5.6-terra',
       ttsModel: 'gemini-3.1-flash-tts-preview',
-      imageModel: 'gemini-3-pro-image-preview',
+      imageModel: 'gemini-3-pro-image',
       imageResolution: '2k',
       openaiReasoningEffort: 'max',
       geminiThinkingLevel: 'low',
@@ -17,7 +23,7 @@ describe('parseSettingsUpdate', () => {
     expect(parsed.scriptTextModel).toBe('gpt-5.6-sol');
     expect(parsed.imagePromptTextModel).toBe('gpt-5.6-terra');
     expect(parsed.ttsModel).toBe('gemini-3.1-flash-tts-preview');
-    expect(parsed.imageModel).toBe('gemini-3-pro-image-preview');
+    expect(parsed.imageModel).toBe('gemini-3-pro-image');
     expect(parsed.imageResolution).toBe('2k');
     expect(parsed.openaiReasoningEffort).toBe('max');
     expect(parsed.geminiThinkingLevel).toBe('low');
@@ -142,29 +148,84 @@ describe('normalizeSettings', () => {
 
     expect(normalized.openaiReasoningEffort).toBe('none');
   });
+
+  it('replaces a saved minimal effort even when no OpenAI model is selected', () => {
+    const normalized = normalizeSettings({
+      scriptTextModel: 'claude-opus-5-5',
+      imagePromptTextModel: 'claude-opus-5-5',
+      openaiReasoningEffort: 'minimal',
+    });
+
+    expect(normalized.openaiReasoningEffort).toBe(DEFAULT_SETTINGS.openaiReasoningEffort);
+    expect(() => parseSettingsUpdate({ openaiReasoningEffort: 'minimal' })).toThrow();
+  });
+
+  it('uses Claude Opus 5.5 for new settings and keeps saved legacy text models', () => {
+    expect(DEFAULT_SETTINGS.scriptTextModel).toBe('claude-opus-5-5');
+    expect(DEFAULT_SETTINGS.imagePromptTextModel).toBe('claude-opus-5-5');
+    expect(normalizeSettings({}).scriptTextModel).toBe('claude-opus-5-5');
+
+    const legacy = normalizeSettings({
+      scriptTextModel: 'gpt-5.2',
+      imagePromptTextModel: 'gpt-5.5',
+      ttsModel: 'gemini-2.5-flash-preview-tts',
+      imageModel: 'gpt-image-2',
+    });
+    expect(legacy).toMatchObject({
+      scriptTextModel: 'gpt-5.2',
+      imagePromptTextModel: 'gpt-5.5',
+      ttsModel: 'gemini-2.5-flash-preview-tts',
+      imageModel: 'gpt-image-2',
+    });
+  });
 });
 
 describe('Claude settings', () => {
-  it('fills claudeEffort with high for settings saved before Claude support', () => {
+  it('fills both Claude efforts with medium for settings saved before Claude support', () => {
     const legacySettings: Record<string, unknown> = { ...DEFAULT_SETTINGS };
     delete legacySettings.claudeEffort;
+    delete legacySettings.claudeImagePromptEffort;
 
     const normalized = normalizeSettings(legacySettings);
 
-    expect(DEFAULT_SETTINGS.claudeEffort).toBe('high');
-    expect(normalized.claudeEffort).toBe('high');
+    expect(DEFAULT_SETTINGS.claudeEffort).toBe('medium');
+    expect(DEFAULT_SETTINGS.claudeImagePromptEffort).toBe('medium');
+    expect(normalized.claudeEffort).toBe('medium');
+    expect(normalized.claudeImagePromptEffort).toBe('medium');
     expect(normalized.scriptTextModel).toBe(DEFAULT_SETTINGS.scriptTextModel);
     expect(normalized.imagePromptTextModel).toBe(DEFAULT_SETTINGS.imagePromptTextModel);
   });
 
   it.each(['bad-effort', 'default', 'none', 42])(
-    'replaces an invalid or placeholder claudeEffort (%s) with the model default',
-    (claudeEffort) => {
-      const normalized = normalizeSettings({ scriptTextModel: 'claude-opus-5-5', claudeEffort });
+    'replaces an invalid or placeholder Claude effort (%s) with the model default',
+    (effort) => {
+      const normalized = normalizeSettings({
+        scriptTextModel: 'claude-opus-5-5',
+        imagePromptTextModel: 'claude-opus-5-5',
+        claudeEffort: effort,
+        claudeImagePromptEffort: effort,
+      });
 
-      expect(normalized.claudeEffort).toBe('high');
+      expect(normalized.claudeEffort).toBe('medium');
+      expect(normalized.claudeImagePromptEffort).toBe('medium');
     }
   );
+
+  it('keeps the script and image prompt efforts independent', () => {
+    const normalized = normalizeSettings({
+      scriptTextModel: 'claude-opus-5-5',
+      imagePromptTextModel: 'claude-opus-5-5',
+      claudeEffort: 'high',
+      claudeImagePromptEffort: 'low',
+    });
+
+    expect(normalized.claudeEffort).toBe('high');
+    expect(normalized.claudeImagePromptEffort).toBe('low');
+    expect(parseSettingsUpdate({ claudeImagePromptEffort: 'xhigh' })).toEqual({
+      claudeImagePromptEffort: 'xhigh',
+    });
+    expect(() => parseSettingsUpdate({ claudeImagePromptEffort: 'none' })).toThrow();
+  });
 
   it('keeps a valid claudeEffort and Claude model selections', () => {
     const normalized = normalizeSettings({
@@ -214,9 +275,149 @@ it('round-trips Astra and GPT Image 2 settings', () => {
 });
 
 it.each(['gpt-image-2.5-sunburst', 'gpt-image-2.5-flare'] as const)(
-  'round-trips the %s image model and keeps the Gemini default for new settings',
+  'round-trips the %s image model and defaults new settings to GPT Image 2.5 Sunburst',
   (imageModel) => {
     expect(normalizeSettings(parseSettingsUpdate({ imageModel }))).toMatchObject({ imageModel });
-    expect(DEFAULT_SETTINGS.imageModel).toBe('gemini-3.1-flash-image-preview');
+    expect(DEFAULT_SETTINGS.imageModel).toBe('gpt-image-2.5-sunburst');
   }
 );
+
+describe('Gemini image model GA migration', () => {
+  it.each([
+    ['gemini-3.1-flash-image-preview', 'gemini-3.1-flash-image'],
+    ['gemini-3-pro-image-preview', 'gemini-3-pro-image'],
+  ] as const)('reads a saved %s as %s', (legacy, current) => {
+    expect(normalizeSettings({ imageModel: legacy }).imageModel).toBe(current);
+    expect(parseSettingsUpdate({ imageModel: legacy }).imageModel).toBe(current);
+  });
+
+  it('keeps a saved Gemini or OpenAI image model and resets only unknown values', () => {
+    expect(normalizeSettings({ imageModel: 'gemini-3-pro-image' }).imageModel).toBe(
+      'gemini-3-pro-image'
+    );
+    expect(normalizeSettings({ imageModel: 'gpt-image-2' }).imageModel).toBe('gpt-image-2');
+    expect(normalizeSettings({ imageModel: 'retired-model' }).imageModel).toBe(
+      'gpt-image-2.5-sunburst'
+    );
+    expect(normalizeSettings({}).imageModel).toBe('gpt-image-2.5-sunburst');
+  });
+});
+
+describe('auto generation defaults (mode and budget)', () => {
+  it('defaults to fully automatic with a 5 USD budget and keeps the legacy concurrency field', () => {
+    const normalized = normalizeSettings({});
+    expect(normalized.generationMode).toBe('automatic');
+    expect(normalized.generationBudgetUsd).toBe(5);
+    expect(normalized.generationConcurrency).toBe(2);
+    expect(normalizeSettings({ generationConcurrency: 4 }).generationConcurrency).toBe(4);
+  });
+
+  it('keeps saved values, including no budget limit (null)', () => {
+    expect(
+      normalizeSettings({ generationMode: 'review', generationBudgetUsd: null })
+    ).toMatchObject({ generationMode: 'review', generationBudgetUsd: null });
+    expect(normalizeSettings({ generationBudgetUsd: 0 }).generationBudgetUsd).toBe(0);
+    expect(normalizeSettings({ generationBudgetUsd: 2.5 }).generationBudgetUsd).toBe(2.5);
+  });
+
+  it('resets invalid values to the defaults', () => {
+    expect(normalizeSettings({ generationMode: 'fast' }).generationMode).toBe('automatic');
+    expect(normalizeSettings({ generationBudgetUsd: -1 }).generationBudgetUsd).toBe(5);
+    expect(normalizeSettings({ generationBudgetUsd: '3' }).generationBudgetUsd).toBe(5);
+    expect(normalizeSettings({ generationBudgetUsd: Number.NaN }).generationBudgetUsd).toBe(5);
+  });
+
+  it('accepts updates from the screens and rejects invalid ones', () => {
+    expect(parseSettingsUpdate({ generationMode: 'review', generationBudgetUsd: null })).toEqual({
+      generationMode: 'review',
+      generationBudgetUsd: null,
+    });
+    expect(parseSettingsUpdate({ generationBudgetUsd: 1.5 }).generationBudgetUsd).toBe(1.5);
+    expect(() => parseSettingsUpdate({ generationMode: 'fast' })).toThrow();
+    expect(() => parseSettingsUpdate({ generationBudgetUsd: -1 })).toThrow();
+  });
+});
+
+// M5: 新しい動画の既定値・為替レート・映像のビットレートの決め方
+describe('new project defaults', () => {
+  it('fills defaults so that new videos start exactly like their purpose', () => {
+    expect(normalizeSettings({}).newProjectDefaults).toEqual(DEFAULT_NEW_PROJECT_DEFAULTS);
+    expect(DEFAULT_NEW_PROJECT_DEFAULTS).toMatchObject({
+      purpose: 'news',
+      ttsNarrationStylePreset: null,
+      sourceDisplayMode: null,
+      closingCardHeadline: '',
+    });
+  });
+
+  it('keeps valid saved items and replaces only the broken ones', () => {
+    const normalized = normalizeNewProjectDefaults({
+      purpose: 'short',
+      imageStylePreset: 'no-such-style',
+      styleReferenceNote: '  青を基調に  ',
+      ttsNarrationStylePreset: 'promo',
+      closingCardEnabled: 'yes',
+      sourceDisplayMode: null,
+      unknown: 'ignored',
+    });
+    expect(normalized).toEqual({
+      ...DEFAULT_NEW_PROJECT_DEFAULTS,
+      purpose: 'short',
+      styleReferenceNote: '青を基調に',
+      ttsNarrationStylePreset: 'promo',
+    });
+    expect(normalizeNewProjectDefaults('broken')).toEqual(DEFAULT_NEW_PROJECT_DEFAULTS);
+    // 以前の記事画面の用途(報告)は、作成画面の最初の選択には使えない
+    expect(normalizeNewProjectDefaults({ purpose: 'report' }).purpose).toBe('news');
+  });
+
+  it('validates partial updates from the settings screen', () => {
+    expect(parseSettingsUpdate({ newProjectDefaults: { purpose: 'explain' } })).toEqual({
+      newProjectDefaults: { purpose: 'explain' },
+    });
+    expect(() => parseSettingsUpdate({ newProjectDefaults: { purpose: 'report' } })).toThrow();
+    expect(() =>
+      parseSettingsUpdate({ newProjectDefaults: { sourceDisplayMode: 'everywhere' } })
+    ).toThrow();
+  });
+});
+
+describe('exchange rate', () => {
+  it('defaults to 150 yen per dollar and keeps a valid saved rate', () => {
+    expect(DEFAULT_SETTINGS.jpyPerUsd).toBe(150);
+    expect(normalizeSettings({}).jpyPerUsd).toBe(150);
+    expect(normalizeSettings({ jpyPerUsd: 147.5 }).jpyPerUsd).toBe(147.5);
+    expect(normalizeSettings({ jpyPerUsd: 0 }).jpyPerUsd).toBe(150);
+    expect(normalizeSettings({ jpyPerUsd: 'abc' }).jpyPerUsd).toBe(150);
+    expect(() => parseSettingsUpdate({ jpyPerUsd: -1 })).toThrow();
+    expect(parseSettingsUpdate({ jpyPerUsd: 155 })).toEqual({ jpyPerUsd: 155 });
+  });
+});
+
+describe('video bitrate mode', () => {
+  it('uses the automatic bitrate for new settings', () => {
+    expect(normalizeSettings({})).toMatchObject({ videoBitrateMode: 'auto', videoBitrate: '8M' });
+  });
+
+  it('treats the old fixed default (8M) of settings saved before M5 as automatic', () => {
+    expect(normalizeSettings({ videoBitrate: '8M' }).videoBitrateMode).toBe('auto');
+    expect(normalizeSettings({ videoBitrate: 'broken' }).videoBitrateMode).toBe('auto');
+  });
+
+  it('keeps a bitrate that the user chose before M5', () => {
+    expect(normalizeSettings({ videoBitrate: '12M' })).toMatchObject({
+      videoBitrateMode: 'manual',
+      videoBitrate: '12M',
+    });
+  });
+
+  it('keeps an explicit choice once the mode is saved (even 8M)', () => {
+    expect(
+      normalizeSettings({ videoBitrateMode: 'manual', videoBitrate: '8M' }).videoBitrateMode
+    ).toBe('manual');
+    expect(
+      normalizeSettings({ videoBitrateMode: 'auto', videoBitrate: '20M' }).videoBitrateMode
+    ).toBe('auto');
+    expect(() => parseSettingsUpdate({ videoBitrateMode: 'fast' })).toThrow();
+  });
+});

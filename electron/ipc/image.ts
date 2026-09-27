@@ -1,6 +1,6 @@
 import { imageRequestSchema } from '../../shared/project/generationRequests';
 import { fileAccess } from '../utils/fileAccess';
-import { retryTransient, limitedOpenAIFetch } from '../utils/generationPolicy';
+import { concurrencyFor, limitedOpenAIImageFetch, retryTransient } from '../utils/generationPolicy';
 import { generationSettings } from '../utils/generationContext';
 import { registerOperation } from './operations';
 import { app, safeStorage, nativeImage } from 'electron';
@@ -16,10 +16,17 @@ import {
   getImageModelProvider,
   isImageModel,
   isImageResolution,
+  normalizeImageModelId,
   type ImageModel,
   type ImageResolution,
   type ImageSizeTier,
 } from '../../shared/constants/models';
+import {
+  getGeminiImageSizeTier,
+  getImageSizeTier,
+  getOpenAIImageQuality,
+} from '../../shared/constants/imageQuality';
+import { getImageTextRule, upgradeLegacyImageTextSection } from '../../shared/project/imageText';
 import {
   getImageStylePresetConfig,
   type ImageAspectRatio,
@@ -27,6 +34,7 @@ import {
 } from '../../shared/project/imageStylePresets';
 import { sanitizeImagePromptForRendering } from '../../shared/utils/imagePromptSanitizer';
 import { getOpenAIImageDimensions } from '../utils/openaiImage';
+import { readImageDimensions } from '../utils/imageDimensions';
 import { ProjectRepository } from '../project/repository';
 import { logger } from '../utils/logger';
 
@@ -69,8 +77,10 @@ async function readImageGenerationSettings(): Promise<{
       ? JSON.stringify(generationSettings.getStore())
       : await fs.readFile(settingsPath, 'utf-8');
     const parsed = JSON.parse(content) as { imageModel?: string; imageResolution?: string };
-    if (isImageModel(parsed.imageModel)) {
-      imageModel = parsed.imageModel;
+    // 提供終了した preview 版の ID が保存されていても、GA 版の ID で生成する
+    const savedImageModel = normalizeImageModelId(parsed.imageModel);
+    if (isImageModel(savedImageModel)) {
+      imageModel = savedImageModel;
     }
     if (isImageResolution(parsed.imageResolution)) {
       imageResolution = parsed.imageResolution;
@@ -84,7 +94,9 @@ async function readImageGenerationSettings(): Promise<{
     imageResolution,
   };
 }
-const withRetry = retryTransient;
+// Gemini の画像生成は、テキスト・音声とは別の「画像」の枠で同時実行数を制御する
+const withRetry = <T>(operation: () => Promise<T>) =>
+  retryTransient(operation, 3, 1000, 'gemini:image');
 
 // 画像プロンプトの型
 interface ImagePrompt {
@@ -116,24 +128,28 @@ interface ImagePrompt {
   createdAt: string;
 }
 
-const IMAGE_SYSTEM_POLICY_CORE = `タスク:
-「指示」ブロックの内容に基づき、1枚の画像を生成する。
+// 画像に描く文字のルールはここで 1 回だけ伝える(ルール本体は shared/project/imageText.ts)
+function buildImageSystemPolicy(textRule: string): string {
+  return `タスク:
+「指示」の仕様どおりに、1枚のスライド画像を描く。
 
-制約:
-- 構図・要素配置・情報優先度は「指示」ブロックを最優先の描画仕様として扱う。
-- 「指示」にない要素・見出し・数値・キャプションを追加しない。
-- 画面内文字として描画してよいのは「指示」内の「画面コピー」「画面テキスト」「テキスト」欄にある項目のみ。
-- 「配置」「オブジェクト配置」「レイアウト方針」「要素」「情報の優先順位」などの見出し・説明文は描画しない。
-- レイアウト用の割合値・サイズメモ・座標メモは構図メタ情報として扱い、文字として描画しない。
-- 割合値は「画面テキスト」欄に明示されたものだけを文字として扱う。
-- 指定された見出し、サブ見出し、要点、数値は正確に描画する。出典表示や「出典: 記事本文」は描画しない。
-- 写実表現は禁止。`;
+描き方:
+- 構図、要素の配置、情報の優先度は「指示」に従い、指示にない要素は加えない。
+- ${textRule}
+- 表現は非写実のイラスト・図解にする。`;
+}
+
+// 旧形式(「画面コピー」「画面テキスト」欄)で保存されたプロンプトも、同じ文字のルールで描けるよう読み替える
+function resolvePromptBody(prompt: ImagePrompt): string {
+  return upgradeLegacyImageTextSection(prompt.prompt);
+}
 
 // 異常な長文入力のみを防ぐための非常上限（通常運用では切り詰めない）
 const MAX_USER_PROMPT_CHARS = 12000;
 const MAX_NEGATIVE_PROMPT_CHARS = 4000;
 const MAX_MODEL_INPUT_PROMPT_CHARS = 20000;
-const IMAGE_BATCH_CONCURRENCY = 3;
+// 一括生成の並列数は画像の枠と揃える(実際の同時実行数と 1 分あたりの枚数は generationPolicy が制御する)
+const IMAGE_BATCH_CONCURRENCY = concurrencyFor('image');
 
 type ImageBatchRunState = {
   cancelRequested: boolean;
@@ -164,17 +180,6 @@ function normalizeNegativePrompt(value: string): string {
     return true;
   });
   return deduped.join(', ');
-}
-
-function getImageSize(imageResolution: ImageResolution): ImageSizeTier {
-  switch (imageResolution) {
-    case '2k':
-      return '2K';
-    case '4k':
-      return '4K';
-    default:
-      return '1K';
-  }
 }
 
 function extractImageUsage(
@@ -243,7 +248,8 @@ function buildImageSystemInstruction(prompt: ImagePrompt): string {
   const strictAvoidSection = negativeRaw ? `禁止:\n${negativeRaw}` : '';
 
   const systemInstruction = [
-    IMAGE_SYSTEM_POLICY_CORE,
+    // 「画面に描く文字」欄がないプロンプト(旧形式の図解・自由記述)は緩いルールにし、文字が消えないようにする
+    buildImageSystemPolicy(getImageTextRule(resolvePromptBody(prompt))),
     'スタイル方針:\n配色・質感・背景・情報密度は下記スタイルを固定適用する。指示内の色・トーン指定は採用しない。',
     `スタイル:\n${styleLines}`,
     strictAvoidSection,
@@ -254,15 +260,9 @@ function buildImageSystemInstruction(prompt: ImagePrompt): string {
 }
 
 function buildImagePromptText(prompt: ImagePrompt): string {
-  const sanitizedPrompt = sanitizeImagePromptForRendering(prompt.prompt);
+  const sanitizedPrompt = sanitizeImagePromptForRendering(resolvePromptBody(prompt));
   const userPromptText = truncateTextByChars(sanitizedPrompt, MAX_USER_PROMPT_CHARS);
-  const composedPrompt = [
-    '描画ルール:',
-    '- 画面内の文字は「画面テキスト」欄の項目のみを使用する。',
-    '- 配置・レイアウト方針・要素・情報の優先順位に含まれるレイアウト用メモは画面に文字として描画しない。',
-    '指示:',
-    userPromptText,
-  ]
+  const composedPrompt = ['指示:', userPromptText]
     .filter((part) => part && part.length > 0)
     .join('\n\n');
   return truncateTextByChars(composedPrompt, MAX_MODEL_INPUT_PROMPT_CHARS);
@@ -434,17 +434,12 @@ async function saveImageToFile(
 
 function buildOpenAiImagePrompt(prompt: ImagePrompt): string {
   const systemInstruction = buildImageSystemInstruction(prompt);
+  // buildImagePromptText は「指示:」の見出しから始まるので、見出しを重ねずにつなぐ
   const userPrompt = buildImagePromptText(prompt);
   return truncateTextByChars(
-    [systemInstruction, `ユーザー指示:\n${userPrompt}`].join('\n\n'),
+    [systemInstruction, userPrompt].join('\n\n'),
     MAX_MODEL_INPUT_PROMPT_CHARS
   );
-}
-
-function getOpenAiImageQuality(imageResolution: ImageResolution): 'low' | 'medium' | 'high' {
-  if (imageResolution === '4k') return 'high';
-  if (imageResolution === '2k') return 'medium';
-  return 'low';
 }
 
 function getOpenAiRequestedSize(
@@ -521,8 +516,8 @@ async function generateGeminiImageAsset(params: {
     params;
   const enhancedPrompt = buildImagePromptText(prompt);
   const systemInstruction = buildImageSystemInstruction(prompt);
-  const imageSize = getImageSize(imageResolution);
-  const dimensions = getDimensions(prompt.aspectRatio, imageResolution);
+  const imageSize = getGeminiImageSizeTier(imageResolution);
+  const requestedDimensions = getDimensions(prompt.aspectRatio, imageResolution);
   const referenceParts = await Promise.all(
     styleReferenceImages.map(async (reference) => ({
       inlineData: {
@@ -580,6 +575,8 @@ async function generateGeminiImageAsset(params: {
   const mimeType = imagePart?.inlineData?.mimeType || 'image/png';
   const filePath = await saveImageToFile(base64Data, projectPath, imageId, mimeType);
   const stats = await fs.stat(filePath);
+  // Gemini は imageSize の区分で生成するため、要求値ではなく実際の画像の寸法を記録する
+  const dimensions = readImageDimensions(Buffer.from(base64Data, 'base64')) ?? requestedDimensions;
 
   return {
     id: imageId,
@@ -625,9 +622,9 @@ async function generateOpenAiImageAsset(params: {
     openai,
     styleReferenceImages,
   } = params;
-  const imageSizeTier = getImageSize(imageResolution);
+  const imageSizeTier = getImageSizeTier('openai', imageResolution);
   const requestedSize = getOpenAiRequestedSize(prompt.aspectRatio, imageResolution);
-  const quality = getOpenAiImageQuality(imageResolution);
+  const quality = getOpenAIImageQuality(imageResolution);
   const promptText = buildOpenAiImagePrompt(prompt);
   const openAiReferenceFiles =
     styleReferenceImages.length > 0
@@ -789,7 +786,7 @@ registerOperation(
       imageResolution,
       googleGenAI: googleApiKey ? new GoogleGenAI({ apiKey: googleApiKey }) : undefined,
       openai: openaiApiKey
-        ? new OpenAI({ apiKey: openaiApiKey, fetch: limitedOpenAIFetch })
+        ? new OpenAI({ apiKey: openaiApiKey, fetch: limitedOpenAIImageFetch })
         : undefined,
       styleReferenceImages,
     });
@@ -830,7 +827,7 @@ registerOperation(
 
     const projectPath = await getProjectPath(projectId);
     const openai = openaiApiKey
-      ? new OpenAI({ apiKey: openaiApiKey, fetch: limitedOpenAIFetch })
+      ? new OpenAI({ apiKey: openaiApiKey, fetch: limitedOpenAIImageFetch })
       : undefined;
     const genAI = googleApiKey ? new GoogleGenAI({ apiKey: googleApiKey }) : undefined;
     const runState: ImageBatchRunState = { cancelRequested: false };

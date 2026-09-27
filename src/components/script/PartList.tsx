@@ -14,7 +14,7 @@ import {
   verticalListSortingStrategy,
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import { Badge, Button, StatusChip, useConfirm } from '../ui';
+import { Badge, Button, useConfirm } from '../ui';
 import type { Part } from '../../schemas';
 
 interface PartListProps {
@@ -57,11 +57,11 @@ function SortablePartItem({
     <li
       ref={setNodeRef}
       style={style}
-      className={`group relative cursor-pointer rounded-[10px] border transition-colors ${
+      className={`nv-focus-ring group relative cursor-pointer rounded-[var(--nv-radius-sm)] border transition-colors ${
         isSelected
-          ? 'border-[var(--nv-color-accent)] bg-blue-50 shadow-[var(--nv-shadow-sm)]'
-          : 'border-[var(--nv-color-border)] bg-white hover:bg-slate-50'
-      } ${isDragging ? 'z-50 shadow-[var(--nv-shadow-md)]' : ''}`}
+          ? 'border-[var(--nv-color-accent)] bg-[var(--nv-color-accent)]/10'
+          : 'border-transparent hover:border-[var(--nv-color-border)] hover:bg-[var(--nv-color-canvas)]'
+      } ${isDragging ? 'z-50 bg-white shadow-[var(--nv-shadow-md)]' : ''}`}
       onClick={onSelect}
       tabIndex={0}
       aria-current={isSelected ? 'true' : undefined}
@@ -72,13 +72,14 @@ function SortablePartItem({
         }
       }}
     >
-      <div className="flex items-start gap-3 p-3">
+      <div className="flex items-start gap-2 px-2 py-2">
         <button
-          className="mt-0.5 rounded-[8px] p-1 text-slate-600 transition-colors hover:bg-slate-100 hover:text-slate-600 cursor-grab active:cursor-grabbing touch-none"
+          type="button"
+          className="nv-focus-ring mt-0.5 cursor-grab touch-none rounded-[var(--nv-radius-sm)] p-1 text-[var(--nv-color-muted)] transition-colors hover:bg-[var(--nv-color-canvas)] active:cursor-grabbing"
           {...attributes}
           {...listeners}
           onClick={(e) => e.stopPropagation()}
-          aria-label="並び替え"
+          aria-label={`シーン ${index + 1} を並べ替える(スペースキーで持ち上げ、矢印キーで移動)`}
         >
           <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
             <path d="M7 2a2 2 0 1 0 0 4 2 2 0 0 0 0-4zM7 8a2 2 0 1 0 0 4 2 2 0 0 0 0-4zM7 14a2 2 0 1 0 0 4 2 2 0 0 0 0-4zM13 2a2 2 0 1 0 0 4 2 2 0 0 0 0-4zM13 8a2 2 0 1 0 0 4 2 2 0 0 0 0-4zM13 14a2 2 0 1 0 0 4 2 2 0 0 0 0-4z" />
@@ -86,27 +87,32 @@ function SortablePartItem({
         </button>
 
         <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2">
-            <Badge tone={isSelected ? 'info' : 'neutral'}>{index + 1}</Badge>
-            <h4 className="truncate text-sm font-semibold text-slate-900">{part.title}</h4>
+          <div className="flex items-baseline gap-2">
+            <span className="shrink-0 text-xs font-semibold text-[var(--nv-color-muted)] tabular-nums">
+              {index + 1}
+            </span>
+            <h4 className="truncate text-sm font-semibold text-[var(--nv-color-text)]">
+              {part.title || '(見出しなし)'}
+            </h4>
           </div>
-          <p className="mt-1 line-clamp-2 text-xs text-slate-600">
-            {part.summary || part.scriptText.substring(0, 50) + '...'}
+          <p className="mt-1 line-clamp-2 text-xs text-[var(--nv-color-muted)]">
+            {part.summary || part.scriptText.slice(0, 50) || '台本が空です'}
           </p>
-          <div className="mt-2 flex flex-wrap items-center gap-2">
+          <div className="mt-1.5 flex flex-wrap items-center gap-1">
             <Badge tone="neutral">{formatDuration(part.durationEstimateSec)}</Badge>
-            {part.scriptModifiedByUser && <StatusChip tone="warning" label="編集済み" />}
+            {part.scriptModifiedByUser && <Badge tone="info">手直し済み</Badge>}
           </div>
         </div>
 
         <button
+          type="button"
           onClick={async (e) => {
             e.stopPropagation();
             await onDelete();
           }}
-          className="rounded-[8px] p-1 text-slate-600 opacity-100 transition-all hover:bg-red-50 hover:text-red-600 group-hover:opacity-100"
-          title="削除"
-          aria-label={`${part.title}を削除`}
+          className="nv-focus-ring rounded-[var(--nv-radius-sm)] p-1 text-[var(--nv-color-muted)] transition-colors hover:bg-[var(--nv-color-danger)]/10 hover:text-[var(--nv-color-danger)]"
+          title="シーンを削除"
+          aria-label={`シーン ${index + 1}「${part.title}」を削除`}
         >
           <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path
@@ -159,13 +165,13 @@ export function PartList({
   };
 
   return (
-    <div className="flex flex-col h-full">
-      <div className="border-b border-[var(--nv-color-border)] p-4">
-        <div className="flex items-center justify-between">
+    <div className="flex h-full flex-col">
+      <div className="border-b border-[var(--nv-color-border)] px-4 py-3">
+        <div className="flex items-center justify-between gap-2">
           <div>
-            <h3 className="font-semibold text-slate-900">パート一覧</h3>
-            <p className="mt-1 text-xs text-slate-600">
-              {parts.length} パート / 合計{' '}
+            <h3 className="text-sm font-semibold text-[var(--nv-color-text)]">シーン</h3>
+            <p className="nv-help mt-0.5">
+              {parts.length} シーン・約{' '}
               {formatDuration(parts.reduce((sum, p) => sum + p.durationEstimateSec, 0))}
             </p>
           </div>
@@ -183,10 +189,10 @@ export function PartList({
         </div>
       </div>
 
-      <div className="nv-scrollbar flex-1 overflow-auto p-3">
+      <div className="nv-scrollbar min-h-0 flex-1 overflow-auto p-2">
         {parts.length === 0 ? (
-          <div className="rounded-[10px] border border-dashed border-[var(--nv-color-border)] p-6 text-center text-sm text-slate-600">
-            パートがありません
+          <div className="rounded-[var(--nv-radius-sm)] border border-dashed border-[var(--nv-color-border)] p-6 text-center text-sm text-[var(--nv-color-muted)]">
+            シーンがありません。「追加」から作れます。
           </div>
         ) : (
           <DndContext
@@ -195,7 +201,7 @@ export function PartList({
             onDragEnd={handleDragEnd}
           >
             <SortableContext items={parts.map((p) => p.id)} strategy={verticalListSortingStrategy}>
-              <ul className="space-y-2">
+              <ul className="space-y-1.5">
                 {parts.map((part, index) => (
                   <SortablePartItem
                     key={part.id}
@@ -205,8 +211,8 @@ export function PartList({
                     onSelect={() => onSelectPart(part.id)}
                     onDelete={async () => {
                       const accepted = await confirm({
-                        title: 'パートを削除しますか？',
-                        description: `「${part.title}」を削除します。関連する原稿と設定もこの一覧から外れます。`,
+                        title: 'シーンを削除しますか?',
+                        description: `「${part.title}」を削除します。このシーンの台本と、画像・音声の割り当てが外れます。`,
                         confirmLabel: '削除',
                         confirmVariant: 'danger',
                       });

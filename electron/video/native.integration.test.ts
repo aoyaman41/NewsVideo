@@ -11,7 +11,12 @@ import { createNewPart, createNewProject } from '../../shared/project/schema';
 import { deriveIntegrity, isVideoCurrent } from '../../shared/project/integrity';
 import { resolutionForAspect } from '../../shared/project/videoFormat';
 import { invokeOperation, registerOperation } from '../ipc/operations';
-import { renderPartVideoNative, resolveNativeVideoRendererBinary } from './native';
+import {
+  concatSegmentsNative,
+  renderClosingCardVideoNative,
+  renderPartVideoNative,
+  resolveNativeVideoRendererBinary,
+} from './native';
 
 const state = vi.hoisted(() => ({ root: '' }));
 vi.mock('electron', () => ({
@@ -270,6 +275,73 @@ describe.skipIf(process.platform !== 'darwin' || process.env.NEWSVIDEO_NATIVE_TE
       },
       180000
     );
+
+    it('encodes each segment once at the requested frame rate and bitrates and joins them without re-encoding', async () => {
+      const dir = await fs.mkdtemp(path.join(state.root, 'settings-'));
+      const audioPath = path.join(dir, 'tone.wav');
+      await fs.writeFile(audioPath, wav(2));
+      const imagePath = path.join(dir, 'red.png');
+      await fs.writeFile(imagePath, png(220, 30, 30));
+      const settings = {
+        width: 640,
+        height: 360,
+        fps: 30,
+        videoBitrate: '2M',
+        audioBitrate: '192k',
+      };
+      const job = { canceled: false, processes: new Set<never>() };
+      const progress: number[] = [];
+      const part = path.join(dir, 'part.mp4');
+      await renderPartVideoNative(
+        renderer,
+        {
+          outputPath: part,
+          ...settings,
+          audioPath,
+          audioDelayMs: 500,
+          imageEntries: [{ filePath: imagePath, durationSec: 2.5 }],
+        },
+        job,
+        (record) => {
+          if (record.out_time_ms) progress.push(Number(record.out_time_ms));
+        }
+      );
+      // 画像ごとの最初と最後だけでなく、映像 0.5 秒ごとに進捗を出す
+      expect(progress.length).toBeGreaterThanOrEqual(5);
+      expect(progress).toEqual([...progress].sort((a, b) => a - b));
+      const card = path.join(dir, 'card.mp4');
+      await renderClosingCardVideoNative(
+        renderer,
+        { outputPath: card, ...settings, durationSec: 1, headline: '見出し' },
+        job
+      );
+      const final = path.join(dir, 'final.mp4');
+      const { mode } = await concatSegmentsNative(
+        renderer,
+        { outputPath: final, ...settings, segmentPaths: [part, card, part] },
+        job
+      );
+      // すべての区間が同じ形式なので、連結で再エンコードしない
+      expect(mode).toBe('passthrough');
+      const inspected = JSON.parse((await execute(inspector, [final, '1.0'])).stdout);
+      expect(inspected).toMatchObject({
+        videoTracks: 1,
+        audioTracks: 1,
+        width: 640,
+        height: 360,
+        audioSampleRate: 48000,
+        audioChannels: 2,
+      });
+      // 一定フレームレート(2.5 秒 + 1 秒 + 2.5 秒 = 6 秒 × 30fps)
+      expect(inspected.fps).toBeCloseTo(30, 0);
+      expect(inspected.duration).toBeCloseTo(6, 1);
+      expect(inspected.videoFrames).toBe(180);
+      // 音声のビットレートは設定どおり、映像は設定(平均の目標値)を大きく超えない
+      expect(inspected.audioDataRate).toBeGreaterThan(150_000);
+      expect(inspected.audioDataRate).toBeLessThan(230_000);
+      expect(inspected.videoDataRate).toBeLessThan(2_500_000);
+      expect(inspected.samples[0].rgb[0]).toBeGreaterThan(150);
+    }, 60000);
 
     it('replaces a short audio region, inserts a measured pause and exports synchronized captions', async () => {
       await import('../ipc/settings');

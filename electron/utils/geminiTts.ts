@@ -6,16 +6,26 @@ import { measurePcmWav } from '../../shared/project/audioQuality';
 const GEMINI_TTS_PCM_SAMPLE_RATE_HERTZ = 24_000;
 const GEMINI_TTS_PCM_CHANNELS = 1;
 
+/**
+ * 本文中の `<...>` を声の演出タグとして解釈するモデル(3.8 系)向けに、半角の `<` `>` を全角に変換する。
+ * 台本中の不等号や山括弧がタグとして誤解釈されるのを防ぐ。
+ */
+export function escapeTtsAngleBrackets(text: string): string {
+  return text.replace(/</g, '＜').replace(/>/g, '＞');
+}
+
 export function buildGeminiTtsRequest(params: {
   model: GeminiTtsModel;
   text: string;
   style: string;
   voiceName: string;
 }): GenerateContentParameters {
-  const { model, text, style, voiceName } = params;
+  const { model, style, voiceName } = params;
+  const capabilities = getGeminiTtsModelCapabilities(model);
+  const text = capabilities.angleBracketTags ? escapeTtsAngleBrackets(params.text) : params.text;
   const speechConfig = { voiceConfig: { prebuiltVoiceConfig: { voiceName } } };
 
-  if (!getGeminiTtsModelCapabilities(model).styleViaSpeechMetadata) {
+  if (!capabilities.styleViaSpeechMetadata) {
     return {
       model,
       contents: `${style}\n\n${text}`,

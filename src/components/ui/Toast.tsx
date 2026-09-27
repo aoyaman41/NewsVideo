@@ -24,13 +24,13 @@ export function Toast({
     <div className="nv-surface flex items-start gap-3 px-4 py-3 shadow-[var(--nv-shadow-md)]">
       <StatusChip tone={tone} label={toneLabels[tone]} className="shrink-0" />
       <div className="min-w-0 flex-1">
-        {title && <div className="text-sm font-semibold text-slate-900">{title}</div>}
-        <div className="text-sm text-slate-700">{message}</div>
+        {title && <div className="text-sm font-semibold text-[var(--nv-color-text)]">{title}</div>}
+        <div className="text-sm text-[var(--nv-color-text)]">{message}</div>
       </div>
       {onDismiss && (
         <button
           type="button"
-          className="rounded-[8px] px-2 py-1 text-slate-600 transition-colors hover:bg-slate-100 hover:text-slate-600"
+          className="nv-focus-ring rounded-[var(--nv-radius-sm)] px-2 py-1 text-[var(--nv-color-muted)] transition-colors hover:bg-[var(--nv-color-canvas)]"
           onClick={onDismiss}
           aria-label="閉じる"
         >

@@ -355,3 +355,4 @@ import './ipc/tts.js';
 import './ipc/file.js';
 import './ipc/video.js';
 import './ipc/jobs.js';
+import './ipc/usage.js';

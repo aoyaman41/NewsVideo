@@ -17,21 +17,6 @@ const PRELOAD_WATCH_EXTENSIONS = new Set(['.ts', '.tsx', '.js', '.mjs', '.cjs'])
 function getRendererManualChunk(id: string): string | undefined {
   if (!id.includes('node_modules')) return undefined;
 
-  if (
-    id.includes('/jszip/') ||
-    id.includes('/underscore/') ||
-    id.includes('/lop/') ||
-    id.includes('/xmlbuilder/') ||
-    id.includes('/dingbat-to-unicode/') ||
-    id.includes('/@xmldom/xmldom/')
-  ) {
-    return 'vendor-docx-utils';
-  }
-
-  if (id.includes('/mammoth/')) {
-    return 'vendor-mammoth';
-  }
-
   if (id.includes('/react-router/') || id.includes('/react-router-dom/')) {
     return 'vendor-router';
   }

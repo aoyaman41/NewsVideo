@@ -48,72 +48,75 @@ export type ImageStylePresetConfig = {
   negative: string;
 };
 
+/**
+ * 禁止として残すのは人物・顔、ロゴ・透かし・QR コードだけにする。写実表現や装飾の強さなどは、
+ * 公式の推奨どおり baseStyle / lighting / background の肯定形の記述で指定する。
+ * 指定外の文字を描かないルールは shared/project/imageText.ts の IMAGE_TEXT_RULE で 1 回だけ伝える。
+ */
+const IMAGE_STYLE_NEGATIVE = '人物, 顔, 手, ロゴ, 透かし, QRコード';
+
 export const IMAGE_STYLE_PRESET_CONFIGS: Record<ImageStylePreset, ImageStylePresetConfig> = {
   infographic: {
     id: 'infographic',
     baseStyle: 'フラットなベクター調、非写実、情報整理しやすい明瞭な図解表現',
     colorPalette:
       '背景 #F6F7F9、主要線 #1F3552、補助線 #5C6B7A、アクセント #2C8E8A（単色）、文字 #0F172A',
-    lighting: 'フラットでマットな質感',
+    lighting: 'フラットでマットな質感、控えめなコントラスト',
     background: '余白を十分に取った明るい無地背景',
     density: 'low',
-    negative:
-      '人物, 顔, 手, 群衆, 肖像, インタビュー, アナウンサー, 記者, 番組セット, テロップ, 速報帯, ティッカー, ニュース名, 番組名, 局名, 番組タイトル, カテゴリー名, ロゴ, 透かし, QRコード, 商標, 写真, 実写, 写真風, 写実, フォトリアル, フォトリアリスティック, カメラ風, 過度なネオン, 強コントラスト, ギラついた光沢, サイバーパンク, アニメ調',
+    negative: IMAGE_STYLE_NEGATIVE,
   },
   editorial: {
     id: 'editorial',
     baseStyle:
-      '誌面レイアウトを思わせる整理されたエディトリアルイラスト、非写実、落ち着いた情報ビジュアル',
+      '誌面レイアウトを思わせる整理されたエディトリアルイラスト、非写実、平面的で落ち着いた情報ビジュアル',
     colorPalette: '背景 #F4F1EC、主要線 #243447、補助線 #6B7280、アクセント #A85530、文字 #111827',
     lighting: 'やわらかい自然光、紙面のような落ち着いたコントラスト',
     background: '淡い紙面調の背景と控えめな余白',
     density: 'medium',
-    negative:
-      '実在人物, 顔写真, 実写, フォトリアル, スタジオ照明, 派手なネオン, テレビ番組ロゴ, 局名, 透かし, QRコード, 過度な立体表現, アニメ調',
+    negative: IMAGE_STYLE_NEGATIVE,
   },
   minimal: {
     id: 'minimal',
-    baseStyle: '余白を広く取ったミニマルなフラットデザイン、静かな配色、単純化した図形表現',
+    baseStyle:
+      '余白を広く取ったミニマルなフラットデザイン、非写実、静かな配色、要点だけに絞った単純な図形表現',
     colorPalette: '背景 #FAFAF9、主要線 #0F172A、補助線 #94A3B8、アクセント #2563EB、文字 #0F172A',
     lighting: 'フラット、陰影を抑えたクリーンな質感',
     background: '無地で静かな背景、装飾最小限',
     density: 'low',
-    negative:
-      '人物, 写真, 実写, フォトリアル, 過密な図表, 強い発光, テレビ番組らしい装飾, ティッカー, ロゴ, 透かし, アニメ調',
+    negative: IMAGE_STYLE_NEGATIVE,
   },
   social: {
     id: 'social',
-    baseStyle: 'SNS カード向けの鮮明なベクターイラスト、強めのアクセント、短時間で理解できる構図',
+    baseStyle:
+      'SNS カード向けの鮮明で平面的なベクターイラスト、強めのアクセント、短時間で理解できる構図',
     colorPalette: '背景 #FFF7ED、主要線 #7C2D12、補助線 #9A3412、アクセント #EA580C、文字 #431407',
     lighting: '明るくクリア、コントラストは高めだが写実に寄せない',
     background: '単純化した色面背景と大きめのアクセント形状',
     density: 'medium',
-    negative:
-      '実在人物, 顔写真, 実写, フォトリアル, 長文テキスト, テレビ番組ロゴ, 局名, 透かし, QRコード, 写真風, 過剰な3D, サイバーパンク',
+    negative: IMAGE_STYLE_NEGATIVE,
   },
   textRich: {
     id: 'textRich',
     baseStyle:
-      '完成されたニュース解説スライド、読みやすい日本語タイポグラフィ、図形とテキストを一体化した情報デザイン',
+      '完成されたニュース解説スライド、くっきり読める日本語タイポグラフィ、図形とテキストを一体化した簡潔な情報デザイン',
     colorPalette:
       '背景 #F8FAFC、主要文字 #0F172A、補助文字 #475569、アクセント #0E7490 と #EAB308、区切り線 #CBD5E1',
     lighting: 'フラットで印刷物のように均一、文字のコントラストを最優先',
     background: '淡い無地または控えめな面分割背景、本文領域の余白を明確に確保',
     density: 'high',
-    negative:
-      '実在人物, 顔写真, 実写, フォトリアル, テレビ番組ロゴ, 局名, 透かし, QRコード, 読めない文字, 文字化け, 架空の追加数値, 過度な装飾, サイバーパンク',
+    negative: IMAGE_STYLE_NEGATIVE,
   },
   dataCard: {
     id: 'dataCard',
     baseStyle:
-      'データカード型のニュース図解、数値と短い分析コメントを大きく扱う、整然としたダッシュボード風レイアウト',
+      'データカード型の平面的なニュース図解、数値と短い分析コメントを大きく読みやすく扱う、整然としたダッシュボード風レイアウト',
     colorPalette:
       '背景 #F9FAFB、主要文字 #111827、補助文字 #4B5563、増加色 #047857、減少色 #B91C1C、アクセント #2563EB',
     lighting: 'フラットでマット、グラフと数字の視認性を優先',
     background: '白から薄いグレーの整理されたカード背景、罫線と余白で情報を区分',
     density: 'high',
-    negative:
-      '実在人物, 顔写真, 実写, フォトリアル, テレビ番組ロゴ, 局名, 透かし, QRコード, 読めない文字, 文字化け, 出典にない数値, 派手な3D, 過度なネオン',
+    negative: IMAGE_STYLE_NEGATIVE,
   },
 };
 

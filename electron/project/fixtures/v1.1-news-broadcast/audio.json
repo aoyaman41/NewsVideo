@@ -1,0 +1,30 @@
+[
+  {
+    "id": "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
+    "filePath": "/Users/example/Library/Application Support/newsvideo/projects/報道サンプル_5b0f6c1e.newsproj/audio/eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee.wav",
+    "durationSec": 12.5,
+    "ttsEngine": "gemini_tts",
+    "voiceId": "Charon",
+    "segments": ["前半の読み上げ。", "後半の読み上げ。"],
+    "settings": {
+      "speakingRate": 1,
+      "pitch": 0,
+      "languageCode": "ja-JP"
+    },
+    "generatedAt": "2026-02-10T01:40:00.000Z"
+  },
+  {
+    "id": "ffffffff-ffff-4fff-8fff-ffffffffffff",
+    "filePath": "/Users/example/Library/Application Support/newsvideo/projects/報道サンプル_5b0f6c1e.newsproj/audio/ffffffff-ffff-4fff-8fff-ffffffffffff.wav",
+    "durationSec": 13.5,
+    "ttsEngine": "gemini_tts",
+    "voiceId": "Charon",
+    "segments": ["前半の読み上げ。", "後半の読み上げ。"],
+    "settings": {
+      "speakingRate": 1,
+      "pitch": 0,
+      "languageCode": "ja-JP"
+    },
+    "generatedAt": "2026-02-10T01:40:00.000Z"
+  }
+]

@@ -2,6 +2,7 @@ import { registerOperation } from './operations';
 import { app, BrowserWindow } from 'electron';
 import { z } from 'zod';
 import { GenerationJobEngine } from '../jobs/engine';
+import { replaceLeadImage } from '../jobs/panelImages';
 import { getProjectRepository } from './project';
 import { invokeOperation } from './operations';
 import { normalizeSettings } from '../../shared/settings/appSettings';
@@ -66,7 +67,8 @@ registerOperation('jobs:recoverAsset', async (_, input: unknown) => {
     if (!part) throw new Error('シーンが変更されました。再度選択してください。');
     if (image.success) {
       if (!data.images.some((item) => item.id === image.data.id)) data.images.push(image.data);
-      part.panelImages = [{ imageId: image.data.id }];
+      // 先頭の枠だけを差し替え、2 枚目以降は残す(1 シーンに複数の画像を置ける)
+      part.panelImages = replaceLeadImage(part.panelImages, image.data.id);
     }
     if (audio.success) {
       if (!data.audio.some((item) => item.id === audio.data.id)) data.audio.push(audio.data);

@@ -121,7 +121,7 @@ registerOperation('tts:replaceSegment', async (_, request: unknown) => {
     project.id
   );
   // Preserve the paid result before transforming or applying it.
-  await repo.update(project.id, (data) => {
+  const preserved = await repo.update(project.id, (data) => {
     data.audio.push(generated.audio);
     if (generated.usage)
       data.usage.push({
@@ -135,6 +135,9 @@ registerOperation('tts:replaceSegment', async (_, request: unknown) => {
         createdAt: new Date().toISOString(),
       });
   });
+  // 後続の変換が失敗しても画面側の保持データが古いリビジョンのまま残らないよう、保存のたびに通知する
+  for (const window of BrowserWindow.getAllWindows())
+    window.webContents.send('project:changed', { id: preserved.id, revision: preserved.revision });
   const [original, replacement] = await Promise.all([
     pcmData(part.audio.filePath, project.path),
     pcmData(generated.audio.filePath, project.path),

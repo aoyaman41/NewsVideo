@@ -5,6 +5,7 @@ import { randomUUID } from 'node:crypto';
 import { deriveIntegrity } from '../../shared/project/integrity';
 import { projectSchema, type Project } from '../../shared/project/schema';
 import { normalizePresentationProfile } from '../../shared/project/presentationProfile';
+import { migrateLegacyProjectData } from '../../shared/project/legacyMigration';
 
 export class ProjectStorageError extends Error {
   constructor(
@@ -17,10 +18,29 @@ export class ProjectStorageError extends Error {
 
 const missing = (error: unknown) => (error as NodeJS.ErrnoException)?.code === 'ENOENT';
 
+export type ProjectRepositoryOptions = {
+  /**
+   * 保存(作成を含む)が確定したあとに呼ぶ。使用量の台帳への追記に使う。
+   * 失敗しても保存は成功扱いのままにする(呼び出し側で待たない・例外を外に出さない)
+   */
+  onPersist?: (project: Project) => void | Promise<void>;
+};
+
 /** A single durable manifest is the commit point. Legacy component JSON files are read only. */
 export class ProjectRepository {
   private queues = new Map<string, Promise<unknown>>();
-  constructor(readonly root: string) {}
+  constructor(
+    readonly root: string,
+    private options: ProjectRepositoryOptions = {}
+  ) {}
+
+  private notifyPersisted(project: Project) {
+    try {
+      void Promise.resolve(this.options.onPersist?.(project)).catch(() => {});
+    } catch {
+      /* 保存そのものは完了している */
+    }
+  }
 
   async directories() {
     await fs.mkdir(this.root, { recursive: true });
@@ -69,6 +89,8 @@ export class ProjectRepository {
       );
       data = { ...meta, ...Object.fromEntries(fields.map((field, i) => [field, values[i]])) };
     }
+    // 廃止済みの値(v1.1 の画像スタイル news_broadcast など)を現行の値に読み替えてから検証する
+    data = migrateLegacyProjectData(data);
     const project = projectSchema.parse({
       ...data,
       revision: data.revision ?? 0,
@@ -173,6 +195,7 @@ export class ProjectRepository {
       revision: 0,
     });
     await this.atomicWrite(path.join(directory, 'project.json'), JSON.stringify(project));
+    this.notifyPersisted(project);
     return project;
   }
 
@@ -220,6 +243,7 @@ export class ProjectRepository {
       JSON.stringify({ ...current, schemaVersion: 'v2.0' })
     );
     await this.atomicWrite(path.join(directory, 'project.json'), JSON.stringify(next));
+    this.notifyPersisted(next);
     return next;
   }
 }

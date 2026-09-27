@@ -5,19 +5,20 @@ import {
   limitedOpenAIFetch,
   withProviderSlot,
 } from '../utils/generationPolicy';
-import { generationSettings } from '../utils/generationContext';
+import { generationSettings, jobOperationContext } from '../utils/generationContext';
 import { registerOperation } from './operations';
 import { app, safeStorage } from 'electron';
+import { createHash } from 'crypto';
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import OpenAI from 'openai';
 import { ContentFilterFinishReasonError, LengthFinishReasonError } from 'openai/core/error';
 import { zodResponseFormat } from 'openai/helpers/zod';
+import type { ChatCompletionContentPartText } from 'openai/resources/chat/completions';
 import { GoogleGenAI, ThinkingLevel } from '@google/genai';
 import Anthropic, { type AutoParseableOutputFormat } from '@anthropic-ai/sdk';
 import { zodOutputFormat } from '@anthropic-ai/sdk/helpers/zod';
-import { z } from 'zod/v3';
-import { z as zv4 } from 'zod/v4';
+import { z } from 'zod/v4';
 import {
   DEFAULT_IMAGE_PROMPT_TEXT_MODEL,
   DEFAULT_SCRIPT_TEXT_MODEL,
@@ -32,6 +33,7 @@ import {
   isOpenAITextCompletionModel,
   isTextCompletionModel,
   isGeminiTextCompletionModel,
+  supportsOpenAIPromptCacheBreakpoint,
   supportsOpenAITemperature,
   type AnthropicTextCompletionModel,
   type ClaudeEffort,
@@ -51,7 +53,10 @@ import {
   type ImageStylePreset,
   type ImageStylePresetConfig,
 } from '../../shared/project/imageStylePresets';
+import { IMAGE_TEXT_SECTION_LABEL, formatImageTextSection } from '../../shared/project/imageText';
 import { PRESENTATION_PROFILE_PRESET_CLOSING_LINES } from '../../shared/project/presentationProfile';
+import { narrationCharsFor } from '../../shared/project/narration';
+import { DEFAULT_SCENE_COUNT, DEFAULT_SECONDS_PER_PART } from '../../shared/project/purposes';
 import { DEFAULT_SETTINGS, normalizeSettings } from '../../shared/settings/appSettings';
 import { sanitizeImagePromptForRendering } from '../../shared/utils/imagePromptSanitizer';
 
@@ -66,6 +71,7 @@ type TextGenerationConfig = {
   model: TextCompletionModel;
   openaiReasoningEffort: OpenAIReasoningEffort;
   geminiThinkingLevel: GeminiThinkingLevel;
+  /** 用途(台本 / 画像プロンプト)に応じた Claude の effort */
   claudeEffort: ClaudeEffort;
 };
 
@@ -128,32 +134,42 @@ function mapOpenAIUsage(
   };
 }
 
+// thinking のトークン(thoughtsTokenCount)は出力単価で課金されるため、出力トークンに含めて記録する
 function mapGeminiUsage(
   usage:
     | {
         promptTokenCount?: number;
         responseTokenCount?: number;
         candidatesTokenCount?: number;
+        thoughtsTokenCount?: number;
         totalTokenCount?: number;
         promptTokens?: number;
         completionTokens?: number;
         totalTokens?: number;
         prompt_token_count?: number;
         candidates_token_count?: number;
+        thoughts_token_count?: number;
         total_token_count?: number;
       }
     | undefined,
   model?: string
 ): OpenAIUsageSummary | null {
   if (!usage && !model) return null;
+  const responseTokens =
+    usage?.responseTokenCount ??
+    usage?.candidatesTokenCount ??
+    usage?.completionTokens ??
+    usage?.candidates_token_count;
+  const thoughtsTokens = usage?.thoughtsTokenCount ?? usage?.thoughts_token_count;
+  const outputTokens =
+    responseTokens === undefined && thoughtsTokens === undefined
+      ? undefined
+      : (responseTokens ?? 0) + (thoughtsTokens ?? 0);
   return {
     provider: 'gemini',
     inputTokens: usage?.promptTokenCount ?? usage?.promptTokens ?? usage?.prompt_token_count,
-    outputTokens:
-      usage?.responseTokenCount ??
-      usage?.candidatesTokenCount ??
-      usage?.completionTokens ??
-      usage?.candidates_token_count,
+    outputTokens,
+    ...(thoughtsTokens !== undefined ? { reasoningTokens: thoughtsTokens } : {}),
     totalTokens: usage?.totalTokenCount ?? usage?.totalTokens ?? usage?.total_token_count,
     requestCount: 1,
     model,
@@ -230,12 +246,15 @@ async function runWithConcurrency<T, R>(
   return results;
 }
 
+/**
+ * Gemini のテキスト生成。Gemini 3 は temperature を既定値(1.0)のまま使うよう公式が強く推奨しているため送らない。
+ * responseJsonSchema を渡すと構造化出力(application/json)にする。
+ */
 async function generateGeminiTextContent(params: {
   model: string;
   systemPrompt: string;
   userPrompt: string;
-  temperature: number;
-  responseMimeType?: string;
+  responseJsonSchema?: unknown;
   thinkingLevel: GeminiThinkingLevel;
 }): Promise<{ text: string; usage: OpenAIUsageSummary | null }> {
   const apiKey = await readApiKey('google_ai');
@@ -259,9 +278,10 @@ async function generateGeminiTextContent(params: {
       contents: params.userPrompt,
       config: {
         systemInstruction: params.systemPrompt,
-        temperature: params.temperature,
         ...(thinkingLevel ? { thinkingConfig: { thinkingLevel } } : {}),
-        ...(params.responseMimeType ? { responseMimeType: params.responseMimeType } : {}),
+        ...(params.responseJsonSchema
+          ? { responseMimeType: 'application/json', responseJsonSchema: params.responseJsonSchema }
+          : {}),
       },
     });
   });
@@ -279,6 +299,57 @@ async function generateGeminiTextContent(params: {
     text,
     usage: mapGeminiUsage(response.usageMetadata, params.model),
   };
+}
+
+// responseJsonSchema が受け付けるキーワードだけを残す(minLength・exclusiveMinimum・$schema などは落とす)
+const GEMINI_JSON_SCHEMA_KEYWORDS = new Set([
+  '$id',
+  '$defs',
+  '$ref',
+  '$anchor',
+  'type',
+  'format',
+  'title',
+  'description',
+  'enum',
+  'items',
+  'prefixItems',
+  'minItems',
+  'maxItems',
+  'minimum',
+  'maximum',
+  'anyOf',
+  'oneOf',
+  'properties',
+  'additionalProperties',
+  'required',
+]);
+
+function pruneJsonSchemaForGemini(node: unknown): unknown {
+  if (Array.isArray(node)) return node.map(pruneJsonSchemaForGemini);
+  if (!node || typeof node !== 'object') return node;
+  const pruned: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(node as Record<string, unknown>)) {
+    if (!GEMINI_JSON_SCHEMA_KEYWORDS.has(key)) continue;
+    if ((key === 'properties' || key === '$defs') && value && typeof value === 'object') {
+      // properties / $defs のキーはフィールド名なので、値のスキーマだけを処理する
+      pruned[key] = Object.fromEntries(
+        Object.entries(value as Record<string, unknown>).map(([name, schema]) => [
+          name,
+          pruneJsonSchemaForGemini(schema),
+        ])
+      );
+    } else if (key === 'required' || key === 'enum') {
+      pruned[key] = value;
+    } else {
+      pruned[key] = pruneJsonSchemaForGemini(value);
+    }
+  }
+  return pruned;
+}
+
+function toGeminiJsonSchema(schema: z.ZodType): unknown {
+  return pruneJsonSchemaForGemini(z.toJSONSchema(schema));
 }
 
 function resolveGeminiApiModel(selectedModel: TextCompletionModel): string {
@@ -324,7 +395,11 @@ async function generateClaudeTextContent(params: {
   userPrompt: string;
   effort: ClaudeEffort;
   stream?: boolean;
-  cacheSystemPrompt?: boolean;
+  /**
+   * リクエスト間で共通の先頭部分(記事本文など)。user の最初のブロックに置いて cache_control を付け、
+   * system とこのブロックまでをキャッシュする。リクエストごとに変わる内容は userPrompt(2 番目のブロック)に置く
+   */
+  cachedUserPrefix?: string;
   outputFormat?: Anthropic.Messages.JSONOutputFormat;
 }): Promise<{ text: string; usage: OpenAIUsageSummary }> {
   const apiKey = await readApiKey('anthropic');
@@ -334,13 +409,17 @@ async function generateClaudeTextContent(params: {
     );
   }
 
+  // 自動生成ジョブが応答の開始を待っている場合(同じ記事への画像プロンプトで、1 本目がキャッシュを書き込む
+  // まで残りを送らないため)は、ストリーミングで受け取り、最初のイベントで開始を知らせる
+  const onResponseStart = jobOperationContext.getStore()?.onResponseStart;
+  const streaming = Boolean(params.stream || onResponseStart);
   // 環境変数の ANTHROPIC_AUTH_TOKEN が混ざらないよう authToken は明示的に無効化する。
   // ストリーミングは応答ヘッダーの受信時点で fetch が返り、fetch 単位の枠では生成中の同時実行数を
   // 制御できないため、通常の fetch を使ってストリーム全体(SDK 内蔵リトライを含む)を 1 つの枠で包む
   const client = new Anthropic({
     apiKey,
     authToken: null,
-    ...(params.stream ? {} : { fetch: limitedAnthropicFetch }),
+    ...(streaming ? {} : { fetch: limitedAnthropicFetch }),
   });
   const effort = resolveClaudeEffort(params.effort);
   const outputConfig: Anthropic.Messages.OutputConfig = {
@@ -350,14 +429,30 @@ async function generateClaudeTextContent(params: {
   const request: Anthropic.Messages.MessageCreateParamsNonStreaming = {
     model: params.model,
     max_tokens: params.stream ? CLAUDE_STREAMING_MAX_TOKENS : CLAUDE_MAX_TOKENS,
-    system: params.cacheSystemPrompt
-      ? [{ type: 'text', text: params.systemPrompt, cache_control: { type: 'ephemeral' } }]
-      : params.systemPrompt,
-    messages: [{ role: 'user', content: params.userPrompt }],
+    system: params.systemPrompt,
+    messages: [
+      {
+        role: 'user',
+        content: params.cachedUserPrefix
+          ? [
+              {
+                type: 'text',
+                text: params.cachedUserPrefix,
+                cache_control: { type: 'ephemeral' },
+              },
+              { type: 'text', text: params.userPrompt },
+            ]
+          : params.userPrompt,
+      },
+    ],
     ...(Object.keys(outputConfig).length > 0 ? { output_config: outputConfig } : {}),
   };
-  const message = params.stream
-    ? await withProviderSlot('anthropic', () => client.messages.stream(request).finalMessage())
+  const message = streaming
+    ? await withProviderSlot('anthropic:text', () => {
+        const stream = client.messages.stream(request);
+        if (onResponseStart) stream.once('streamEvent', () => onResponseStart());
+        return stream.finalMessage();
+      })
     : await client.messages.create(request);
 
   assertClaudeMessageCompleted(message);
@@ -440,7 +535,8 @@ async function readTextGenerationConfig(scope: TextGenerationScope): Promise<Tex
     model: fallbackModel,
     openaiReasoningEffort: DEFAULT_SETTINGS.openaiReasoningEffort,
     geminiThinkingLevel: DEFAULT_SETTINGS.geminiThinkingLevel,
-    claudeEffort: DEFAULT_SETTINGS.claudeEffort,
+    claudeEffort:
+      scope === 'script' ? DEFAULT_SETTINGS.claudeEffort : DEFAULT_SETTINGS.claudeImagePromptEffort,
   };
   try {
     const settingsPath = getSettingsPath();
@@ -465,11 +561,15 @@ async function readTextGenerationConfig(scope: TextGenerationScope): Promise<Tex
         ? settings.geminiThinkingLevel
         : getDefaultGeminiThinkingLevel(model)
       : settings.geminiThinkingLevel;
+    // 台本(コメント反映の台本側を含む)は claudeEffort、画像プロンプトの抽出とコメント反映は
+    // claudeImagePromptEffort を使う
+    const scopedClaudeEffort =
+      scope === 'script' ? settings.claudeEffort : settings.claudeImagePromptEffort;
     const claudeEffort = isAnthropicTextCompletionModel(model)
-      ? getSupportedClaudeEfforts(model).includes(settings.claudeEffort as SelectableClaudeEffort)
-        ? settings.claudeEffort
+      ? getSupportedClaudeEfforts(model).includes(scopedClaudeEffort as SelectableClaudeEffort)
+        ? scopedClaudeEffort
         : getDefaultClaudeEffort(model)
-      : settings.claudeEffort;
+      : scopedClaudeEffort;
     return {
       model,
       openaiReasoningEffort,
@@ -513,23 +613,13 @@ function tryParseJsonResponse<T>(text: string): T | null {
   }
 }
 
-function normalizeSlideSpecText(value: unknown): string {
-  if (typeof value !== 'string') return '';
-
-  let text = value.trim();
-  if (!text) return '';
-
-  if (text.startsWith('```')) {
-    text = text.replace(/^```[a-zA-Z0-9_-]*\s*/, '');
-    text = text.replace(/\s*```$/, '');
+// Gemini の構造化出力(JSON テキスト)を、他社と同じ zod スキーマで検証する
+function parseStructuredJson<T>(schema: z.ZodType<T>, text: string): T {
+  const result = schema.safeParse(tryParseJsonResponse<unknown>(text));
+  if (!result.success) {
+    throw new Error('AIから構造化された応答を取得できませんでした', { cause: result.error });
   }
-
-  const anchor = text.indexOf('スライド仕様:');
-  if (anchor >= 0) {
-    text = text.slice(anchor);
-  }
-
-  return text.trim();
+  return result.data;
 }
 
 // 記事データの型
@@ -564,44 +654,39 @@ interface GeneratedPart {
   scriptModifiedByUser: boolean;
 }
 
+// 異常系ガード用の非常上限（通常は切り詰めない想定）
+const MAX_IMAGE_PROMPT_CHARS = 12000;
+
+// 構造化出力のスキーマ。3 社とも同じ zod v4 スキーマから JSON Schema を作る
+// (OpenAI: zodResponseFormat、Claude: zodOutputFormat、Gemini: toGeminiJsonSchema)。
+// 各項目の意味はプロンプトに JSON の例を書かず、スキーマの description で伝える
 const ScriptGenerationPayloadSchema = z.object({
   parts: z
     .array(
       z.object({
-        title: z.string().min(1),
-        summary: z.string(),
-        scriptText: z.string().min(1),
-        durationEstimateSec: z.number().positive(),
+        title: z.string().min(1).describe('パートの見出し'),
+        summary: z.string().describe('このパートの概要。1〜2文'),
+        scriptText: z
+          .string()
+          .min(1)
+          .describe('ナレーション本文。音声合成でそのまま読み上げる文章'),
+        durationEstimateSec: z.number().positive().describe('読み上げにかかる推定秒数'),
       })
     )
-    .min(1),
+    .min(1)
+    .describe('記事を分割したパート。記事の流れの順に並べる'),
 });
 
 type ScriptGenerationPayload = z.infer<typeof ScriptGenerationPayloadSchema>;
 
 const ImagePromptCommentPayloadSchema = z.object({
-  prompt: z.string().min(1),
+  prompt: z
+    .string()
+    .min(1)
+    .describe(`修正後の画像生成プロンプトの全文(${MAX_IMAGE_PROMPT_CHARS}文字以内)`),
 });
 
-// Claude の構造化出力用。SDK の zodOutputFormat は zod v4 のスキーマを受け取る
-const ClaudeScriptGenerationPayloadSchema = zv4.object({
-  parts: zv4
-    .array(
-      zv4.object({
-        title: zv4.string().min(1),
-        summary: zv4.string(),
-        scriptText: zv4.string().min(1),
-        durationEstimateSec: zv4.number().positive(),
-      })
-    )
-    .min(1),
-});
-
-const ClaudeImagePromptCommentPayloadSchema = zv4.object({
-  prompt: zv4.string().min(1),
-});
-
-// スクリプト生成プロンプト
+// スクリプト生成プロンプト(役割の宣言は system 側にだけ書く)
 function createScriptGenerationPrompt(article: Article, options: ScriptOptions): string {
   const toneDescription = {
     formal: '丁寧でフォーマルな',
@@ -610,14 +695,21 @@ function createScriptGenerationPrompt(article: Article, options: ScriptOptions):
   };
 
   const tone = options.tone || 'news';
-  const targetPartCount = options.targetPartCount || 5;
-  const targetDuration = options.targetDurationPerPartSec || 30;
+  const targetPartCount = options.targetPartCount || DEFAULT_SCENE_COUNT;
+  const targetDuration = options.targetDurationPerPartSec || DEFAULT_SECONDS_PER_PART;
   const closingLine = typeof options.closingLine === 'string' ? options.closingLine.trim() : '';
-  const closingInstruction = closingLine
-    ? `5. 最後のパートの末尾に「${closingLine}」を入れてください`
-    : '5. 最後のパートの末尾に定型の締め文を入れないでください';
+  const requirements = [
+    `${toneDescription[tone]}トーンで書いてください`,
+    `各パートは約${targetDuration}秒（日本語で約${narrationCharsFor(targetDuration)}文字）のナレーションになるようにしてください`,
+    '視聴者が理解しやすいよう、論理的な流れで構成してください',
+    '重要な情報を漏らさないようにしてください',
+    'ナレーションは音声合成でそのまま読み上げます。括弧・記号・英字の略語は使わず、耳で聞いて分かる言葉で書いてください',
+    closingLine
+      ? `最後のパートの末尾に「${closingLine}」を入れてください`
+      : '最後のパートの末尾に定型の締め文を入れないでください',
+  ];
 
-  return `あなたは情報動画のスクリプトライターです。以下の記事を、${targetPartCount}個のパートに分割し、各パートのナレーションスクリプトを作成してください。
+  return `以下の記事を、${targetPartCount}個のパートに分割し、各パートのナレーションスクリプトを作成してください。
 
 ## 記事情報
 タイトル: ${article.title}
@@ -627,27 +719,7 @@ ${article.source ? `出典: ${article.source}` : ''}
 ${article.bodyText}
 
 ## 要件
-1. ${toneDescription[tone]}トーンで書いてください
-2. 各パートは約${targetDuration}秒（日本語で約${Math.round(targetDuration * 4)}文字）のナレーションになるようにしてください
-3. 視聴者が理解しやすいよう、論理的な流れで構成してください
-4. 重要な情報を漏らさないようにしてください
-${closingInstruction}
-
-## 出力形式
-以下のJSON形式で出力してください：
-
-{
-  "parts": [
-    {
-      "title": "パートのタイトル",
-      "summary": "このパートの概要（1-2文）",
-      "scriptText": "ナレーションスクリプト本文",
-      "durationEstimateSec": 推定秒数（数値）
-    }
-  ]
-}
-
-JSONのみを出力してください。説明や補足は不要です。`;
+${requirements.map((requirement, index) => `${index + 1}. ${requirement}`).join('\n')}`;
 }
 
 function escapeRegExp(value: string): string {
@@ -741,7 +813,7 @@ registerOperation(
       parsed = choice.message.parsed;
       usage = mapOpenAIUsage(response.usage, response.model);
     } else if (isAnthropicTextCompletionModel(selectedModel)) {
-      const structuredOutput = zodOutputFormat(ClaudeScriptGenerationPayloadSchema);
+      const structuredOutput = zodOutputFormat(ScriptGenerationPayloadSchema);
       const claudeResult = await generateClaudeTextContent({
         model: selectedModel,
         systemPrompt: scriptSystemPrompt,
@@ -758,11 +830,10 @@ registerOperation(
         model: apiModel,
         systemPrompt: scriptSystemPrompt,
         userPrompt: scriptUserPrompt,
-        temperature: 0.7,
-        responseMimeType: 'application/json',
+        responseJsonSchema: toGeminiJsonSchema(ScriptGenerationPayloadSchema),
         thinkingLevel: generationConfig.geminiThinkingLevel,
       });
-      parsed = parseJsonResponse(geminiResult.text);
+      parsed = parseStructuredJson(ScriptGenerationPayloadSchema, geminiResult.text);
       usage = geminiResult.usage;
     }
     const now = new Date().toISOString();
@@ -847,81 +918,57 @@ type LayoutPlan = {
   }>;
 };
 
-const QuantFactSchema = z.object({
-  metric: z.string(),
-  direction: z.enum(['increase', 'decrease', 'stable', 'comparison', 'unknown']),
-  value: z.string(),
-  unit: z.string(),
-  timeframe: z.string(),
-});
-
-const VisualSlotSchema = z.object({
-  slot: z.enum(['left', 'right', 'center', 'top', 'bottom']),
-  elementType: z.enum([
-    'barChart',
-    'lineChart',
-    'areaChart',
-    'pieChart',
-    'map',
-    'diagram',
-    'iconCluster',
-    'abstractPattern',
-    'flowArrows',
-    'timeline',
-  ]),
-  source: z.string(),
-});
-
-const VisualCopySchema = z.object({
-  headline: z.string(),
-  subhead: z.string().optional(),
-  keyNumber: z.string().optional(),
-  bullets: z.array(z.string()),
-});
-
-const LayoutPlanSchema = z.object({
-  intent: z.string(),
-  composition: z.string(),
-  objects: z.array(
-    z.object({
-      type: z.string(),
-      role: z.string(),
-      position: z.string(),
-      content: z.string(),
-      emphasis: z.string(),
+// 画像プロンプトの抽出結果(1 パート分のスライド設計)。画像プロンプトの組み立てで使う項目だけを出力させる
+const SlideDesignSchema = z.object({
+  visualCopy: z
+    .object({
+      // 文字数の上限は normalizeVisualCopy の切り詰めと揃える(超えると途中で切れた文字が描かれる)
+      headline: z.string().describe('大見出し。短く強い一文。36文字以内'),
+      subhead: z.string().describe('見出しを補う一文。80文字以内。不要なら空文字'),
+      keyNumber: z
+        .string()
+        .describe('最も伝えたい数値と単位。28文字以内。記事に数値がなければ空文字'),
+      bullets: z.array(z.string()).describe('要点。0〜4件、各項目は44文字以内'),
     })
-  ),
-});
-
-const ImagePromptExtractionSchema = z.object({
-  prompts: z.array(
-    z.object({
-      topic: z.string(),
-      entities: z.array(z.string()),
-      locations: z.array(z.string()),
-      quantFacts: z.array(QuantFactSchema),
-      visualSlots: z.array(VisualSlotSchema),
-      heroSubject: z.string(),
-      heroSetting: z.string(),
-      compositionNote: z.string(),
-      visualCopy: VisualCopySchema.optional(),
-      layoutPlan: LayoutPlanSchema.optional(),
-      styleNotes: z.string().optional(),
+    .describe('画面に文字として描く文言。画面に出る文字はここに書いたものだけになる'),
+  layoutPlan: z
+    .object({
+      intent: z.string().describe('このスライドで伝える狙い'),
+      composition: z.string().describe('全体の構図と読み順'),
+      objects: z
+        .array(
+          z.object({
+            type: z
+              .string()
+              .describe(
+                '要素の種類。headline, subhead, keyNumber, bullet, chart, map, icon, diagram, callout など'
+              ),
+            role: z.string().describe('要素の役割。主情報、補助情報、根拠、導線など'),
+            position: z
+              .string()
+              .describe(
+                '配置エリア。upper-left, top-center, center-right, bottom-band, left-column, right-panel などの言葉で示し、割合や座標は使わない'
+              ),
+            content: z.string().describe('描き方の説明。新しい文字列は入れない'),
+            emphasis: z
+              .string()
+              .describe('強さ。large, medium, small, primary, secondary のいずれか'),
+          })
+        )
+        .describe('画面に置く要素。多くても8件'),
     })
-  ),
+    .describe(
+      '画面の設計。画面に出す文字は visualCopy のみ。objects.content は描き方の説明で、新しい文字列は入れない'
+    ),
 });
 
-type ImagePromptExtraction = z.infer<typeof ImagePromptExtractionSchema>;
+type SlideDesign = z.infer<typeof SlideDesignSchema>;
 
 function normalizeString(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
 }
 
 const MAX_EXTRACTED_TEXT_CHARS = 60;
-const MAX_VISUAL_SLOT_SOURCE_CHARS = 40;
-const MAX_COMPOSITION_NOTE_CHARS = 120;
-// 異常系ガード用の非常上限（通常は切り詰めない想定）
-const MAX_IMAGE_PROMPT_CHARS = 12000;
 
 function truncateTextByChars(value: string, maxChars: number): string {
   const trimmed = value.trim();
@@ -983,232 +1030,6 @@ function normalizeStringArray(value: unknown, limit: number): string[] {
   return items.slice(0, limit);
 }
 
-type QuantFact = {
-  metric: string;
-  direction?: 'increase' | 'decrease' | 'stable' | 'comparison' | 'unknown';
-  value?: string;
-  unit?: string;
-  timeframe?: string;
-};
-
-function normalizeQuantFacts(value: unknown, limit: number): QuantFact[] {
-  if (!Array.isArray(value)) return [];
-  const items = value
-    .map((fact) => {
-      if (!fact || typeof fact !== 'object') return null;
-      const metric = truncateTextByChars(
-        normalizeString((fact as { metric?: unknown }).metric),
-        MAX_EXTRACTED_TEXT_CHARS
-      );
-      if (!metric) return null;
-      const directionRaw = normalizeString((fact as { direction?: unknown }).direction);
-      const direction =
-        directionRaw === 'increase' ||
-        directionRaw === 'decrease' ||
-        directionRaw === 'stable' ||
-        directionRaw === 'comparison'
-          ? directionRaw
-          : 'unknown';
-      const valueStr = truncateTextByChars(
-        normalizeString((fact as { value?: unknown }).value),
-        MAX_EXTRACTED_TEXT_CHARS
-      );
-      const unit = truncateTextByChars(
-        normalizeString((fact as { unit?: unknown }).unit),
-        MAX_EXTRACTED_TEXT_CHARS
-      );
-      const timeframe = truncateTextByChars(
-        normalizeString((fact as { timeframe?: unknown }).timeframe),
-        MAX_EXTRACTED_TEXT_CHARS
-      );
-      return {
-        metric,
-        direction,
-        value: valueStr,
-        unit,
-        timeframe,
-      } as QuantFact;
-    })
-    .filter((item): item is QuantFact => item !== null);
-  return items.slice(0, limit);
-}
-
-function describeQuantFactsJa(facts: QuantFact[]): string {
-  return facts
-    .map((fact) => {
-      const parts: string[] = [];
-      parts.push(fact.metric);
-      if (fact.direction && fact.direction !== 'unknown') {
-        const directionWord =
-          fact.direction === 'increase'
-            ? '増加'
-            : fact.direction === 'decrease'
-              ? '減少'
-              : fact.direction === 'stable'
-                ? '横ばい'
-                : '比較';
-        parts.push(`（${directionWord}）`);
-      }
-      if (fact.value) {
-        parts.push(`数値 ${fact.value}${fact.unit || ''}`);
-      }
-      if (fact.timeframe) {
-        parts.push(`期間 ${fact.timeframe}`);
-      }
-      return parts.join(' ');
-    })
-    .join(' / ');
-}
-
-const ALLOWED_ELEMENT_TYPES = [
-  'barChart',
-  'lineChart',
-  'areaChart',
-  'pieChart',
-  'map',
-  'diagram',
-  'iconCluster',
-  'abstractPattern',
-  'flowArrows',
-  'timeline',
-] as const;
-
-type AllowedElementType = (typeof ALLOWED_ELEMENT_TYPES)[number];
-
-const ELEMENT_TYPE_LABELS_JA: Record<AllowedElementType, string> = {
-  barChart: '棒グラフ風',
-  lineChart: '折れ線グラフ風',
-  areaChart: '面グラフ風',
-  pieChart: '円グラフ風',
-  map: '地図',
-  diagram: '図解',
-  iconCluster: 'アイコン群',
-  abstractPattern: '抽象パターン',
-  flowArrows: 'フロー矢印',
-  timeline: 'タイムライン',
-};
-
-const SLOT_LABELS_JA: Record<VisualSlot['slot'], string> = {
-  left: '左',
-  right: '右',
-  center: '中央',
-  top: '上',
-  bottom: '下',
-};
-
-const DATA_ELEMENT_TYPES = new Set<AllowedElementType>([
-  'barChart',
-  'lineChart',
-  'areaChart',
-  'pieChart',
-  'timeline',
-]);
-
-const LOCATION_ELEMENT_TYPES = new Set<AllowedElementType>(['map']);
-
-const CHART_LIKE_TYPES = new Set<AllowedElementType>([
-  'barChart',
-  'lineChart',
-  'areaChart',
-  'pieChart',
-  'timeline',
-  'map',
-]);
-
-const FORBIDDEN_TERMS = [
-  '番組',
-  '放送局',
-  '局名',
-  '番組名',
-  '番組タイトル',
-  'キャスター',
-  '記者',
-  'アナウンサー',
-  'インタビュー',
-  '人物',
-  '顔',
-];
-
-function containsForbiddenTerm(value: string): boolean {
-  return FORBIDDEN_TERMS.some((term) => value.includes(term));
-}
-
-function normalizeExtractedText(value: unknown, sourceText: string): string {
-  const raw = normalizeString(value);
-  if (!raw) return '';
-  if (!sourceText.includes(raw)) return '';
-  if (containsForbiddenTerm(raw)) return '';
-  return truncateTextByChars(raw, MAX_EXTRACTED_TEXT_CHARS);
-}
-
-function normalizeCompositionNote(value: unknown): string {
-  const raw = normalizeString(value);
-  if (!raw) return '';
-  const trimmed = truncateTextByChars(raw, MAX_COMPOSITION_NOTE_CHARS);
-  if (containsForbiddenTerm(trimmed)) return '';
-  if (isNoiseLine(trimmed)) return '';
-  return trimmed;
-}
-
-const ALLOWED_SLOT_NAMES = new Set(['left', 'right', 'center', 'top', 'bottom']);
-
-type VisualSlot = {
-  slot: 'left' | 'right' | 'center' | 'top' | 'bottom';
-  elementType: AllowedElementType;
-  source?: string;
-};
-
-function normalizeElementType(value: unknown): AllowedElementType | null {
-  const raw = normalizeString(value).toLowerCase();
-  if (!raw) return null;
-  const normalized = raw.replace(/[_\s-]/g, '');
-  const map: Record<string, AllowedElementType> = {
-    barchart: 'barChart',
-    linechart: 'lineChart',
-    areachart: 'areaChart',
-    piechart: 'pieChart',
-    map: 'map',
-    geomap: 'map',
-    regionmap: 'map',
-    diagram: 'diagram',
-    iconcluster: 'iconCluster',
-    abstractpattern: 'abstractPattern',
-    flowarrows: 'flowArrows',
-    timeline: 'timeline',
-  };
-  const mapped = map[normalized];
-  if (!mapped) return null;
-  return ALLOWED_ELEMENT_TYPES.includes(mapped) ? mapped : null;
-}
-
-function normalizeSlotName(value: unknown): VisualSlot['slot'] | null {
-  const name = normalizeString(value).toLowerCase();
-  if (!name || !ALLOWED_SLOT_NAMES.has(name)) return null;
-  return name as VisualSlot['slot'];
-}
-
-function normalizeVisualSlots(value: unknown, limit: number): VisualSlot[] {
-  if (!Array.isArray(value)) return [];
-  const items = value
-    .map((slot) => {
-      if (!slot || typeof slot !== 'object') return null;
-      const slotName = normalizeSlotName((slot as { slot?: unknown }).slot);
-      const elementType = normalizeElementType((slot as { elementType?: unknown }).elementType);
-      if (!slotName || !elementType) return null;
-      const source = truncateTextByChars(
-        normalizeString((slot as { source?: unknown }).source),
-        MAX_VISUAL_SLOT_SOURCE_CHARS
-      );
-      return {
-        slot: slotName,
-        elementType,
-        source: source || undefined,
-      } as VisualSlot;
-    })
-    .filter((item): item is VisualSlot => item !== null);
-  return items.slice(0, limit);
-}
-
 function toObjectRecord(value: unknown): Record<string, unknown> | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
   return value as Record<string, unknown>;
@@ -1235,75 +1056,6 @@ function normalizeLooseStringArray(value: unknown, limit: number): string[] {
     .map((item) => truncateTextByChars(item, MAX_EXTRACTED_TEXT_CHARS))
     .filter((item) => item.length > 0);
   return split.slice(0, limit);
-}
-
-function normalizeLooseQuantFacts(value: unknown, limit: number): QuantFact[] {
-  if (!Array.isArray(value)) return [];
-  const normalized = value
-    .map((item) => {
-      const record = toObjectRecord(item);
-      if (!record) return null;
-      const metric = truncateTextByChars(
-        normalizeString(getFirstDefined(record, ['metric', 'name', 'title', 'item', 'label'])),
-        MAX_EXTRACTED_TEXT_CHARS
-      );
-      if (!metric) return null;
-      const directionRaw = normalizeString(getFirstDefined(record, ['direction', 'trend']));
-      const direction = (
-        directionRaw === 'increase' ||
-        directionRaw === 'decrease' ||
-        directionRaw === 'stable' ||
-        directionRaw === 'comparison'
-          ? directionRaw
-          : 'unknown'
-      ) as QuantFact['direction'];
-      const valueStr = truncateTextByChars(
-        normalizeString(getFirstDefined(record, ['value', 'number', 'amount'])),
-        MAX_EXTRACTED_TEXT_CHARS
-      );
-      const unit = truncateTextByChars(
-        normalizeString(getFirstDefined(record, ['unit'])),
-        MAX_EXTRACTED_TEXT_CHARS
-      );
-      const timeframe = truncateTextByChars(
-        normalizeString(getFirstDefined(record, ['timeframe', 'period', 'date'])),
-        MAX_EXTRACTED_TEXT_CHARS
-      );
-      return {
-        metric,
-        direction,
-        value: valueStr,
-        unit,
-        timeframe,
-      } as QuantFact;
-    })
-    .filter((item): item is QuantFact => item !== null);
-  return normalized.slice(0, limit);
-}
-
-function normalizeLooseVisualSlots(value: unknown, limit: number): VisualSlot[] {
-  if (!Array.isArray(value)) return [];
-  const normalized = value
-    .map((item) => {
-      const record = toObjectRecord(item);
-      if (!record) return null;
-      const slotName = normalizeSlotName(getFirstDefined(record, ['slot', 'position', 'area']));
-      const elementType = normalizeElementType(
-        getFirstDefined(record, ['elementType', 'element_type', 'element', 'type'])
-      );
-      if (!slotName || !elementType) return null;
-      const source = truncateTextByChars(
-        normalizeString(getFirstDefined(record, ['source', 'reference', 'basis'])),
-        MAX_VISUAL_SLOT_SOURCE_CHARS
-      );
-      return {
-        slot: slotName,
-        elementType,
-        source: source || undefined,
-      } as VisualSlot;
-    })
-    .filter((item): item is VisualSlot => item !== null);
-  return normalized.slice(0, limit);
 }
 
 function normalizeVisualCopy(value: unknown): VisualCopy | undefined {
@@ -1397,126 +1149,28 @@ function normalizeLayoutPlan(value: unknown): LayoutPlan | undefined {
   };
 }
 
-function coerceImagePromptExtraction(raw: unknown): ImagePromptExtraction {
-  const direct = ImagePromptExtractionSchema.safeParse(raw);
-  if (direct.success) return direct.data;
-
-  const root = toObjectRecord(raw);
-  const rawPrompts =
-    (root ? getFirstDefined(root, ['prompts', 'items', 'data']) : undefined) ?? raw;
-
-  const promptItems = Array.isArray(rawPrompts)
-    ? rawPrompts
-    : toObjectRecord(rawPrompts)
-      ? [rawPrompts]
-      : root && getFirstDefined(root, ['topic', 'subject'])
-        ? [root]
-        : [];
-
-  const prompts = promptItems.map((item) => {
-    const record = toObjectRecord(item) || {};
-    const topic = truncateTextByChars(
-      normalizeString(getFirstDefined(record, ['topic', 'subject', 'theme'])),
-      MAX_EXTRACTED_TEXT_CHARS
-    );
-    const entities = normalizeLooseStringArray(
-      getFirstDefined(record, ['entities', 'entityList', 'entity_list', 'entity', 'keywords']),
-      5
-    );
-    const locations = normalizeLooseStringArray(
-      getFirstDefined(record, ['locations', 'locationList', 'location_list', 'location']),
-      3
-    );
-
-    const quantFactsSource = getFirstDefined(record, ['quantFacts', 'quant_facts', 'facts']);
-    const quantFacts = normalizeLooseQuantFacts(quantFactsSource, 3).map((fact) => ({
-      metric: fact.metric,
-      direction: fact.direction ?? 'unknown',
-      value: fact.value || '',
-      unit: fact.unit || '',
-      timeframe: fact.timeframe || '',
-    }));
-
-    const visualSlotsSource = getFirstDefined(record, ['visualSlots', 'visual_slots', 'slots']);
-    const visualSlots = normalizeLooseVisualSlots(visualSlotsSource, 3).map((slot) => ({
-      slot: slot.slot,
-      elementType: slot.elementType,
-      source: slot.source || '',
-    }));
-
-    const heroSubject = truncateTextByChars(
-      normalizeString(getFirstDefined(record, ['heroSubject', 'hero_subject', 'mainSubject'])),
-      MAX_EXTRACTED_TEXT_CHARS
-    );
-    const heroSetting = truncateTextByChars(
-      normalizeString(getFirstDefined(record, ['heroSetting', 'hero_setting', 'mainSetting'])),
-      MAX_EXTRACTED_TEXT_CHARS
-    );
-    const compositionNote = truncateTextByChars(
-      normalizeString(
-        getFirstDefined(record, [
-          'compositionNote',
-          'composition_note',
-          'layoutNote',
-          'layout_note',
-        ])
-      ),
-      MAX_COMPOSITION_NOTE_CHARS
-    );
-    const visualCopy = normalizeVisualCopy(
-      getFirstDefined(record, ['visualCopy', 'visual_copy', 'copy'])
-    );
-    const layoutPlan = normalizeLayoutPlan(
-      getFirstDefined(record, ['layoutPlan', 'layout_plan', 'objectLayout', 'object_layout'])
-    );
-    const styleNotes = truncateTextByChars(
-      normalizeString(getFirstDefined(record, ['styleNotes', 'style_notes'])),
-      160
-    );
-
-    return {
-      topic,
-      entities,
-      locations,
-      quantFacts,
-      visualSlots,
-      heroSubject,
-      heroSetting,
-      compositionNote,
-      visualCopy,
-      layoutPlan,
-      styleNotes,
-    };
-  });
-
-  const fallback = ImagePromptExtractionSchema.safeParse({ prompts });
-  if (fallback.success) return fallback.data;
-  return { prompts: [] };
-}
-
 type PromptBuildContext = {
-  articleText: string;
   styleConfig: ImageStylePresetConfig;
   aspectRatio: ImageAspectRatio;
   styleReferenceImageIds: string[];
   styleReferenceNote: string;
 };
 
+// 画面に描く文字は「画面に描く文字」欄に「」で囲んで並べるだけにし、
+// 「この文字列以外は描かない」は画像生成時のシステム指示(IMAGE_TEXT_RULE)で 1 回だけ伝える
 function buildRichSlidePrompt(params: {
   visualCopy?: VisualCopy;
   layoutPlan?: LayoutPlan;
   context: PromptBuildContext;
-  styleNotes?: string;
 }): string {
-  const { visualCopy, layoutPlan, context, styleNotes } = params;
-  const copyLines = visualCopy
-    ? [
-        '画面コピー:',
-        `- 見出し: ${visualCopy.headline}`,
-        visualCopy.subhead ? `- サブ見出し: ${visualCopy.subhead}` : '',
-        visualCopy.keyNumber ? `- キー数値: ${visualCopy.keyNumber}` : '',
-        ...visualCopy.bullets.map((bullet, index) => `- 要点${index + 1}: ${bullet}`),
-      ].filter((line) => line.length > 0)
+  const { visualCopy, layoutPlan, context } = params;
+  const textLines = visualCopy
+    ? formatImageTextSection([
+        { label: '見出し', text: visualCopy.headline },
+        { label: 'サブ見出し', text: visualCopy.subhead },
+        { label: 'キー数値', text: visualCopy.keyNumber },
+        ...visualCopy.bullets.map((bullet, index) => ({ label: `要点${index + 1}`, text: bullet })),
+      ])
     : [];
 
   const drawableObjects =
@@ -1530,7 +1184,7 @@ function buildRichSlidePrompt(params: {
       ? [
           'スタイル参照:',
           `- 添付されたスライドサンプル ${context.styleReferenceImageIds.length} 枚から、色、余白、文字階層、図形処理、カード/罫線の使い方を読み取って統一する。`,
-          '- サンプル内の古い文字、数値、固有名詞、画像内容はコピーしない。今回の「画面コピー」と「オブジェクト配置」だけを描画する。',
+          '- サンプル内の文字、数値、固有名詞、画像の内容は使わない。',
           context.styleReferenceNote ? `- 補足: ${context.styleReferenceNote}` : '',
         ].filter((line) => line.length > 0)
       : [];
@@ -1541,17 +1195,13 @@ function buildRichSlidePrompt(params: {
     `表現スタイル: ${context.styleConfig.id}`,
     `目的: ${layoutPlan?.intent || 'ニュース内容を1枚の完成スライドとして伝える'}`,
     `構図: ${layoutPlan?.composition || getImageLayoutVariant(context.aspectRatio, true, false)}`,
-    ...copyLines,
+    ...textLines,
     'オブジェクト配置:',
     ...(objectLines.length > 0
       ? objectLines
       : ['- 1: headline / upper-left / large / 主情報 / 見出しを大きく配置']),
-    styleNotes ? `スタイル補足: ${styleNotes}` : '',
     ...referenceLines,
     '描画要件:',
-    '- 画面コピーは指定どおり正確に描画する。意味の近い別表現へ言い換えない。',
-    '- 画像内に出典表示や「出典: 記事本文」を描画しない。出典は動画の締めカード側で扱う。',
-    '- 指定のない文字、数値、ロゴ、番組名、QRコード、透かしを追加しない。',
     '- テキストと図形が重ならないよう、十分な余白と読み順を確保する。',
   ].filter((line) => line.length > 0);
 
@@ -1559,270 +1209,81 @@ function buildRichSlidePrompt(params: {
   return truncateTextByChars(promptText, MAX_IMAGE_PROMPT_CHARS);
 }
 
-function buildImagePromptText(
-  candidate: Record<string, unknown> | null | undefined,
+// 抽出したスライド設計から、保存する画像プロンプトと、画面の文言・設計を作る
+function buildImagePromptFromDesign(
+  design: SlideDesign | undefined,
   context: PromptBuildContext
-): string {
-  const p = candidate ?? {};
-  const sourceText = context.articleText;
-
-  const directSlideSpec = normalizeSlideSpecText(
-    (p as { slideSpec?: unknown; compositionNote?: unknown }).slideSpec ??
-      (p as { compositionNote?: unknown }).compositionNote
-  );
-  if (directSlideSpec) {
-    const normalizedSlideSpec = sanitizeImagePromptForRendering(directSlideSpec);
-    if (normalizedSlideSpec) {
-      return truncateTextByChars(normalizedSlideSpec, MAX_IMAGE_PROMPT_CHARS);
-    }
-  }
-
-  const visualCopy = normalizeVisualCopy((p as { visualCopy?: unknown }).visualCopy);
-  const layoutPlan = normalizeLayoutPlan((p as { layoutPlan?: unknown }).layoutPlan);
-  if (visualCopy || layoutPlan) {
-    const styleNotes = truncateTextByChars(
-      normalizeString((p as { styleNotes?: unknown }).styleNotes),
-      160
-    );
-    return buildRichSlidePrompt({ visualCopy, layoutPlan, context, styleNotes });
-  }
-
-  const rawTopic = normalizeString(
-    (p as { topic?: unknown; subject?: unknown }).topic ?? (p as { subject?: unknown }).subject
-  );
-  const topic =
-    rawTopic && sourceText.includes(rawTopic) && !containsForbiddenTerm(rawTopic)
-      ? truncateTextByChars(rawTopic, MAX_EXTRACTED_TEXT_CHARS)
-      : '';
-
-  const entities = normalizeStringArray((p as { entities?: unknown }).entities, 5).filter(
-    (item) => sourceText.includes(item) && !containsForbiddenTerm(item)
-  );
-  const locations = normalizeStringArray((p as { locations?: unknown }).locations, 3).filter(
-    (item) => sourceText.includes(item)
-  );
-
-  const quantFactsRaw = normalizeQuantFacts((p as { quantFacts?: unknown }).quantFacts, 3);
-  const quantFacts = quantFactsRaw.filter((fact) => {
-    return (
-      (fact.metric && sourceText.includes(fact.metric)) ||
-      (fact.value && sourceText.includes(fact.value)) ||
-      (fact.timeframe && sourceText.includes(fact.timeframe))
-    );
-  });
-
-  const visualSlotsRaw = normalizeVisualSlots((p as { visualSlots?: unknown }).visualSlots, 3);
-  const visualSlots = visualSlotsRaw
-    .map((slot) => {
-      const nextSource =
-        slot.source && sourceText.includes(slot.source)
-          ? truncateTextByChars(slot.source, MAX_VISUAL_SLOT_SOURCE_CHARS)
-          : undefined;
-      return { ...slot, source: nextSource };
-    })
-    .filter((slot) => {
-      if (DATA_ELEMENT_TYPES.has(slot.elementType)) {
-        return quantFacts.length > 0;
-      }
-      if (LOCATION_ELEMENT_TYPES.has(slot.elementType)) {
-        return locations.length > 0;
-      }
-      return true;
-    });
-
-  const hasData =
-    quantFacts.length > 0 || visualSlots.some((slot) => DATA_ELEMENT_TYPES.has(slot.elementType));
-  const hasLocation =
-    locations.length > 0 ||
-    visualSlots.some((slot) => LOCATION_ELEMENT_TYPES.has(slot.elementType));
-
-  const resolvedSlots: VisualSlot[] = visualSlots;
-
-  const layout = getImageLayoutVariant(context.aspectRatio, hasData, hasLocation);
-  const heroSubject = normalizeExtractedText(
-    (p as { heroSubject?: unknown }).heroSubject,
-    sourceText
-  );
-  const heroSetting = normalizeExtractedText(
-    (p as { heroSetting?: unknown }).heroSetting,
-    sourceText
-  );
-  const compositionNote = normalizeCompositionNote(
-    (p as { compositionNote?: unknown }).compositionNote
-  );
-  const layoutInstruction = compositionNote || layout;
-
-  const mainVisualParts: string[] = [];
-  if (heroSubject) mainVisualParts.push(heroSubject);
-  if (heroSetting) mainVisualParts.push(heroSetting);
-  const mainVisual =
-    mainVisualParts.length > 0 ? mainVisualParts.join(' / ') : topic || '抽象化した主題';
-
-  const slotInstructions = resolvedSlots.map((slot) => {
-    const label = ELEMENT_TYPE_LABELS_JA[slot.elementType];
-    const slotLabel = SLOT_LABELS_JA[slot.slot];
-    const sourceLabel = slot.source ? `（根拠:「${slot.source}」）` : '';
-    const qualifier = CHART_LIKE_TYPES.has(slot.elementType) ? '（簡略図）' : '';
-    return `${slotLabel}: ${label}${sourceLabel}${qualifier}`;
-  });
-
-  const detailLines: string[] = [];
-  if (quantFacts.length > 0) {
-    detailLines.push(`- 数値情報: ${describeQuantFactsJa(quantFacts)}`);
-  }
-  if (locations.length > 0) {
-    detailLines.push(`- 地理情報: ${locations.join('、')}`);
-  }
-  if (entities.length > 0) {
-    detailLines.push(`- 補助要素: ${entities.join('、')}`);
-  }
-
-  const backgroundFragments: string[] = [];
-  if (topic) backgroundFragments.push(topic);
-  if (quantFacts.length > 0) backgroundFragments.push(`数値 ${describeQuantFactsJa(quantFacts)}`);
-  if (locations.length > 0) backgroundFragments.push(`地理 ${locations.join('、')}`);
-  const backgroundSummary = backgroundFragments.join(' / ') || '対象パートの背景情報';
-  const intentSummary =
-    hasData || hasLocation
-      ? '主題と根拠情報を一目で理解できるように整理する'
-      : '主題の要点を一目で理解できるように整理する';
-
-  const promptLines = [
-    'スライド仕様',
-    `画面比率: ${getImageAspectRatioLabel(context.aspectRatio)}`,
-    `表現スタイル: ${context.styleConfig.id}`,
-    `背景: ${backgroundSummary}`,
-    `意図: ${intentSummary}`,
-    `主題: ${topic || 'このパートの要点を1枚で説明'}`,
-    `主ビジュアル: ${mainVisual}（人物なし）`,
-    `レイアウト: ${layoutInstruction}`,
-    slotInstructions.length > 0 ? '配置:' : '配置: 右側パネルに補助情報を配置',
-    ...slotInstructions.map((line) => `- ${line}`),
-    detailLines.length > 0 ? '要素:' : '',
-    ...detailLines,
-    context.styleReferenceImageIds.length > 0
-      ? `スタイル参照: 添付スライドサンプル${context.styleReferenceImageIds.length}枚の色、余白、文字階層、図形処理に合わせる。サンプル内の古い文字や内容はコピーしない`
-      : '',
-    context.styleReferenceNote ? `スタイル補足: ${context.styleReferenceNote}` : '',
-    context.styleConfig.id === 'textRich' || context.styleConfig.id === 'dataCard'
-      ? 'テキスト: 見出し、サブ見出し、短い要点、数値を読みやすく配置。出典表示は描画しない。指定外の文字は追加しない'
-      : 'テキスト: 見出し・ラベル・数値のみ。長文禁止',
-  ].filter((line) => line.length > 0);
-
-  const promptText = sanitizeImagePromptForRendering(promptLines.join('\n'));
-  return truncateTextByChars(promptText, MAX_IMAGE_PROMPT_CHARS);
-}
-
-function createSinglePartExtractionPrompts(
-  articleContext: string,
-  partContext: string
-): {
-  systemPrompt: string;
-  userPrompt: string;
-} {
-  const systemPrompt = `タスク:
-入力の記事情報と対象パート情報から、1枚分の文字入りニューススライド設計をJSONで作成してください。
-出力は日本語のみ。前置き・説明文・Markdownは禁止。JSONのみを出力してください。
-
-制約:
-- 目的は「このパートを1枚の完成スライドとして正確に伝える」こと。
-- 画面内テキストを積極的に設計する。見出し、サブ見出し、キー数値、要点を必要に応じて入れる。
-- 見出しは短く強く、サブ見出しと要点は読みやすい長さにする。
-- 画像内に出典表示は作らない。「出典: 記事本文」のような汎用出典も禁止。出典は動画の締めカード側で扱う。
-- オブジェクト配置は自由に設計してよい。何を/どこに/どの強さで/どの順に見るかを具体化する。
-- 配置の position は upper-left, top-center, center-right, bottom-band, left-column, right-panel などの自然言語で示す。割合座標は使わない。
-- 人物・顔・手・ロゴ・透かし・番組名・QRコードは禁止。
-- 推測で新事実を追加しない。入力にない事実は書かない。
-- 画面コピーに記事外の固有名詞や数値を混ぜない。
-
-出力形式:
-{
-  "prompts": [
-    {
-      "topic": "対象パートの主題",
-      "entities": ["記事内の重要語"],
-      "locations": ["地名がある場合"],
-      "quantFacts": [
-        {
-          "metric": "指標名",
-          "direction": "increase|decrease|stable|comparison|unknown",
-          "value": "数値",
-          "unit": "単位",
-          "timeframe": "期間"
-        }
-      ],
-      "visualCopy": {
-        "headline": "画像内の大見出し",
-        "subhead": "補足説明",
-        "keyNumber": "最重要数値",
-        "bullets": ["要点1", "要点2", "要点3"]
-      },
-      "layoutPlan": {
-        "intent": "このスライドで伝える狙い",
-        "composition": "全体構図と読み順",
-        "objects": [
-          {
-            "type": "headline|subhead|keyNumber|bullet|chart|map|icon|diagram|callout",
-            "role": "主情報/補助情報/根拠/導線",
-            "position": "配置エリア",
-            "content": "描画内容",
-            "emphasis": "large|medium|small|primary|secondary"
-          }
-        ]
-      },
-      "styleNotes": "必要な質感や余白の補足"
-    }
-  ]
-}
-`;
-
-  const userPrompt = `記事情報:
-${articleContext}
-
-対象パート:
-${partContext}
-
-この対象パートを伝えるための「スライド仕様」を作成してください。`;
-
-  return { systemPrompt, userPrompt };
-}
-
-function parseImagePromptExtractionText(textContent: string): ImagePromptExtraction {
-  const parsed = textContent ? tryParseJsonResponse<unknown>(textContent) : null;
-  if (parsed) {
-    return coerceImagePromptExtraction(parsed);
-  }
-  const slideSpec = normalizeSlideSpecText(textContent);
+): { prompt: string; visualCopy?: VisualCopy; layoutPlan?: LayoutPlan } {
+  const visualCopy = normalizeVisualCopy(design?.visualCopy);
+  const layoutPlan = normalizeLayoutPlan(design?.layoutPlan);
   return {
-    prompts: [
-      {
-        topic: '',
-        entities: [],
-        locations: [],
-        quantFacts: [],
-        visualSlots: [],
-        heroSubject: '',
-        heroSetting: '',
-        compositionNote: slideSpec,
-      },
-    ],
+    prompt: buildRichSlidePrompt({ visualCopy, layoutPlan, context }),
+    visualCopy,
+    layoutPlan,
   };
 }
 
-async function extractSinglePartPromptCandidate(params: {
-  articleContext: string;
-  partContext: string;
-  generationConfig: TextGenerationConfig;
-  cacheSystemPrompt?: boolean;
-}): Promise<{ candidate: Record<string, unknown> | undefined; usage: OpenAIUsageSummary | null }> {
-  const { systemPrompt, userPrompt } = createSinglePartExtractionPrompts(
-    params.articleContext,
-    params.partContext
-  );
-  const selectedModel = params.generationConfig.model;
+// 出力の形式と各項目の意味は構造化出力のスキーマで伝えるため、ここには JSON の例を書かない
+const SLIDE_DESIGN_SYSTEM_PROMPT = `記事と対象パートから、そのパートを伝える文字入りニューススライド1枚を設計してください。
 
-  let resolvedParsed: ImagePromptExtraction | null = null;
-  let usage: OpenAIUsageSummary | null = null;
+方針:
+- このパートの内容を、1枚の完成したスライドとして正確に伝える。
+- 画面に出す文字(見出し、サブ見出し、キー数値、要点)を積極的に設計する。見出しは短く強く、サブ見出しと要点は読みやすい長さにする。
+- 何を、どこに、どの強さで、どの順に見せるかを具体的に決める。配置は自由に設計してよい。
+- 出典は動画の締めカードで示すため、画面には出典を入れない。
+- 人物・顔・手・ロゴ・透かし・番組名・QRコードは使わない。
+- 記事にない事実、固有名詞、数値を加えない。
+- 日本語で書く。`;
+
+type ArticlePromptBlock = {
+  articleId: string;
+  text: string;
+};
+
+/**
+ * 記事本文を ID 付きのタグで囲んだブロック。画像プロンプトの抽出ではパートごとに同じ記事を送るため、
+ * このブロックを user の先頭に置いてキャッシュする。ID は記事の内容から決めるので、同じプロジェクト
+ * (同じ記事)ではリクエストをまたいで変わらない(リクエストごとに変えるとキャッシュが壊れる)。
+ */
+function buildArticlePromptBlock(article: Article): ArticlePromptBlock {
+  const cleanedBodyText = sanitizeArticleText(article.bodyText ?? '');
+  const bodyText = cleanedBodyText || article.bodyText || '';
+  const source = article.source ?? '';
+  const articleId = `article-${createHash('sha256')
+    .update(JSON.stringify([article.title, source, bodyText]))
+    .digest('hex')
+    .slice(0, 12)}`;
+  const text = [
+    `<article id="${articleId}">`,
+    `タイトル: ${article.title}`,
+    ...(source ? [`出典: ${source}`] : []),
+    '本文:',
+    bodyText,
+    '</article>',
+  ].join('\n');
+  return { articleId, text };
+}
+
+// パートごとに変わる部分。記事ブロックの後ろ(キャッシュの対象外)に置く
+function buildPartPrompt(part: GeneratedPart, partNumber: number, articleId: string): string {
+  return [
+    '対象パート:',
+    `パート番号: ${partNumber}`,
+    `タイトル: ${part.title || ''}`,
+    `要約: ${part.summary || ''}`,
+    `ナレーション: ${part.scriptText || ''}`,
+    '',
+    `記事 ${articleId} のうち、この対象パートを伝えるスライドを設計してください。`,
+  ].join('\n');
+}
+
+async function extractSlideDesign(params: {
+  article: ArticlePromptBlock;
+  partPrompt: string;
+  generationConfig: TextGenerationConfig;
+}): Promise<{ design: SlideDesign; usage: OpenAIUsageSummary | null }> {
+  const { article, partPrompt, generationConfig } = params;
+  const selectedModel = generationConfig.model;
 
   if (isOpenAITextCompletionModel(selectedModel)) {
     const apiKey = await readApiKey('openai');
@@ -1833,70 +1294,112 @@ async function extractSinglePartPromptCandidate(params: {
     }
 
     const openai = new OpenAI({ apiKey, fetch: limitedOpenAIFetch });
-    const reasoningEffort = resolveOpenAIReasoningEffort(
-      params.generationConfig.openaiReasoningEffort
+    const reasoningEffort = resolveOpenAIReasoningEffort(generationConfig.openaiReasoningEffort);
+    // 記事を別の content part にし、対応モデル(gpt-5.6 以降)では記事の末尾にキャッシュの
+    // ブレークポイントを置く。prompt_cache_key はキャッシュの振り分けに使われるため記事ごとに固定する
+    const articlePart: ChatCompletionContentPartText = {
+      type: 'text',
+      text: article.text,
+      ...(supportsOpenAIPromptCacheBreakpoint(selectedModel)
+        ? { prompt_cache_breakpoint: { mode: 'explicit' } }
+        : {}),
+    };
+    const response = await withLocalizedStructuredOutputErrors(() =>
+      openai.chat.completions.parse({
+        model: selectedModel,
+        messages: [
+          { role: 'system', content: SLIDE_DESIGN_SYSTEM_PROMPT },
+          { role: 'user', content: [articlePart, { type: 'text', text: partPrompt }] },
+        ],
+        prompt_cache_key: article.articleId,
+        response_format: zodResponseFormat(SlideDesignSchema, 'slide_design'),
+        ...buildOpenAITextGenerationOptions(selectedModel, reasoningEffort, 0.3),
+      })
     );
-    const response = await openai.chat.completions.create({
-      model: selectedModel,
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: userPrompt },
-      ],
-      ...buildOpenAITextGenerationOptions(selectedModel, reasoningEffort, 0.3),
-    });
 
     const choice = response.choices[0];
-    if (choice?.finish_reason === 'length') {
-      throw new Error('AIの応答が長さ上限で途中終了しました。入力を短くして再試行してください。');
+    if (choice?.message.refusal) {
+      throw new Error(`AIが拒否しました: ${choice.message.refusal}`);
     }
-    if (choice?.finish_reason === 'content_filter') {
-      throw new Error(
-        'AIの安全フィルターにより応答を完了できませんでした。入力内容を確認してください。'
-      );
+    if (!choice?.message.parsed) {
+      throw new Error('AIから構造化された応答を取得できませんでした');
     }
-    const message = choice?.message;
-    if (!message) {
-      throw new Error('AIからの応答が空でした');
-    }
-    if (message.refusal) {
-      throw new Error(`AIが拒否しました: ${message.refusal}`);
-    }
+    return { design: choice.message.parsed, usage: mapOpenAIUsage(response.usage, response.model) };
+  }
 
-    const textContent = normalizeString(message.content);
-    resolvedParsed = parseImagePromptExtractionText(textContent);
-    usage = mapOpenAIUsage(response.usage, response.model);
-  } else if (isAnthropicTextCompletionModel(selectedModel)) {
-    // シーンごとに同じシステムプロンプトを繰り返し送るため、system ブロックをキャッシュする
+  if (isAnthropicTextCompletionModel(selectedModel)) {
+    // 記事ブロックに cache_control を付け、system と記事までをパート間で共有する
+    const structuredOutput = zodOutputFormat(SlideDesignSchema);
     const claudeResult = await generateClaudeTextContent({
       model: selectedModel,
-      systemPrompt,
-      userPrompt,
-      effort: params.generationConfig.claudeEffort,
-      cacheSystemPrompt: params.cacheSystemPrompt,
+      systemPrompt: SLIDE_DESIGN_SYSTEM_PROMPT,
+      cachedUserPrefix: article.text,
+      userPrompt: partPrompt,
+      effort: generationConfig.claudeEffort,
+      outputFormat: toClaudeOutputFormat(structuredOutput),
     });
-    resolvedParsed = parseImagePromptExtractionText(claudeResult.text);
-    usage = claudeResult.usage;
-  } else {
-    const apiModel = resolveGeminiApiModel(selectedModel);
-    const geminiResult = await generateGeminiTextContent({
-      model: apiModel,
-      systemPrompt,
-      userPrompt,
-      temperature: 0.3,
-      responseMimeType: 'application/json',
-      thinkingLevel: params.generationConfig.geminiThinkingLevel,
-    });
-    resolvedParsed = parseImagePromptExtractionText(geminiResult.text);
-    usage = geminiResult.usage;
+    return {
+      design: parseClaudeStructuredOutput(structuredOutput, claudeResult.text),
+      usage: claudeResult.usage,
+    };
   }
 
-  if (!resolvedParsed) {
-    throw new Error('AIからの応答が空でした');
-  }
-
+  // Gemini のキャッシュは先頭一致の暗黙キャッシュなので、記事を先頭に置く
+  const geminiResult = await generateGeminiTextContent({
+    model: resolveGeminiApiModel(selectedModel),
+    systemPrompt: SLIDE_DESIGN_SYSTEM_PROMPT,
+    userPrompt: `${article.text}\n\n${partPrompt}`,
+    responseJsonSchema: toGeminiJsonSchema(SlideDesignSchema),
+    thinkingLevel: generationConfig.geminiThinkingLevel,
+  });
   return {
-    candidate: resolvedParsed.prompts?.[0] as Record<string, unknown> | undefined,
-    usage,
+    design: parseStructuredJson(SlideDesignSchema, geminiResult.text),
+    usage: geminiResult.usage,
+  };
+}
+
+function resolveImagePromptContext(options?: ImagePromptGenerationOptions): PromptBuildContext {
+  const styleReferenceImageIds = Array.isArray(options?.styleReferenceImageIds)
+    ? Array.from(
+        new Set(
+          options.styleReferenceImageIds.filter(
+            (id): id is string => typeof id === 'string' && id.trim().length > 0
+          )
+        )
+      ).slice(0, 3)
+    : [];
+  return {
+    styleConfig: getImageStylePresetConfig(options?.stylePreset),
+    aspectRatio: isImageAspectRatio(options?.aspectRatio)
+      ? options.aspectRatio
+      : DEFAULT_IMAGE_ASPECT_RATIO,
+    styleReferenceImageIds,
+    styleReferenceNote:
+      typeof options?.styleReferenceNote === 'string' ? options.styleReferenceNote.trim() : '',
+  };
+}
+
+function toImagePrompt(
+  partId: string,
+  design: SlideDesign | undefined,
+  context: PromptBuildContext,
+  createdAt: string
+): ImagePrompt {
+  const { prompt, visualCopy, layoutPlan } = buildImagePromptFromDesign(design, context);
+  return {
+    id: crypto.randomUUID(),
+    partId,
+    stylePreset: context.styleConfig.id,
+    prompt,
+    negativePrompt: context.styleConfig.negative,
+    aspectRatio: context.aspectRatio,
+    ...(visualCopy ? { visualCopy } : {}),
+    ...(layoutPlan ? { layoutPlan } : {}),
+    ...(context.styleReferenceImageIds.length > 0
+      ? { styleReferenceImageIds: context.styleReferenceImageIds }
+      : {}),
+    version: 1,
+    createdAt,
   };
 }
 
@@ -1908,94 +1411,26 @@ registerOperation(
     parts: GeneratedPart[],
     article: Article,
     options?: ImagePromptGenerationOptions
-  ): Promise<{
-    prompts: Array<{
-      id: string;
-      partId: string;
-      stylePreset: ImageStylePreset;
-      prompt: string;
-      negativePrompt: string;
-      aspectRatio: ImageAspectRatio;
-      visualCopy?: VisualCopy;
-      layoutPlan?: LayoutPlan;
-      styleReferenceImageIds?: string[];
-      version: number;
-      createdAt: string;
-    }>;
-    usage: OpenAIUsageSummary | null;
-  }> => {
-    const styleConfig = getImageStylePresetConfig(options?.stylePreset);
-    const aspectRatio = isImageAspectRatio(options?.aspectRatio)
-      ? options.aspectRatio
-      : DEFAULT_IMAGE_ASPECT_RATIO;
-    const styleReferenceImageIds = Array.isArray(options?.styleReferenceImageIds)
-      ? Array.from(
-          new Set(
-            options.styleReferenceImageIds.filter(
-              (id): id is string => typeof id === 'string' && id.trim().length > 0
-            )
-          )
-        ).slice(0, 3)
-      : [];
-    const styleReferenceNote =
-      typeof options?.styleReferenceNote === 'string' ? options.styleReferenceNote.trim() : '';
-    const cleanedBodyText = sanitizeArticleText(article.bodyText ?? '');
-    const bodyTextForPrompt = cleanedBodyText || article.bodyText || '';
-    const articleText = `${article.title}\n${article.source ?? ''}\n${bodyTextForPrompt}`.trim();
-    const articleContext = `タイトル: ${article.title}\n${article.source ? `出典: ${article.source}` : ''}\n本文:\n${bodyTextForPrompt}`;
+  ): Promise<{ prompts: ImagePrompt[]; usage: OpenAIUsageSummary | null }> => {
+    const context = resolveImagePromptContext(options);
+    const articleBlock = buildArticlePromptBlock(article);
     const generationConfig = await readTextGenerationConfig('image_prompt');
-    const extractionResults = await runWithConcurrency(
-      parts,
-      10,
-      async (
-        part,
-        index
-      ): Promise<{
-        candidate: Record<string, unknown> | undefined;
-        usage: OpenAIUsageSummary | null;
-      }> => {
-        const partContext = [
-          `パート番号: ${index + 1}`,
-          `タイトル: ${part.title || ''}`,
-          `要約: ${part.summary || ''}`,
-          `ナレーション: ${part.scriptText || ''}`,
-        ].join('\n');
-        return extractSinglePartPromptCandidate({
-          articleContext,
-          partContext,
-          generationConfig,
-          cacheSystemPrompt: parts.length > 1,
-        });
-      }
+    // 記事ブロックのキャッシュ指定は、パートが 1 件のときも含めて常に付ける。
+    // 注意: キャッシュは 1 本目の応答が始まってから読めるようになるため、最大 10 並列で同時に送ると
+    // 最初の応答が始まる前に送ったリクエストはキャッシュを読めない。自動生成ジョブ
+    // (ai:generateImagePromptForTarget)では、Claude のとき 1 本目の応答の開始を待ってから残りを送る
+    // (electron/jobs/engine.ts)。この画面向けの一括生成は従来どおり同時に送る
+    const extractionResults = await runWithConcurrency(parts, 10, (part, index) =>
+      extractSlideDesign({
+        article: articleBlock,
+        partPrompt: buildPartPrompt(part, index + 1, articleBlock.articleId),
+        generationConfig,
+      })
     );
     const now = new Date().toISOString();
-    const promptContext = {
-      articleText,
-      styleConfig,
-      aspectRatio,
-      styleReferenceImageIds,
-      styleReferenceNote,
-    };
-    const prompts = parts.map((part, index: number) => {
-      const candidate = extractionResults[index]?.candidate;
-      const finalPrompt = buildImagePromptText(candidate, promptContext);
-      const visualCopy = normalizeVisualCopy(candidate?.visualCopy);
-      const layoutPlan = normalizeLayoutPlan(candidate?.layoutPlan);
-
-      return {
-        id: crypto.randomUUID(),
-        partId: part?.id || '',
-        stylePreset: styleConfig.id,
-        prompt: finalPrompt,
-        negativePrompt: styleConfig.negative,
-        aspectRatio,
-        ...(visualCopy ? { visualCopy } : {}),
-        ...(layoutPlan ? { layoutPlan } : {}),
-        ...(styleReferenceImageIds.length > 0 ? { styleReferenceImageIds } : {}),
-        version: 1,
-        createdAt: now,
-      };
-    });
+    const prompts = parts.map((part, index) =>
+      toImagePrompt(part?.id || '', extractionResults[index]?.design, context, now)
+    );
     const aggregatedUsage = aggregateUsageSummaries(
       extractionResults.map((result) => result.usage)
     );
@@ -2011,7 +1446,7 @@ registerOperation(
   }
 );
 
-// 単一ターゲットの画像プロンプト生成ハンドラ
+// 単一ターゲットの画像プロンプト生成ハンドラ(自動生成ジョブはこの経路でパートを 1 件ずつ処理する)
 registerOperation(
   'ai:generateImagePromptForTarget',
   async (
@@ -2021,70 +1456,23 @@ registerOperation(
     targetId: string,
     options?: ImagePromptGenerationOptions
   ): Promise<{ prompt: ImagePrompt; usage: OpenAIUsageSummary | null }> => {
-    const styleConfig = getImageStylePresetConfig(options?.stylePreset);
-    const aspectRatio = isImageAspectRatio(options?.aspectRatio)
-      ? options.aspectRatio
-      : DEFAULT_IMAGE_ASPECT_RATIO;
-    const styleReferenceImageIds = Array.isArray(options?.styleReferenceImageIds)
-      ? Array.from(
-          new Set(
-            options.styleReferenceImageIds.filter(
-              (id): id is string => typeof id === 'string' && id.trim().length > 0
-            )
-          )
-        ).slice(0, 3)
-      : [];
-    const styleReferenceNote =
-      typeof options?.styleReferenceNote === 'string' ? options.styleReferenceNote.trim() : '';
-    const cleanedBodyText = sanitizeArticleText(article.bodyText ?? '');
-    const bodyTextForPrompt = cleanedBodyText || article.bodyText || '';
-    const articleText = `${article.title}\n${article.source ?? ''}\n${bodyTextForPrompt}`.trim();
-    const articleContext = `タイトル: ${article.title}\n${article.source ? `出典: ${article.source}` : ''}\n本文:\n${bodyTextForPrompt}`;
-
+    const context = resolveImagePromptContext(options);
     const targetPart = parts.find((part) => part.id === targetId);
     if (!targetPart) {
       throw new Error('対象パートが見つかりませんでした。');
     }
 
-    const partContext = [
-      `パート番号: ${targetPart.index + 1}`,
-      `タイトル: ${targetPart.title || ''}`,
-      `要約: ${targetPart.summary || ''}`,
-      `ナレーション: ${targetPart.scriptText || ''}`,
-    ].join('\n');
+    // 記事ブロックにキャッシュを付けるので、同じ記事の 2 件目以降はキャッシュを読める
+    const articleBlock = buildArticlePromptBlock(article);
     const generationConfig = await readTextGenerationConfig('image_prompt');
-    const { candidate, usage } = await extractSinglePartPromptCandidate({
-      articleContext,
-      partContext,
+    const { design, usage } = await extractSlideDesign({
+      article: articleBlock,
+      partPrompt: buildPartPrompt(targetPart, targetPart.index + 1, articleBlock.articleId),
       generationConfig,
     });
-    const promptText = buildImagePromptText(candidate, {
-      articleText,
-      styleConfig,
-      aspectRatio,
-      styleReferenceImageIds,
-      styleReferenceNote,
-    });
-    const visualCopy = normalizeVisualCopy(candidate?.visualCopy);
-    const layoutPlan = normalizeLayoutPlan(candidate?.layoutPlan);
-
-    const now = new Date().toISOString();
-    const prompt: ImagePrompt = {
-      id: crypto.randomUUID(),
-      partId: targetId,
-      stylePreset: styleConfig.id,
-      prompt: promptText,
-      negativePrompt: styleConfig.negative,
-      aspectRatio,
-      ...(visualCopy ? { visualCopy } : {}),
-      ...(layoutPlan ? { layoutPlan } : {}),
-      ...(styleReferenceImageIds.length > 0 ? { styleReferenceImageIds } : {}),
-      version: 1,
-      createdAt: now,
-    };
 
     return {
-      prompt,
+      prompt: toImagePrompt(targetId, design, context, new Date().toISOString()),
       usage,
     };
   }
@@ -2104,8 +1492,8 @@ registerOperation(
     const isScriptTarget = target.type === 'script';
     const systemPrompt = isScriptTarget
       ? 'あなたは報道動画のスクリプトエディターです。与えられたコメントに基づいてスクリプトを修正します。'
-      : `あなたは画像生成プロンプトのエディターです。与えられたコメントに基づいてプロンプトを修正します。
-出力は JSON オブジェクトのみ（説明文・Markdown・前置き禁止）です。`;
+      : 'あなたは画像生成プロンプトのエディターです。与えられたコメントに基づいてプロンプトを修正します。';
+    // 画像プロンプトは 3 社とも構造化出力で受け取るため、JSON の形式はプロンプトに書かずスキーマで伝える
     const userPrompt = isScriptTarget
       ? `以下のスクリプトを、コメントに基づいて修正してください。
 
@@ -2130,15 +1518,7 @@ ${comment}
 ## 要件
 - コメントの意図を反映した修正を行ってください
 - 元の構成や意図はできるだけ維持してください
-- prompt は ${MAX_IMAGE_PROMPT_CHARS} 文字以内
-- 出力は JSON のみ（説明不要）
-
-## 出力形式（JSONのみ）
-{
-  "prompt": ""
-}
-
-JSONのみを出力してください。`;
+- 画面に描く文字は「${IMAGE_TEXT_SECTION_LABEL}」欄に、1項目ずつ「」で囲んで書いてください`;
 
     let text = '';
     let usage: OpenAIUsageSummary | null = null;
@@ -2214,7 +1594,7 @@ JSONのみを出力してください。`;
         text = claudeResult.text;
         usage = claudeResult.usage;
       } else {
-        const structuredOutput = zodOutputFormat(ClaudeImagePromptCommentPayloadSchema);
+        const structuredOutput = zodOutputFormat(ImagePromptCommentPayloadSchema);
         const claudeResult = await generateClaudeTextContent({
           model: selectedModel,
           systemPrompt,
@@ -2231,7 +1611,9 @@ JSONのみを出力してください。`;
         model: apiModel,
         systemPrompt,
         userPrompt,
-        temperature: 0.7,
+        ...(isScriptTarget
+          ? {}
+          : { responseJsonSchema: toGeminiJsonSchema(ImagePromptCommentPayloadSchema) }),
         thinkingLevel: generationConfig.geminiThinkingLevel,
       });
       text = geminiResult.text;

@@ -1,13 +1,31 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, type KeyboardEvent, type ReactNode } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useAutoSave } from '../hooks';
 import { Header } from '../components/layout';
-import { Badge, Button, Card, ErrorDetailPanel, StatusChip, useToast } from '../components/ui';
+import { Button, Card, useToast } from '../components/ui';
+import { FriendlyError } from '../components/errors/FriendlyError';
+import { errorToastContent, explainError } from '../components/errors/explainError';
+import { ApiKeyList } from '../components/onboarding/ApiKeyList';
+import { API_KEY_SERVICE_INFO, type ApiKeyService } from '../components/onboarding/apiKeys';
+import { useApiKeyStatus } from '../components/onboarding/useApiKeyStatus';
+import { ReadingDictionaryEditor } from '../components/settings/ReadingDictionaryEditor';
+import { NewVideoDefaultsSection } from '../components/settings/NewVideoDefaultsSection';
+import { UsageCostSection } from '../components/settings/UsageCostSection';
 import {
-  ANTHROPIC_TEXT_COMPLETION_MODEL,
+  readSettingsLocationState,
+  type SettingsSection,
+} from '../components/settings/settingsNavigation';
+import {
+  ensureGenerationPreferencesMigrated,
+  forgetLegacyGenerationPreferences,
+} from '../stores/generationPreferences';
+import { setJpyPerUsd } from '../stores/currencyStore';
+import { cx } from '../utils/cx';
+import { normalizeSettings, type AppSettings } from '../../shared/settings/appSettings';
+import { autoVideoBitrate } from '../../shared/project/videoFormat';
+import {
   DEFAULT_GEMINI_TTS_MODEL,
   DEFAULT_IMAGE_MODEL,
-  DEFAULT_IMAGE_PROMPT_TEXT_MODEL,
   DEFAULT_IMAGE_RESOLUTION,
   DEFAULT_SCRIPT_TEXT_MODEL,
   getCommonSupportedOpenAIReasoningEfforts,
@@ -16,37 +34,30 @@ import {
   getDefaultOpenAIReasoningEffort,
   getGeminiTtsModelLabel,
   getImageModelLabel,
+  getImageModelProvider,
   getSupportedClaudeEfforts,
   getSupportedGeminiThinkingLevels,
   getTextCompletionModelLabel,
-  GEMINI_TTS_MODELS,
-  IMAGE_MODELS,
+  getTextCompletionModelProvider,
   IMAGE_RESOLUTION_LABELS,
   IMAGE_RESOLUTIONS,
-  TEXT_COMPLETION_MODELS,
+  SELECTABLE_GEMINI_TTS_MODELS,
+  SELECTABLE_IMAGE_MODELS,
+  SELECTABLE_TEXT_COMPLETION_MODELS,
   type ClaudeEffort,
   type GeminiThinkingLevel,
-  type GeminiTtsModel,
-  type ImageModel,
-  type ImageResolution,
   type OpenAITextCompletionModel,
   type OpenAIReasoningEffort,
   type SelectableClaudeEffort,
   type SelectableOpenAIReasoningEffort,
   isAnthropicTextCompletionModel,
+  isGeminiImageModel,
   isGeminiTextCompletionModel,
-  isOpenAIImageModel,
   isOpenAITextCompletionModel,
   type TextCompletionModel,
 } from '../../shared/constants/models';
 
-type ApiKeyService = 'openai' | 'google_ai' | 'anthropic';
-
-interface ConnectionStatus {
-  success: boolean;
-  message: string;
-  latencyMs?: number;
-}
+type Settings = AppSettings;
 
 interface VoiceInfo {
   name: string;
@@ -55,60 +66,29 @@ interface VoiceInfo {
   sampleRateHertz: number;
 }
 
-interface Settings {
-  generationConcurrency: number;
-  ttsEngine: 'google_tts' | 'gemini_tts' | 'macos_tts';
-  ttsModel: GeminiTtsModel;
-  ttsVoice: string;
-  ttsSpeakingRate: number;
-  ttsPitch: number;
-  scriptTextModel: TextCompletionModel;
-  imagePromptTextModel: TextCompletionModel;
-  openaiReasoningEffort: OpenAIReasoningEffort;
-  geminiThinkingLevel: GeminiThinkingLevel;
-  claudeEffort: ClaudeEffort;
-  imageModel: ImageModel;
-  imageResolution: ImageResolution;
-  defaultAspectRatio: '16:9' | '1:1' | '9:16';
-  videoResolution: '1920x1080' | '1280x720' | '3840x2160';
-  videoFps: number;
-  videoBitrate: string;
-  audioBitrate: string;
-  videoPartLeadInSec: number;
-  openingVideoPath: string;
-  endingVideoPath: string;
-  defaultProjectDir: string;
-}
+const SECTIONS: Array<{ key: SettingsSection; label: string }> = [
+  { key: 'api', label: 'API キー' },
+  { key: 'models', label: '生成モデル' },
+  { key: 'newVideo', label: '新しい動画' },
+  { key: 'video', label: '動画' },
+  { key: 'dictionary', label: '読み辞書' },
+  { key: 'usage', label: '使った費用' },
+  { key: 'advanced', label: '詳細設定' },
+];
 
-const defaultSettings: Settings = {
-  generationConcurrency: 2,
-  ttsEngine: 'gemini_tts',
-  ttsModel: DEFAULT_GEMINI_TTS_MODEL,
-  ttsVoice: 'Charon',
-  ttsSpeakingRate: 1.0,
-  ttsPitch: 0,
-  scriptTextModel: DEFAULT_SCRIPT_TEXT_MODEL,
-  imagePromptTextModel: DEFAULT_IMAGE_PROMPT_TEXT_MODEL,
-  openaiReasoningEffort: getDefaultOpenAIReasoningEffort('gpt-5.2'),
-  geminiThinkingLevel: getDefaultGeminiThinkingLevel('gemini-3.1-pro'),
-  claudeEffort: getDefaultClaudeEffort(ANTHROPIC_TEXT_COMPLETION_MODEL),
-  imageModel: DEFAULT_IMAGE_MODEL,
-  imageResolution: DEFAULT_IMAGE_RESOLUTION,
-  defaultAspectRatio: '16:9',
-  videoResolution: '1920x1080',
-  videoFps: 30,
-  videoBitrate: '8M',
-  audioBitrate: '192k',
-  videoPartLeadInSec: 0.3,
-  openingVideoPath: '',
-  endingVideoPath: '',
-  defaultProjectDir: '',
+const VIDEO_RESOLUTION_WORDS: Record<Settings['videoResolution'], string> = {
+  '1920x1080': 'フル HD',
+  '1280x720': 'HD',
+  '3840x2160': '4K',
 };
+
+// 見た目は M4-B の共通クラス(src/styles/utilities.css の .nv-label / .nv-help)にそろえる
+const fieldLabel = 'nv-label';
+const fieldHint = 'nv-help mt-1';
 
 function formatOpenAIReasoningLabel(value: OpenAIReasoningEffort): string {
   const labels: Record<Exclude<OpenAIReasoningEffort, 'default'>, string> = {
     none: 'なし',
-    minimal: '最小',
     low: '低',
     medium: '中',
     high: '高',
@@ -136,6 +116,16 @@ function formatGeminiThinkingLabel(value: GeminiThinkingLevel): string {
   return value === 'default' ? 'モデル既定値' : labels[value];
 }
 
+// 選択肢から外した旧モデルが保存されている場合は、その値も末尾に残して表示する(保存値は変えない)
+function withSavedOption<T extends string>(options: readonly T[], saved: T): readonly T[] {
+  return options.includes(saved) ? options : [...options, saved];
+}
+
+function modelOptionLabel(label: string, isSelectable: boolean, isDefault: boolean): string {
+  if (!isSelectable) return `${label}(旧モデル)`;
+  return isDefault ? `${label}(おすすめ)` : label;
+}
+
 function formatClaudeEffortLabel(value: ClaudeEffort): string {
   const labels: Record<SelectableClaudeEffort, string> = {
     low: '低',
@@ -147,50 +137,106 @@ function formatClaudeEffortLabel(value: ClaudeEffort): string {
   return value === 'default' ? 'モデル既定値' : labels[value];
 }
 
+function textModelService(model: TextCompletionModel): ApiKeyService {
+  const provider = getTextCompletionModelProvider(model);
+  return provider === 'gemini' ? 'google_ai' : provider;
+}
+
+function fileName(filePath: string): string {
+  return filePath.split(/[\\/]/).pop() || filePath;
+}
+
+/** 生成モデルの区分ごとに、使う API キーと未設定の案内を出す */
+function KeyNote({
+  service,
+  saved,
+  onOpenKeys,
+}: {
+  service: ApiKeyService;
+  saved: boolean | null;
+  onOpenKeys: () => void;
+}) {
+  const name = API_KEY_SERVICE_INFO[service].name;
+  if (saved === false)
+    return (
+      <p className="mt-1 flex flex-wrap items-center gap-2 text-xs text-[var(--nv-color-warning)]">
+        {name} の API キーが未設定です。
+        <button
+          type="button"
+          onClick={onOpenKeys}
+          className="nv-focus-ring rounded-[var(--nv-radius-sm)] font-semibold text-[var(--nv-color-accent)] underline"
+        >
+          API キーを設定する
+        </button>
+      </p>
+    );
+  return <p className={fieldHint}>{name} の API キーを使います。</p>;
+}
+
+function Section({
+  title,
+  description,
+  children,
+}: {
+  title: string;
+  description?: string;
+  children: ReactNode;
+}) {
+  return (
+    <section className="space-y-3">
+      <div>
+        <h3 className="text-sm font-semibold text-[var(--nv-color-text)]">{title}</h3>
+        {description && (
+          <p className="mt-0.5 text-xs text-[var(--nv-color-muted)]">{description}</p>
+        )}
+      </div>
+      {children}
+    </section>
+  );
+}
+
 export function SettingsPage() {
   const navigate = useNavigate();
   const location = useLocation();
   const toast = useToast();
+  const { returnTo, section: requestedSection } = useMemo(
+    () => readSettingsLocationState(location.state),
+    [location.state]
+  );
 
-  const returnTo = useMemo(() => {
-    const state = location.state as { returnTo?: string } | null;
-    if (!state || typeof state.returnTo !== 'string') return null;
-    if (!state.returnTo || state.returnTo === '/settings') return null;
-    return state.returnTo;
-  }, [location.state]);
-
-  const [apiKeys, setApiKeys] = useState<Record<ApiKeyService, string>>({
-    openai: '',
-    google_ai: '',
-    anthropic: '',
-  });
-  const [connectionStatus, setConnectionStatus] = useState<
-    Record<ApiKeyService, ConnectionStatus | null>
-  >({
-    openai: null,
-    google_ai: null,
-    anthropic: null,
-  });
-  const [isTesting, setIsTesting] = useState<Record<ApiKeyService, boolean>>({
-    openai: false,
-    google_ai: false,
-    anthropic: false,
-  });
-  const [isSaving, setIsSaving] = useState<Record<ApiKeyService, boolean>>({
-    openai: false,
-    google_ai: false,
-    anthropic: false,
-  });
-  const [settings, setSettings] = useState<Settings>(defaultSettings);
+  const { status: keyStatus, markSaved } = useApiKeyStatus();
+  const [settings, setSettings] = useState<Settings>(() => normalizeSettings({}));
   const [ttsVoices, setTtsVoices] = useState<VoiceInfo[]>([]);
   const [isLoadingTtsVoices, setIsLoadingTtsVoices] = useState(false);
   const [hasLoadedSettings, setHasLoadedSettings] = useState(false);
-  const [settingsSaveError, setSettingsSaveError] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<'api' | 'video' | 'audio' | 'image'>('api');
+  const [settingsSaveError, setSettingsSaveError] = useState<unknown>(null);
+  const [activeSection, setActiveSection] = useState<SettingsSection>(requestedSection ?? 'api');
+  const [shownRequest, setShownRequest] = useState(location.key);
+
+  // 別の画面から区分を指定して開き直されたときは、その区分に切り替える
+  if (shownRequest !== location.key) {
+    setShownRequest(location.key);
+    if (requestedSection) setActiveSection(requestedSection);
+  }
 
   useEffect(() => {
-    loadApiKeys();
-    loadSettings();
+    let active = true;
+    const load = async () => {
+      try {
+        // 以前の版が画面側に覚えていた進め方と予算を、先に設定へ移してから読む
+        await ensureGenerationPreferencesMigrated();
+        const loaded = await window.electronAPI.settings.get();
+        if (active) setSettings(normalizeSettings(loaded));
+      } catch (error) {
+        console.error('Failed to load settings:', error);
+      } finally {
+        if (active) setHasLoadedSettings(true);
+      }
+    };
+    void load();
+    return () => {
+      active = false;
+    };
   }, []);
 
   useEffect(() => {
@@ -224,28 +270,23 @@ export function SettingsPage() {
     };
   }, [hasLoadedSettings, settings.ttsEngine]);
 
-  const loadSettings = async () => {
-    try {
-      const loaded = await window.electronAPI.settings.get();
-      setSettings({ ...defaultSettings, ...loaded });
-    } catch (error) {
-      console.error('Failed to load settings:', error);
-    } finally {
-      setHasLoadedSettings(true);
-    }
-  };
-
   const settingsAutoSave = useAutoSave({
     data: settings,
     enabled: hasLoadedSettings,
     interval: 1200,
     onSave: async (nextSettings) => {
       try {
-        await window.electronAPI.settings.set(nextSettings);
+        // 料金表(cost)はこの画面では編集しないので送らない(保存済みの値を Main 側で残す)
+        const payload: Partial<Settings> = { ...nextSettings };
+        delete payload.cost;
+        await window.electronAPI.settings.set(
+          payload as Parameters<typeof window.electronAPI.settings.set>[0]
+        );
+        // 進め方と予算も保存したので、以前の版の値(localStorage)は使わない
+        forgetLegacyGenerationPreferences();
         setSettingsSaveError(null);
       } catch (error) {
-        const message = error instanceof Error ? error.message : '不明なエラー';
-        setSettingsSaveError(message);
+        setSettingsSaveError(error);
         throw error;
       }
     },
@@ -253,104 +294,16 @@ export function SettingsPage() {
 
   const settingsStatus = useMemo(() => {
     if (!hasLoadedSettings) {
-      return { label: '読込中', tone: 'neutral' as const };
+      return { label: '読み込み中', tone: 'neutral' as const };
     }
-    if (settingsSaveError) {
-      return { label: '保存エラー', tone: 'danger' as const };
+    if (settingsSaveError !== null) {
+      return { label: '保存できませんでした', tone: 'danger' as const };
     }
-    if (settingsAutoSave.isSaving) {
+    if (settingsAutoSave.isSaving || settingsAutoSave.isDirty) {
       return { label: '保存中', tone: 'info' as const };
-    }
-    if (settingsAutoSave.isDirty) {
-      return { label: '変更あり', tone: 'warning' as const };
     }
     return { label: '保存済み', tone: 'success' as const };
   }, [hasLoadedSettings, settingsAutoSave.isDirty, settingsAutoSave.isSaving, settingsSaveError]);
-
-  const loadApiKeys = async () => {
-    const services: ApiKeyService[] = ['openai', 'google_ai', 'anthropic'];
-    const keys: Record<string, string> = {};
-
-    for (const service of services) {
-      try {
-        const key = await window.electronAPI.settings.hasApiKey(service);
-        keys[service] = key ? '••••••••••••••••' : '';
-      } catch {
-        keys[service] = '';
-      }
-    }
-
-    setApiKeys(keys as Record<ApiKeyService, string>);
-  };
-
-  const handleSaveApiKey = async (service: ApiKeyService) => {
-    const key = apiKeys[service];
-    if (!key || key === '••••••••••••••••') return;
-
-    setIsSaving((prev) => ({ ...prev, [service]: true }));
-    try {
-      await window.electronAPI.settings.setApiKey(service, key);
-      setApiKeys((prev) => ({ ...prev, [service]: '••••••••••••••••' }));
-      setConnectionStatus((prev) => ({ ...prev, [service]: null }));
-      toast.success(`${serviceLabels[service].name} のAPIキーを保存しました`);
-    } catch (error) {
-      console.error('Failed to save API key:', error);
-      toast.error(
-        error instanceof Error ? error.message : '不明なエラー',
-        `${serviceLabels[service].name} の保存に失敗しました`
-      );
-    } finally {
-      setIsSaving((prev) => ({ ...prev, [service]: false }));
-    }
-  };
-
-  const handleTestConnection = async (service: ApiKeyService) => {
-    setIsTesting((prev) => ({ ...prev, [service]: true }));
-    setConnectionStatus((prev) => ({ ...prev, [service]: null }));
-
-    try {
-      // 未保存の入力値がある場合はそれを使用してテスト
-      const currentKey = apiKeys[service];
-      const keyToTest = currentKey && currentKey !== '••••••••••••••••' ? currentKey : undefined;
-      const result = await window.electronAPI.settings.testConnection(service, keyToTest);
-      setConnectionStatus((prev) => ({ ...prev, [service]: result }));
-      if (result.success) {
-        toast.success(result.message, `${serviceLabels[service].name} に接続できました`);
-      } else {
-        toast.error(result.message, `${serviceLabels[service].name} に接続できませんでした`);
-      }
-    } catch (error) {
-      const nextStatus = {
-        success: false,
-        message: `エラー: ${error instanceof Error ? error.message : '不明'}`,
-      };
-      setConnectionStatus((prev) => ({
-        ...prev,
-        [service]: nextStatus,
-      }));
-      toast.error(nextStatus.message, `${serviceLabels[service].name} に接続できませんでした`);
-    } finally {
-      setIsTesting((prev) => ({ ...prev, [service]: false }));
-    }
-  };
-
-  const serviceLabels: Record<ApiKeyService, { name: string; description: string; url: string }> = {
-    openai: {
-      name: 'OpenAI',
-      description: 'OpenAI系の文章生成とGPT Image 2 / 2.5の画像生成に使用します',
-      url: 'https://platform.openai.com/',
-    },
-    google_ai: {
-      name: 'Google AI',
-      description: 'Gemini系の画像・文章生成、Gemini TTS に使用します',
-      url: 'https://aistudio.google.com/',
-    },
-    anthropic: {
-      name: 'Anthropic',
-      description: 'Claude系の文章生成に使用します',
-      url: 'https://platform.claude.com/',
-    },
-  };
 
   const activeOpenAIModels = useMemo(() => {
     const models: OpenAITextCompletionModel[] = [];
@@ -373,17 +326,18 @@ export function SettingsPage() {
     return null;
   }, [settings.imagePromptTextModel, settings.scriptTextModel]);
 
-  const activeAnthropicModel = useMemo(() => {
-    if (isAnthropicTextCompletionModel(settings.scriptTextModel)) return settings.scriptTextModel;
-    if (isAnthropicTextCompletionModel(settings.imagePromptTextModel))
-      return settings.imagePromptTextModel;
-    return null;
-  }, [settings.imagePromptTextModel, settings.scriptTextModel]);
+  const scriptAnthropicModel = isAnthropicTextCompletionModel(settings.scriptTextModel)
+    ? settings.scriptTextModel
+    : null;
+  const imagePromptAnthropicModel = isAnthropicTextCompletionModel(settings.imagePromptTextModel)
+    ? settings.imagePromptTextModel
+    : null;
 
   const openAIReasoningOptions = useMemo((): readonly SelectableOpenAIReasoningEffort[] => {
     return getCommonSupportedOpenAIReasoningEfforts(activeOpenAIModels);
   }, [activeOpenAIModels]);
 
+  // モデルを変えたときに、そのモデルで使えない「思考の深さ」を既定値へ戻す
   useEffect(() => {
     setSettings((prev) => {
       let changed = false;
@@ -410,67 +364,185 @@ export function SettingsPage() {
         }
       }
 
-      if (activeAnthropicModel) {
-        const supported = getSupportedClaudeEfforts(activeAnthropicModel);
+      // Claude の effort は台本用(claudeEffort)と画像プロンプト用(claudeImagePromptEffort)で別々に持つ
+      if (scriptAnthropicModel) {
+        const supported = getSupportedClaudeEfforts(scriptAnthropicModel);
         if (!supported.includes(prev.claudeEffort as SelectableClaudeEffort)) {
-          next.claudeEffort = getDefaultClaudeEffort(activeAnthropicModel);
+          next.claudeEffort = getDefaultClaudeEffort(scriptAnthropicModel);
+          changed = true;
+        }
+      }
+
+      if (imagePromptAnthropicModel) {
+        const supported = getSupportedClaudeEfforts(imagePromptAnthropicModel);
+        if (!supported.includes(prev.claudeImagePromptEffort as SelectableClaudeEffort)) {
+          next.claudeImagePromptEffort = getDefaultClaudeEffort(imagePromptAnthropicModel);
           changed = true;
         }
       }
 
       return changed ? next : prev;
     });
-  }, [activeAnthropicModel, activeGeminiModel, activeOpenAIModels, openAIReasoningOptions]);
+  }, [
+    activeGeminiModel,
+    activeOpenAIModels,
+    imagePromptAnthropicModel,
+    openAIReasoningOptions,
+    scriptAnthropicModel,
+  ]);
 
-  const scriptOpenAIReasoningOptions = isOpenAITextCompletionModel(settings.scriptTextModel)
-    ? openAIReasoningOptions
-    : [];
-  const scriptGeminiThinkingOptions = isGeminiTextCompletionModel(settings.scriptTextModel)
-    ? getSupportedGeminiThinkingLevels(settings.scriptTextModel)
-    : [];
-  const imageOpenAIReasoningOptions = isOpenAITextCompletionModel(settings.imagePromptTextModel)
-    ? openAIReasoningOptions
-    : [];
-  const imageGeminiThinkingOptions = isGeminiTextCompletionModel(settings.imagePromptTextModel)
-    ? getSupportedGeminiThinkingLevels(settings.imagePromptTextModel)
-    : [];
-  const scriptClaudeEffortOptions = isAnthropicTextCompletionModel(settings.scriptTextModel)
-    ? getSupportedClaudeEfforts(settings.scriptTextModel)
-    : [];
-  const imageClaudeEffortOptions = isAnthropicTextCompletionModel(settings.imagePromptTextModel)
-    ? getSupportedClaudeEfforts(settings.imagePromptTextModel)
-    : [];
+  const update = <K extends keyof Settings>(key: K, value: Settings[K]) =>
+    setSettings((prev) => ({ ...prev, [key]: value }));
+  const updateMany = (patch: Partial<Settings>) => setSettings((prev) => ({ ...prev, ...patch }));
+
+  // 金額の表示(画面上部の進捗表示など)は、保存を待たずに新しいレートで出す
+  useEffect(() => {
+    if (hasLoadedSettings) setJpyPerUsd(settings.jpyPerUsd);
+  }, [hasLoadedSettings, settings.jpyPerUsd]);
+
+  const isOpenAIImage = getImageModelProvider(settings.imageModel) === 'openai';
+  const autoBitrate = autoVideoBitrate(settings.videoResolution, settings.videoFps);
 
   const handleSelectVideoFile = async (field: 'openingVideoPath' | 'endingVideoPath') => {
     try {
       const selected = await window.electronAPI.file.selectFile({
-        title: field === 'openingVideoPath' ? 'オープニング動画を選択' : 'エンディング動画を選択',
+        title: field === 'openingVideoPath' ? '最初に流す動画を選択' : '最後に流す動画を選択',
         filters: [{ name: 'Video', extensions: ['mp4', 'mov', 'm4v'] }],
         properties: ['openFile'],
       });
       if (!selected) return;
-      setSettings((prev) => ({ ...prev, [field]: selected }));
+      update(field, selected);
     } catch (error) {
       console.error('Failed to select video file:', error);
     }
+  };
+
+  const textModelsDiffer = settings.scriptTextModel !== settings.imagePromptTextModel;
+  const openKeys = () => setActiveSection('api');
+
+  const selectSection = (key: SettingsSection) => setActiveSection(key);
+  const handleTabKey = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (event.key !== 'ArrowRight' && event.key !== 'ArrowLeft') return;
+    event.preventDefault();
+    const index = SECTIONS.findIndex((item) => item.key === activeSection);
+    const next =
+      SECTIONS[(index + (event.key === 'ArrowRight' ? 1 : -1) + SECTIONS.length) % SECTIONS.length];
+    setActiveSection(next.key);
+    document.getElementById(`settings-tab-${next.key}`)?.focus();
+  };
+
+  const textModelSelect = (
+    id: string,
+    value: TextCompletionModel,
+    onChange: (model: TextCompletionModel) => void
+  ) => (
+    <select
+      id={id}
+      value={value}
+      onChange={(e) => onChange(e.target.value as TextCompletionModel)}
+      className="nv-input"
+    >
+      {withSavedOption(SELECTABLE_TEXT_COMPLETION_MODELS, value).map((model) => (
+        <option key={model} value={model}>
+          {modelOptionLabel(
+            getTextCompletionModelLabel(model),
+            SELECTABLE_TEXT_COMPLETION_MODELS.includes(model),
+            model === DEFAULT_SCRIPT_TEXT_MODEL
+          )}
+        </option>
+      ))}
+    </select>
+  );
+
+  const effortControl = (purpose: 'script' | 'image') => {
+    const model = purpose === 'script' ? settings.scriptTextModel : settings.imagePromptTextModel;
+    const id = `settings-effort-${purpose}`;
+    if (isOpenAITextCompletionModel(model)) {
+      return (
+        <div>
+          <label htmlFor={id} className={fieldLabel}>
+            {purpose === 'script' ? '台本' : '画像の指示'}の推論の強さ
+          </label>
+          <select
+            id={id}
+            value={settings.openaiReasoningEffort}
+            onChange={(e) =>
+              update('openaiReasoningEffort', e.target.value as Settings['openaiReasoningEffort'])
+            }
+            className="nv-input"
+          >
+            {openAIReasoningOptions.map((effort) => (
+              <option key={effort} value={effort}>
+                {formatOpenAIReasoningLabel(effort)}
+              </option>
+            ))}
+          </select>
+          <p className={fieldHint}>OpenAI のモデルでは台本と画像の指示で共通の値です。</p>
+        </div>
+      );
+    }
+    if (isAnthropicTextCompletionModel(model)) {
+      const key = purpose === 'script' ? 'claudeEffort' : 'claudeImagePromptEffort';
+      return (
+        <div>
+          <label htmlFor={id} className={fieldLabel}>
+            {purpose === 'script' ? '台本' : '画像の指示'}の思考の深さ
+          </label>
+          <select
+            id={id}
+            value={settings[key]}
+            onChange={(e) => update(key, e.target.value as ClaudeEffort)}
+            className="nv-input"
+          >
+            {getSupportedClaudeEfforts(model).map((effort) => (
+              <option key={effort} value={effort}>
+                {formatClaudeEffortLabel(effort)}
+                {effort === getDefaultClaudeEffort(model) ? '(既定)' : ''}
+              </option>
+            ))}
+          </select>
+          <p className={fieldHint}>高いほど品質が上がり、時間と費用が増えます。</p>
+        </div>
+      );
+    }
+    return (
+      <div>
+        <label htmlFor={id} className={fieldLabel}>
+          {purpose === 'script' ? '台本' : '画像の指示'}の思考レベル
+        </label>
+        <select
+          id={id}
+          value={settings.geminiThinkingLevel}
+          onChange={(e) =>
+            update('geminiThinkingLevel', e.target.value as Settings['geminiThinkingLevel'])
+          }
+          className="nv-input"
+        >
+          {(isGeminiTextCompletionModel(model) ? getSupportedGeminiThinkingLevels(model) : []).map(
+            (level) => (
+              <option key={level} value={level}>
+                {formatGeminiThinkingLabel(level)}
+              </option>
+            )
+          )}
+        </select>
+        <p className={fieldHint}>Gemini のモデルでは台本と画像の指示で共通の値です。</p>
+      </div>
+    );
   };
 
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
       <Header
         title="設定"
-        subtitle="次の生成に使う既定値。既存素材も変更内容に応じて更新対象になります"
+        subtitle="変更は自動で保存されます"
         statusLabel={settingsStatus.label}
         statusTone={settingsStatus.tone}
         actions={
           <Button
             variant="secondary"
             onClick={() => {
-              if (returnTo) {
-                navigate(returnTo);
-                return;
-              }
-              navigate('/projects');
+              navigate(returnTo ?? '/projects');
             }}
           >
             戻る
@@ -479,766 +551,502 @@ export function SettingsPage() {
       />
 
       <div className="flex-1 overflow-auto p-5">
-        <div className="mx-auto flex w-full max-w-6xl flex-col gap-4">
-          <div className="flex flex-wrap items-center gap-2 rounded-[12px] border border-[var(--nv-color-border)] bg-white p-2">
-            {[
-              { key: 'api', label: 'APIキー' },
-              { key: 'video', label: '動画' },
-              { key: 'audio', label: '音声' },
-              { key: 'image', label: '画像' },
-            ].map((tab) => (
+        <div className="mx-auto flex w-full max-w-3xl flex-col gap-4">
+          <div
+            role="tablist"
+            aria-label="設定の区分"
+            onKeyDown={handleTabKey}
+            className="flex flex-wrap items-center gap-1 rounded-[var(--nv-radius-md)] border border-[var(--nv-color-border)] bg-[var(--nv-color-surface)] p-1"
+          >
+            {SECTIONS.map((item) => (
               <button
-                key={tab.key}
+                key={item.key}
+                id={`settings-tab-${item.key}`}
                 type="button"
-                onClick={() => setActiveTab(tab.key as typeof activeTab)}
-                className={`rounded-[8px] px-3 py-2 text-sm font-semibold transition-colors ${
-                  activeTab === tab.key
+                role="tab"
+                aria-selected={activeSection === item.key}
+                aria-controls={`settings-panel-${item.key}`}
+                tabIndex={activeSection === item.key ? 0 : -1}
+                onClick={() => selectSection(item.key)}
+                className={cx(
+                  'nv-focus-ring rounded-[var(--nv-radius-sm)] px-3 py-2 text-sm font-semibold transition-colors duration-[var(--nv-duration-fast)]',
+                  activeSection === item.key
                     ? 'bg-[var(--nv-color-accent)] text-white'
-                    : 'text-slate-600 hover:bg-slate-100'
-                }`}
+                    : 'text-[var(--nv-color-muted)] hover:bg-[var(--nv-color-canvas)]'
+                )}
               >
-                {tab.label}
+                {item.label}
               </button>
             ))}
           </div>
 
-          <p className="text-sm text-slate-600">
-            変更は自動保存されます。実行中・再開する自動生成は開始時の設定を使用します。動画の品質はプロジェクトに保存した設定を優先します。
-          </p>
-          <details className="rounded-lg border bg-white p-3">
-            <summary className="cursor-pointer text-sm font-semibold">サポートと診断</summary>
-            <div className="mt-2 space-y-2 text-sm">
-              <p>
-                保存形式・アプリの版・生成状態・件数をJSONに書き出します。記事本文、画像、APIキー、ファイルパスは含めず、自動送信もしません。
-              </p>
-              <Button
-                size="sm"
-                variant="secondary"
-                onClick={async () => {
-                  try {
-                    const file = await window.electronAPI.diagnostics.export();
-                    if (file) toast.success(`診断を書き出しました: ${file}`);
-                  } catch (error) {
-                    toast.error(String(error));
-                  }
-                }}
-              >
-                診断ファイルを保存
-              </Button>
-              <p>
-                不具合報告には、再現手順と期待した結果、実際の結果を添えてください。公開する前に診断内容をご確認ください。
-              </p>
-            </div>
-          </details>
-
-          {activeTab === 'api' && (
-            <Card title="APIキー設定" subtitle="各サービスの接続状態を確認しながら保存">
-              <label className="mb-4 block text-sm">
-                サービスごとの同時リクエスト数
-                <select
-                  className="nv-input mt-1"
-                  value={settings.generationConcurrency}
-                  onChange={(event) =>
-                    setSettings((previous) => ({
-                      ...previous,
-                      generationConcurrency: Number(event.target.value),
-                    }))
-                  }
-                >
-                  {[1, 2, 3, 4].map((count) => (
-                    <option key={count} value={count}>
-                      {count}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <div className="space-y-4">
-                {(Object.keys(serviceLabels) as ApiKeyService[]).map((service) => (
-                  <div
-                    key={service}
-                    className="rounded-[8px] border border-[var(--nv-color-border)] p-4"
-                  >
-                    <div className="mb-3">
-                      <h3 className="text-sm font-semibold text-slate-900">
-                        {serviceLabels[service].name}
-                      </h3>
-                      <p className="mt-1 text-xs text-slate-600">
-                        {serviceLabels[service].description}
-                      </p>
-                      <a
-                        href={serviceLabels[service].url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="mt-1 inline-block text-xs text-[var(--nv-color-accent)] hover:underline"
-                      >
-                        APIキー取得ページ
-                      </a>
-                    </div>
-
-                    <div className="flex flex-wrap gap-2">
-                      <input
-                        type="password"
-                        aria-label={`${serviceLabels[service].name} APIキー`}
-                        value={apiKeys[service]}
-                        onChange={(e) =>
-                          setApiKeys((prev) => ({ ...prev, [service]: e.target.value }))
-                        }
-                        placeholder="APIキーを入力"
-                        className="nv-input min-w-[260px] flex-1 font-mono text-sm"
-                      />
-                      <Button
-                        onClick={() => handleSaveApiKey(service)}
-                        disabled={
-                          !apiKeys[service] ||
-                          apiKeys[service] === '••••••••••••••••' ||
-                          isSaving[service]
-                        }
-                      >
-                        {isSaving[service] ? '保存中...' : '保存'}
-                      </Button>
-                      <Button
-                        variant="secondary"
-                        onClick={() => handleTestConnection(service)}
-                        disabled={isTesting[service]}
-                      >
-                        {isTesting[service] ? 'テスト中...' : '接続テスト'}
-                      </Button>
-                    </div>
-
-                    {connectionStatus[service] && (
-                      <div className="mt-3 rounded-[8px] border border-[var(--nv-color-border)] bg-slate-50 p-3 text-xs">
-                        <div className="flex items-center gap-2">
-                          <StatusChip
-                            tone={connectionStatus[service]!.success ? 'success' : 'danger'}
-                            label={connectionStatus[service]!.success ? '接続成功' : '接続失敗'}
-                          />
-                          {connectionStatus[service]!.latencyMs && (
-                            <Badge tone="neutral">{connectionStatus[service]!.latencyMs}ms</Badge>
-                          )}
-                        </div>
-                        <p className="mt-2 text-slate-600">{connectionStatus[service]!.message}</p>
-                      </div>
-                    )}
-                  </div>
-                ))}
-              </div>
-            </Card>
-          )}
-
-          {activeTab === 'video' && (
-            <Card title="デフォルト動画設定" subtitle="新規プロジェクトの初期値">
-              <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-                <div>
-                  <label
-                    htmlFor="SettingsPage-field-1"
-                    className="mb-1 block text-xs font-semibold text-slate-600"
-                  >
-                    解像度
-                  </label>
-                  <select
-                    id="SettingsPage-field-1"
-                    value={settings.videoResolution}
-                    onChange={(e) =>
-                      setSettings((prev) => ({
-                        ...prev,
-                        videoResolution: e.target.value as Settings['videoResolution'],
-                      }))
-                    }
-                    className="nv-input"
-                  >
-                    <option value="1920x1080">1920x1080 (Full HD)</option>
-                    <option value="1280x720">1280x720 (HD)</option>
-                    <option value="3840x2160">3840x2160 (4K)</option>
-                  </select>
-                </div>
-                <div>
-                  <label
-                    htmlFor="SettingsPage-field-2"
-                    className="mb-1 block text-xs font-semibold text-slate-600"
-                  >
-                    フレームレート
-                  </label>
-                  <select
-                    id="SettingsPage-field-2"
-                    value={settings.videoFps}
-                    onChange={(e) =>
-                      setSettings((prev) => ({ ...prev, videoFps: Number(e.target.value) }))
-                    }
-                    className="nv-input"
-                  >
-                    <option value={24}>24 fps</option>
-                    <option value={30}>30 fps</option>
-                    <option value={60}>60 fps</option>
-                  </select>
-                </div>
-                <div>
-                  <label
-                    htmlFor="SettingsPage-field-3"
-                    className="mb-1 block text-xs font-semibold text-slate-600"
-                  >
-                    動画ビットレート
-                  </label>
-                  <input
-                    id="SettingsPage-field-3"
-                    type="text"
-                    value={settings.videoBitrate}
-                    onChange={(e) =>
-                      setSettings((prev) => ({ ...prev, videoBitrate: e.target.value }))
-                    }
-                    className="nv-input"
-                    placeholder="8M"
-                  />
-                </div>
-                <div>
-                  <label
-                    htmlFor="SettingsPage-field-4"
-                    className="mb-1 block text-xs font-semibold text-slate-600"
-                  >
-                    音声ビットレート
-                  </label>
-                  <input
-                    id="SettingsPage-field-4"
-                    type="text"
-                    value={settings.audioBitrate}
-                    onChange={(e) =>
-                      setSettings((prev) => ({ ...prev, audioBitrate: e.target.value }))
-                    }
-                    className="nv-input"
-                    placeholder="192k"
-                  />
-                </div>
-                <div>
-                  <label
-                    htmlFor="SettingsPage-field-5"
-                    className="mb-1 block text-xs font-semibold text-slate-600"
-                  >
-                    読み上げ開始遅延（秒）
-                  </label>
-                  <input
-                    id="SettingsPage-field-5"
-                    type="number"
-                    min="0"
-                    max="2"
-                    step="0.05"
-                    value={settings.videoPartLeadInSec}
-                    onChange={(e) =>
-                      setSettings((prev) => ({
-                        ...prev,
-                        videoPartLeadInSec: Number.isFinite(Number(e.target.value))
-                          ? Number(e.target.value)
-                          : 0,
-                      }))
-                    }
-                    className="nv-input"
-                  />
-                </div>
-                <div>
-                  <label
-                    htmlFor="SettingsPage-field-6"
-                    className="mb-1 block text-xs font-semibold text-slate-600"
-                  >
-                    アスペクト比
-                  </label>
-                  <select
-                    id="SettingsPage-field-6"
-                    value={settings.defaultAspectRatio}
-                    onChange={(e) =>
-                      setSettings((prev) => ({
-                        ...prev,
-                        defaultAspectRatio: e.target.value as Settings['defaultAspectRatio'],
-                      }))
-                    }
-                    className="nv-input"
-                  >
-                    <option value="16:9">16:9 (横長)</option>
-                    <option value="9:16">9:16 (縦長)</option>
-                    <option value="1:1">1:1 (正方形)</option>
-                  </select>
-                </div>
-                <div className="md:col-span-2">
-                  <label className="mb-1 block text-xs font-semibold text-slate-600">
-                    オープニング動画
-                  </label>
-                  <div className="flex gap-2">
-                    <input
-                      type="text"
-                      value={settings.openingVideoPath}
-                      readOnly
-                      placeholder="未設定"
-                      className="nv-input flex-1 bg-slate-50"
-                    />
-                    <Button
-                      variant="secondary"
-                      onClick={() => handleSelectVideoFile('openingVideoPath')}
-                    >
-                      参照
-                    </Button>
-                    <Button
-                      variant="secondary"
-                      onClick={() => setSettings((prev) => ({ ...prev, openingVideoPath: '' }))}
-                      disabled={!settings.openingVideoPath}
-                    >
-                      クリア
-                    </Button>
-                  </div>
-                </div>
-                <div className="md:col-span-2">
-                  <label className="mb-1 block text-xs font-semibold text-slate-600">
-                    エンディング動画
-                  </label>
-                  <div className="flex gap-2">
-                    <input
-                      type="text"
-                      value={settings.endingVideoPath}
-                      readOnly
-                      placeholder="未設定"
-                      className="nv-input flex-1 bg-slate-50"
-                    />
-                    <Button
-                      variant="secondary"
-                      onClick={() => handleSelectVideoFile('endingVideoPath')}
-                    >
-                      参照
-                    </Button>
-                    <Button
-                      variant="secondary"
-                      onClick={() => setSettings((prev) => ({ ...prev, endingVideoPath: '' }))}
-                      disabled={!settings.endingVideoPath}
-                    >
-                      クリア
-                    </Button>
-                  </div>
-                </div>
-              </div>
-            </Card>
-          )}
-
-          {activeTab === 'audio' && (
-            <>
-              <Card title="スクリプト生成AI" subtitle="ナレーション原稿を作るモデル設定">
-                <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-                  <div>
-                    <label
-                      htmlFor="SettingsPage-field-7"
-                      className="mb-1 block text-xs font-semibold text-slate-600"
-                    >
-                      スクリプト生成モデル
-                    </label>
-                    <select
-                      id="SettingsPage-field-7"
-                      value={settings.scriptTextModel}
-                      onChange={(e) =>
-                        setSettings((prev) => ({
-                          ...prev,
-                          scriptTextModel: e.target.value as Settings['scriptTextModel'],
-                        }))
-                      }
-                      className="nv-input"
-                    >
-                      {TEXT_COMPLETION_MODELS.map((model) => (
-                        <option key={model} value={model}>
-                          {getTextCompletionModelLabel(model)}
-                        </option>
-                      ))}
-                    </select>
-                    <p className="mt-1 text-xs text-slate-600">
-                      モデルID: {settings.scriptTextModel}
-                    </p>
-                    {getTextCompletionModelDescription(settings.scriptTextModel) && (
-                      <p className="mt-1 text-xs text-slate-600">
-                        {getTextCompletionModelDescription(settings.scriptTextModel)}
-                      </p>
-                    )}
-                  </div>
-                  {isOpenAITextCompletionModel(settings.scriptTextModel) ? (
-                    <div>
-                      <label
-                        htmlFor="SettingsPage-field-8"
-                        className="mb-1 block text-xs font-semibold text-slate-600"
-                      >
-                        推論強度
-                      </label>
-                      <select
-                        id="SettingsPage-field-8"
-                        value={settings.openaiReasoningEffort}
-                        onChange={(e) =>
-                          setSettings((prev) => ({
-                            ...prev,
-                            openaiReasoningEffort: e.target
-                              .value as Settings['openaiReasoningEffort'],
-                          }))
-                        }
-                        className="nv-input"
-                      >
-                        {scriptOpenAIReasoningOptions.map((effort) => (
-                          <option key={effort} value={effort}>
-                            {formatOpenAIReasoningLabel(effort)}
-                          </option>
-                        ))}
-                      </select>
-                      <p className="mt-1 text-xs text-slate-600">
-                        現在選択中のOpenAIモデルで共通して使える値だけを表示しています。
-                      </p>
-                    </div>
-                  ) : isAnthropicTextCompletionModel(settings.scriptTextModel) ? (
-                    <div>
-                      <label
-                        htmlFor="SettingsPage-field-claude-effort-script"
-                        className="mb-1 block text-xs font-semibold text-slate-600"
-                      >
-                        思考の深さ
-                      </label>
-                      <select
-                        id="SettingsPage-field-claude-effort-script"
-                        value={settings.claudeEffort}
-                        onChange={(e) =>
-                          setSettings((prev) => ({
-                            ...prev,
-                            claudeEffort: e.target.value as Settings['claudeEffort'],
-                          }))
-                        }
-                        className="nv-input"
-                      >
-                        {scriptClaudeEffortOptions.map((effort) => (
-                          <option key={effort} value={effort}>
-                            {formatClaudeEffortLabel(effort)}
-                          </option>
-                        ))}
-                      </select>
-                      <p className="mt-1 text-xs text-slate-600">
-                        選択中の {getTextCompletionModelLabel(settings.scriptTextModel)}{' '}
-                        で使える値だけを表示しています。高いほど品質が上がり、時間と費用が増えます。
-                      </p>
-                    </div>
-                  ) : (
-                    <div>
-                      <label
-                        htmlFor="SettingsPage-field-9"
-                        className="mb-1 block text-xs font-semibold text-slate-600"
-                      >
-                        思考レベル
-                      </label>
-                      <select
-                        id="SettingsPage-field-9"
-                        value={settings.geminiThinkingLevel}
-                        onChange={(e) =>
-                          setSettings((prev) => ({
-                            ...prev,
-                            geminiThinkingLevel: e.target.value as Settings['geminiThinkingLevel'],
-                          }))
-                        }
-                        className="nv-input"
-                      >
-                        {scriptGeminiThinkingOptions.map((level) => (
-                          <option key={level} value={level}>
-                            {formatGeminiThinkingLabel(level)}
-                          </option>
-                        ))}
-                      </select>
-                      <p className="mt-1 text-xs text-slate-600">
-                        選択中の {getTextCompletionModelLabel(settings.scriptTextModel)}{' '}
-                        で使える値だけを表示しています。
-                      </p>
-                    </div>
-                  )}
-                </div>
-              </Card>
-
-              <Card title="デフォルト音声設定" subtitle="engine / model / voice の既定値">
-                <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
-                  <div>
-                    <label
-                      htmlFor="SettingsPage-field-10"
-                      className="mb-1 block text-xs font-semibold text-slate-600"
-                    >
-                      音声生成モデル
-                    </label>
-                    <select
-                      id="SettingsPage-field-10"
-                      value={settings.ttsModel}
-                      onChange={(e) =>
-                        setSettings((prev) => ({
-                          ...prev,
-                          ttsModel: e.target.value as Settings['ttsModel'],
-                        }))
-                      }
-                      className="nv-input"
-                    >
-                      {GEMINI_TTS_MODELS.map((model) => (
-                        <option key={model} value={model}>
-                          {getGeminiTtsModelLabel(model)}
-                        </option>
-                      ))}
-                    </select>
-                    <p className="mt-1 text-xs text-slate-600">モデルID: {settings.ttsModel}</p>
-                  </div>
-                  <div>
-                    <label className="mb-1 block text-xs font-semibold text-slate-600">
-                      ボイス
-                    </label>
-                    {ttsVoices.length > 0 ? (
-                      <select
-                        aria-label="ボイス"
-                        value={settings.ttsVoice}
-                        onChange={(e) =>
-                          setSettings((prev) => ({ ...prev, ttsVoice: e.target.value }))
-                        }
-                        className="nv-input"
-                        disabled={isLoadingTtsVoices}
-                      >
-                        {ttsVoices.slice(0, 200).map((voice) => (
-                          <option key={voice.name} value={voice.name}>
-                            {voice.name}
-                          </option>
-                        ))}
-                      </select>
-                    ) : (
-                      <input
-                        type="text"
-                        aria-label="ボイス"
-                        value={settings.ttsVoice}
-                        onChange={(e) =>
-                          setSettings((prev) => ({ ...prev, ttsVoice: e.target.value }))
-                        }
-                        className="nv-input"
-                        placeholder={isLoadingTtsVoices ? '読み込み中...' : 'Charon'}
-                      />
-                    )}
-                    <p className="mt-1 text-xs text-slate-600">
-                      音声生成ページではここで設定した既定ボイスを使用します。
-                    </p>
-                  </div>
-                  <div className="rounded-[10px] border border-[var(--nv-color-border)] bg-slate-50 p-3">
-                    <p className="text-xs font-semibold text-slate-600">音声エンジン</p>
-                    <div className="mt-2 flex flex-wrap items-center gap-2">
-                      <Badge tone="info">Gemini TTS</Badge>
-                      <span className="text-sm font-semibold text-slate-900">gemini_tts</span>
-                    </div>
-                    <p className="mt-2 text-xs text-slate-600">
-                      現在のアプリは Gemini TTS を既定の音声エンジンとして使用します。話し方の
-                      preset はプロジェクト設定側で切り替えます。
-                    </p>
-                  </div>
-                  <div className="rounded-[10px] border border-[var(--nv-color-border)] bg-slate-50 p-3">
-                    <p className="text-xs font-semibold text-slate-600">話速</p>
-                    <div className="mt-2 text-sm font-semibold text-slate-900">
-                      {settings.ttsSpeakingRate.toFixed(1)}x
-                    </div>
-                    <p className="mt-2 text-xs text-slate-600">
-                      Gemini TTS では話速の個別調整 UI
-                      をまだ提供していないため、この値を表示のみとしています。
-                    </p>
-                  </div>
-                </div>
-              </Card>
-            </>
-          )}
-
-          {activeTab === 'image' && (
-            <>
-              <Card title="画像プロンプト生成AI" subtitle="画像用の指示文を作るモデル設定">
-                <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-                  <div>
-                    <label
-                      htmlFor="SettingsPage-field-11"
-                      className="mb-1 block text-xs font-semibold text-slate-600"
-                    >
-                      画像プロンプト生成モデル
-                    </label>
-                    <select
-                      id="SettingsPage-field-11"
-                      value={settings.imagePromptTextModel}
-                      onChange={(e) =>
-                        setSettings((prev) => ({
-                          ...prev,
-                          imagePromptTextModel: e.target.value as Settings['imagePromptTextModel'],
-                        }))
-                      }
-                      className="nv-input"
-                    >
-                      {TEXT_COMPLETION_MODELS.map((model) => (
-                        <option key={model} value={model}>
-                          {getTextCompletionModelLabel(model)}
-                        </option>
-                      ))}
-                    </select>
-                    <p className="mt-1 text-xs text-slate-600">
-                      モデルID: {settings.imagePromptTextModel}
-                    </p>
-                    {getTextCompletionModelDescription(settings.imagePromptTextModel) && (
-                      <p className="mt-1 text-xs text-slate-600">
-                        {getTextCompletionModelDescription(settings.imagePromptTextModel)}
-                      </p>
-                    )}
-                  </div>
-                  {isOpenAITextCompletionModel(settings.imagePromptTextModel) ? (
-                    <div>
-                      <label
-                        htmlFor="SettingsPage-field-12"
-                        className="mb-1 block text-xs font-semibold text-slate-600"
-                      >
-                        推論強度
-                      </label>
-                      <select
-                        id="SettingsPage-field-12"
-                        value={settings.openaiReasoningEffort}
-                        onChange={(e) =>
-                          setSettings((prev) => ({
-                            ...prev,
-                            openaiReasoningEffort: e.target
-                              .value as Settings['openaiReasoningEffort'],
-                          }))
-                        }
-                        className="nv-input"
-                      >
-                        {imageOpenAIReasoningOptions.map((effort) => (
-                          <option key={effort} value={effort}>
-                            {formatOpenAIReasoningLabel(effort)}
-                          </option>
-                        ))}
-                      </select>
-                      <p className="mt-1 text-xs text-slate-600">
-                        現在選択中のOpenAIモデルで共通して使える値だけを表示しています。
-                      </p>
-                    </div>
-                  ) : isAnthropicTextCompletionModel(settings.imagePromptTextModel) ? (
-                    <div>
-                      <label
-                        htmlFor="SettingsPage-field-claude-effort-image"
-                        className="mb-1 block text-xs font-semibold text-slate-600"
-                      >
-                        思考の深さ
-                      </label>
-                      <select
-                        id="SettingsPage-field-claude-effort-image"
-                        value={settings.claudeEffort}
-                        onChange={(e) =>
-                          setSettings((prev) => ({
-                            ...prev,
-                            claudeEffort: e.target.value as Settings['claudeEffort'],
-                          }))
-                        }
-                        className="nv-input"
-                      >
-                        {imageClaudeEffortOptions.map((effort) => (
-                          <option key={effort} value={effort}>
-                            {formatClaudeEffortLabel(effort)}
-                          </option>
-                        ))}
-                      </select>
-                      <p className="mt-1 text-xs text-slate-600">
-                        選択中の {getTextCompletionModelLabel(settings.imagePromptTextModel)}{' '}
-                        で使える値だけを表示しています。高いほど品質が上がり、時間と費用が増えます。
-                      </p>
-                    </div>
-                  ) : (
-                    <div>
-                      <label
-                        htmlFor="SettingsPage-field-13"
-                        className="mb-1 block text-xs font-semibold text-slate-600"
-                      >
-                        思考レベル
-                      </label>
-                      <select
-                        id="SettingsPage-field-13"
-                        value={settings.geminiThinkingLevel}
-                        onChange={(e) =>
-                          setSettings((prev) => ({
-                            ...prev,
-                            geminiThinkingLevel: e.target.value as Settings['geminiThinkingLevel'],
-                          }))
-                        }
-                        className="nv-input"
-                      >
-                        {imageGeminiThinkingOptions.map((level) => (
-                          <option key={level} value={level}>
-                            {formatGeminiThinkingLabel(level)}
-                          </option>
-                        ))}
-                      </select>
-                      <p className="mt-1 text-xs text-slate-600">
-                        選択中の {getTextCompletionModelLabel(settings.imagePromptTextModel)}{' '}
-                        で使える値だけを表示しています。
-                      </p>
-                    </div>
-                  )}
-                </div>
-              </Card>
-
-              <Card title="デフォルト画像設定" subtitle="画像生成モデルと解像度の選択">
-                <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-                  <div>
-                    <label
-                      htmlFor="SettingsPage-field-14"
-                      className="mb-1 block text-xs font-semibold text-slate-600"
-                    >
-                      画像生成モデル
-                    </label>
-                    <select
-                      id="SettingsPage-field-14"
-                      value={settings.imageModel}
-                      onChange={(e) =>
-                        setSettings((prev) => ({
-                          ...prev,
-                          imageModel: e.target.value as Settings['imageModel'],
-                        }))
-                      }
-                      className="nv-input"
-                    >
-                      {IMAGE_MODELS.map((model) => (
-                        <option key={model} value={model}>
-                          {getImageModelLabel(model)}
-                        </option>
-                      ))}
-                    </select>
-                    <p className="mt-1 text-xs text-slate-600">モデルID: {settings.imageModel}</p>
-                    {isOpenAIImageModel(settings.imageModel) && (
-                      <p className="mt-1 text-xs text-slate-600">
-                        OpenAI APIキーを使用します。横長・縦長のFull
-                        HD相当は1792×1008、正方形の4K相当は2880×2880です。2Kを超える画素数の出力は実験的対応です。
-                      </p>
-                    )}
-                  </div>
-                  <div>
-                    <label
-                      htmlFor="SettingsPage-field-15"
-                      className="mb-1 block text-xs font-semibold text-slate-600"
-                    >
-                      画像生成解像度
-                    </label>
-                    <select
-                      id="SettingsPage-field-15"
-                      value={settings.imageResolution}
-                      onChange={(e) =>
-                        setSettings((prev) => ({
-                          ...prev,
-                          imageResolution: e.target.value as Settings['imageResolution'],
-                        }))
-                      }
-                      className="nv-input"
-                    >
-                      {IMAGE_RESOLUTIONS.map((resolution) => (
-                        <option key={resolution} value={resolution}>
-                          {IMAGE_RESOLUTION_LABELS[resolution]}
-                        </option>
-                      ))}
-                    </select>
-                    <p className="mt-1 text-xs text-slate-600">
-                      GPT Image 2 / 2.5
-                      では指定解像度を優先し、API制約に応じて近いサイズへ自動調整します。
-                    </p>
-                  </div>
-                </div>
-              </Card>
-            </>
-          )}
-
-          {settingsSaveError && (
-            <ErrorDetailPanel
-              title="保存エラー"
-              message={`設定の自動保存に失敗しました。変更内容は画面上に残っています。詳細: ${settingsSaveError}`}
+          {settingsSaveError !== null && (
+            <FriendlyError
+              title="設定を保存できませんでした(変更内容は画面に残っています)"
+              error={settingsSaveError}
             />
           )}
+
+          <div
+            role="tabpanel"
+            id={`settings-panel-${activeSection}`}
+            aria-labelledby={`settings-tab-${activeSection}`}
+          >
+            {activeSection === 'api' && (
+              <Card
+                title="API キー"
+                subtitle="AI サービスを使うための鍵です。キーはこの Mac の中に暗号化して保存します。"
+                actions={
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    onClick={() => navigate('/welcome', { state: { returnTo: '/settings' } })}
+                  >
+                    はじめの案内を開く
+                  </Button>
+                }
+              >
+                <ApiKeyList status={keyStatus} settings={settings} onSaved={markSaved} />
+              </Card>
+            )}
+
+            {activeSection === 'models' && (
+              <Card
+                title="生成モデル"
+                subtitle="用途ごとに使う AI を選びます。次に作るものから使われます。"
+              >
+                <div className="space-y-6">
+                  <Section
+                    title="文章(台本と画像の指示)"
+                    description="記事から台本を書き、各シーンの画像の指示を作ります。"
+                  >
+                    <div>
+                      <label htmlFor="settings-text-model" className={fieldLabel}>
+                        文章を作るモデル
+                      </label>
+                      {textModelSelect('settings-text-model', settings.scriptTextModel, (model) =>
+                        setSettings((prev) => ({
+                          ...prev,
+                          scriptTextModel: model,
+                          imagePromptTextModel: model,
+                        }))
+                      )}
+                      {getTextCompletionModelDescription(settings.scriptTextModel) && (
+                        <p className={fieldHint}>
+                          {getTextCompletionModelDescription(settings.scriptTextModel)}
+                        </p>
+                      )}
+                      {textModelsDiffer && (
+                        <p className={fieldHint}>
+                          画像の指示には{' '}
+                          {getTextCompletionModelLabel(settings.imagePromptTextModel)}{' '}
+                          を使っています(別々に選ぶときは「詳細設定」で変えられます)。
+                        </p>
+                      )}
+                      <KeyNote
+                        service={textModelService(settings.scriptTextModel)}
+                        saved={keyStatus[textModelService(settings.scriptTextModel)]}
+                        onOpenKeys={openKeys}
+                      />
+                    </div>
+                  </Section>
+
+                  <Section title="画像" description="各シーンの画像を作ります。">
+                    <div className="grid gap-4 md:grid-cols-2">
+                      <div>
+                        <label htmlFor="settings-image-model" className={fieldLabel}>
+                          画像を作るモデル
+                        </label>
+                        <select
+                          id="settings-image-model"
+                          value={settings.imageModel}
+                          onChange={(e) =>
+                            update('imageModel', e.target.value as Settings['imageModel'])
+                          }
+                          className="nv-input"
+                        >
+                          {withSavedOption(SELECTABLE_IMAGE_MODELS, settings.imageModel).map(
+                            (model) => (
+                              <option key={model} value={model}>
+                                {modelOptionLabel(
+                                  getImageModelLabel(model),
+                                  SELECTABLE_IMAGE_MODELS.includes(model),
+                                  model === DEFAULT_IMAGE_MODEL
+                                )}
+                              </option>
+                            )
+                          )}
+                        </select>
+                        <KeyNote
+                          service={
+                            getImageModelProvider(settings.imageModel) === 'openai'
+                              ? 'openai'
+                              : 'google_ai'
+                          }
+                          saved={
+                            keyStatus[
+                              getImageModelProvider(settings.imageModel) === 'openai'
+                                ? 'openai'
+                                : 'google_ai'
+                            ]
+                          }
+                          onOpenKeys={openKeys}
+                        />
+                      </div>
+                      <div>
+                        <label htmlFor="settings-image-resolution" className={fieldLabel}>
+                          画像の大きさ
+                        </label>
+                        <select
+                          id="settings-image-resolution"
+                          value={settings.imageResolution}
+                          onChange={(e) =>
+                            update('imageResolution', e.target.value as Settings['imageResolution'])
+                          }
+                          className="nv-input"
+                        >
+                          {IMAGE_RESOLUTIONS.map((resolution) => (
+                            <option key={resolution} value={resolution}>
+                              {IMAGE_RESOLUTION_LABELS[resolution]}
+                              {resolution === DEFAULT_IMAGE_RESOLUTION ? '(おすすめ)' : ''}
+                              {resolution === '4k' && isOpenAIImage ? '(実験的)' : ''}
+                            </option>
+                          ))}
+                        </select>
+                        <p className={fieldHint}>
+                          大きいほど細部がきれいになり、時間と費用が増えます。
+                          {isGeminiImageModel(settings.imageModel) &&
+                          settings.imageResolution === 'fhd'
+                            ? 'このモデルでは、文字を読みやすくするため 2K で作ります。'
+                            : ''}
+                          {isOpenAIImage && settings.imageResolution === '4k'
+                            ? 'GPT Image の 4K は OpenAI が実験的としている大きさです。うまく作れないときは 2K 相当にしてください。'
+                            : ''}
+                        </p>
+                      </div>
+                    </div>
+                  </Section>
+
+                  <Section title="音声" description="台本を読み上げるナレーションを作ります。">
+                    <div className="grid gap-4 md:grid-cols-2">
+                      <div>
+                        <label htmlFor="settings-voice-model" className={fieldLabel}>
+                          音声を作るモデル
+                        </label>
+                        <select
+                          id="settings-voice-model"
+                          value={settings.ttsModel}
+                          onChange={(e) =>
+                            update('ttsModel', e.target.value as Settings['ttsModel'])
+                          }
+                          className="nv-input"
+                        >
+                          {withSavedOption(SELECTABLE_GEMINI_TTS_MODELS, settings.ttsModel).map(
+                            (model) => (
+                              <option key={model} value={model}>
+                                {modelOptionLabel(
+                                  getGeminiTtsModelLabel(model),
+                                  SELECTABLE_GEMINI_TTS_MODELS.includes(model),
+                                  model === DEFAULT_GEMINI_TTS_MODEL
+                                )}
+                              </option>
+                            )
+                          )}
+                        </select>
+                        <KeyNote
+                          service="google_ai"
+                          saved={keyStatus.google_ai}
+                          onOpenKeys={openKeys}
+                        />
+                      </div>
+                      <div>
+                        <label htmlFor="settings-voice" className={fieldLabel}>
+                          声
+                        </label>
+                        {ttsVoices.length > 0 ? (
+                          <select
+                            id="settings-voice"
+                            value={settings.ttsVoice}
+                            onChange={(e) => update('ttsVoice', e.target.value)}
+                            className="nv-input"
+                            disabled={isLoadingTtsVoices}
+                          >
+                            {ttsVoices.slice(0, 200).map((voice) => (
+                              <option key={voice.name} value={voice.name}>
+                                {voice.name}
+                              </option>
+                            ))}
+                          </select>
+                        ) : (
+                          <input
+                            id="settings-voice"
+                            type="text"
+                            value={settings.ttsVoice}
+                            onChange={(e) => update('ttsVoice', e.target.value)}
+                            className="nv-input"
+                            placeholder={isLoadingTtsVoices ? '読み込み中…' : 'Charon'}
+                          />
+                        )}
+                        <p className={fieldHint}>
+                          話し方(ニュース調など)は「新しい動画」で既定を決め、動画ごとには記事画面の詳細設定で変えられます。
+                        </p>
+                      </div>
+                    </div>
+                  </Section>
+                </div>
+              </Card>
+            )}
+
+            {activeSection === 'newVideo' && (
+              <NewVideoDefaultsSection settings={settings} onChange={updateMany} />
+            )}
+
+            {activeSection === 'usage' && (
+              <UsageCostSection
+                jpyPerUsd={settings.jpyPerUsd}
+                onChangeRate={(value) => update('jpyPerUsd', value)}
+              />
+            )}
+
+            {activeSection === 'video' && (
+              <Card
+                title="動画"
+                subtitle="書き出す動画の大きさと、最初と最後に流す動画です。画面の縦横は、動画の用途で決まります。"
+              >
+                <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                  <div>
+                    <label htmlFor="settings-video-resolution" className={fieldLabel}>
+                      動画の大きさ
+                    </label>
+                    <select
+                      id="settings-video-resolution"
+                      value={settings.videoResolution}
+                      onChange={(e) =>
+                        update('videoResolution', e.target.value as Settings['videoResolution'])
+                      }
+                      className="nv-input"
+                    >
+                      <option value="1920x1080">フル HD(1920×1080・おすすめ)</option>
+                      <option value="1280x720">HD(1280×720・軽い)</option>
+                      <option value="3840x2160">4K(3840×2160・時間がかかります)</option>
+                    </select>
+                  </div>
+                  {(['openingVideoPath', 'endingVideoPath'] as const).map((field) => (
+                    <div key={field} className="md:col-span-2">
+                      <p className={fieldLabel}>
+                        {field === 'openingVideoPath'
+                          ? '最初に流す動画(任意)'
+                          : '最後に流す動画(任意)'}
+                      </p>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span
+                          className="min-w-0 flex-1 truncate text-sm text-[var(--nv-color-text)]"
+                          title={settings[field] || undefined}
+                        >
+                          {settings[field] ? fileName(settings[field]) : '未設定'}
+                        </span>
+                        <Button
+                          variant="secondary"
+                          size="sm"
+                          onClick={() => void handleSelectVideoFile(field)}
+                        >
+                          選ぶ
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => update(field, '')}
+                          disabled={!settings[field]}
+                        >
+                          外す
+                        </Button>
+                      </div>
+                    </div>
+                  ))}
+                  <p className="text-xs text-[var(--nv-color-muted)] md:col-span-2">
+                    最初と最後に流す動画は、動画画面で使うかどうかを切り替えられます。フレームレートなどの細かい設定は「詳細設定」にあります。
+                  </p>
+                </div>
+              </Card>
+            )}
+
+            {activeSection === 'dictionary' && (
+              <Card
+                title="読み辞書"
+                subtitle="ナレーションで読み間違える言葉の読みを登録します。すべてのプロジェクトで使われます。"
+              >
+                {hasLoadedSettings ? (
+                  <div className="space-y-3">
+                    <ReadingDictionaryEditor
+                      entries={settings.readingDictionary}
+                      onCommit={(readingDictionary) =>
+                        setSettings((prev) => ({ ...prev, readingDictionary }))
+                      }
+                    />
+                    <p className="text-xs text-[var(--nv-color-muted)]">
+                      登録した読みは、このあと作る音声から使われます。作成済みの音声は、音声画面で作り直すと反映されます。
+                    </p>
+                  </div>
+                ) : (
+                  <p className="text-sm text-[var(--nv-color-muted)]">読み込み中…</p>
+                )}
+              </Card>
+            )}
+
+            {activeSection === 'advanced' && (
+              <Card title="詳細設定" subtitle="ふだんは変える必要はありません。">
+                <div className="space-y-6">
+                  <Section
+                    title="文章のモデル(用途別)"
+                    description="台本と画像の指示で別のモデルを使うときに設定します。"
+                  >
+                    <div className="grid gap-4 md:grid-cols-2">
+                      <div>
+                        <label htmlFor="settings-script-model" className={fieldLabel}>
+                          台本のモデル
+                        </label>
+                        {textModelSelect(
+                          'settings-script-model',
+                          settings.scriptTextModel,
+                          (model) => update('scriptTextModel', model)
+                        )}
+                      </div>
+                      <div>
+                        <label htmlFor="settings-image-prompt-model" className={fieldLabel}>
+                          画像の指示のモデル
+                        </label>
+                        {textModelSelect(
+                          'settings-image-prompt-model',
+                          settings.imagePromptTextModel,
+                          (model) => update('imagePromptTextModel', model)
+                        )}
+                      </div>
+                      {effortControl('script')}
+                      {effortControl('image')}
+                    </div>
+                  </Section>
+
+                  <Section title="動画の書き出し">
+                    <div className="grid gap-4 md:grid-cols-2">
+                      <div>
+                        <label htmlFor="settings-fps" className={fieldLabel}>
+                          フレームレート(fps)
+                        </label>
+                        <select
+                          id="settings-fps"
+                          value={settings.videoFps}
+                          onChange={(e) => update('videoFps', Number(e.target.value))}
+                          className="nv-input"
+                        >
+                          <option value={24}>24 fps</option>
+                          <option value={30}>30 fps(おすすめ)</option>
+                          <option value={60}>60 fps</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label htmlFor="settings-lead-in" className={fieldLabel}>
+                          シーンの読み上げ前の間(秒)
+                        </label>
+                        <input
+                          id="settings-lead-in"
+                          type="number"
+                          min="0"
+                          max="2"
+                          step="0.05"
+                          value={settings.videoPartLeadInSec}
+                          onChange={(e) =>
+                            update(
+                              'videoPartLeadInSec',
+                              Number.isFinite(Number(e.target.value)) ? Number(e.target.value) : 0
+                            )
+                          }
+                          className="nv-input w-32"
+                        />
+                      </div>
+                      <div>
+                        <label htmlFor="settings-video-bitrate-mode" className={fieldLabel}>
+                          映像のビットレート
+                        </label>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <select
+                            id="settings-video-bitrate-mode"
+                            value={settings.videoBitrateMode}
+                            onChange={(e) =>
+                              update(
+                                'videoBitrateMode',
+                                e.target.value === 'manual' ? 'manual' : 'auto'
+                              )
+                            }
+                            className="nv-input w-auto"
+                          >
+                            <option value="auto">自動(おすすめ)</option>
+                            <option value="manual">指定する</option>
+                          </select>
+                          {settings.videoBitrateMode === 'manual' && (
+                            <input
+                              id="settings-video-bitrate"
+                              type="text"
+                              aria-label="映像のビットレート(例: 8M)"
+                              value={settings.videoBitrate}
+                              onChange={(e) => update('videoBitrate', e.target.value)}
+                              className="nv-input w-28"
+                              placeholder={autoBitrate}
+                            />
+                          )}
+                        </div>
+                        <p className={fieldHint}>
+                          {settings.videoBitrateMode === 'auto'
+                            ? `動画の大きさと fps から決めます(YouTube の推奨値)。今の設定(${VIDEO_RESOLUTION_WORDS[settings.videoResolution]}・${settings.videoFps} fps)では ${autoBitrate} です。`
+                            : `例: 8M、12M。書き方が正しくないときは自動(今の設定では ${autoBitrate})で書き出します。`}
+                        </p>
+                      </div>
+                      <div>
+                        <label htmlFor="settings-audio-bitrate" className={fieldLabel}>
+                          音声のビットレート
+                        </label>
+                        <input
+                          id="settings-audio-bitrate"
+                          type="text"
+                          value={settings.audioBitrate}
+                          onChange={(e) => update('audioBitrate', e.target.value)}
+                          className="nv-input w-32"
+                          placeholder="192k"
+                        />
+                      </div>
+                    </div>
+                  </Section>
+
+                  <Section
+                    title="サポート"
+                    description="不具合を報告するときに使う診断ファイルを保存します。記事本文・画像・API キー・ファイルの場所は含みません。自動では送信しません。"
+                  >
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      onClick={async () => {
+                        try {
+                          const file = await window.electronAPI.diagnostics.export();
+                          if (file) toast.success('診断ファイルを保存しました');
+                        } catch (error) {
+                          const content = errorToastContent(
+                            explainError(error),
+                            '診断ファイルを保存できませんでした'
+                          );
+                          toast.error(content.message, content.title);
+                        }
+                      }}
+                    >
+                      診断ファイルを保存
+                    </Button>
+                  </Section>
+                </div>
+              </Card>
+            )}
+          </div>
+
+          <p className="text-xs text-[var(--nv-color-muted)]">
+            実行中や「続きから」で再開する自動生成は、開始したときの設定で進みます。
+          </p>
         </div>
       </div>
     </div>

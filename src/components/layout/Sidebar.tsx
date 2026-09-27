@@ -71,9 +71,9 @@ export function Sidebar() {
   const shouldShowReturnToWork = location.pathname === '/settings' && Boolean(returnTo);
 
   return (
-    <aside className="flex h-full w-16 md:w-44 shrink-0 flex-col border-r border-[#0f2a4d] bg-[var(--nv-color-brand)] text-white">
+    <aside className="flex h-full w-16 md:w-44 shrink-0 flex-col border-r border-white/10 bg-[var(--nv-color-brand)] text-white">
       <div className="titlebar-drag hidden md:block border-b border-white/10 px-4 pb-3 pt-9">
-        <p className="text-xs uppercase tracking-[0.16em] text-blue-200">NewsVideo</p>
+        <p className="text-xs uppercase tracking-[0.16em] text-white/70">NewsVideo</p>
         <h1 className="mt-1 text-xl font-bold">Desk</h1>
       </div>
 
@@ -96,10 +96,10 @@ export function Sidebar() {
                     : undefined
                 }
                 className={({ isActive }) =>
-                  `titlebar-no-drag flex items-center gap-2 rounded-[8px] px-3 py-2 text-sm transition-colors duration-[var(--nv-duration-fast)] ${
+                  `titlebar-no-drag nv-focus-ring flex items-center gap-2 rounded-[var(--nv-radius-sm)] px-3 py-2 text-sm transition-colors duration-[var(--nv-duration-fast)] ${
                     isActive
                       ? 'bg-white/18 text-white'
-                      : 'text-blue-100 hover:bg-white/10 hover:text-white'
+                      : 'text-white/80 hover:bg-white/10 hover:text-white'
                   }`
                 }
               >
@@ -125,7 +125,7 @@ export function Sidebar() {
 
         {projectId && (
           <p
-            className="hidden md:block mt-4 truncate px-1 text-sm text-blue-100"
+            className="hidden md:block mt-4 truncate px-1 text-sm text-white/80"
             title={projectName}
           >
             {projectName}
@@ -134,7 +134,7 @@ export function Sidebar() {
       </nav>
 
       <div className="hidden md:block border-t border-white/10 px-4 py-3">
-        <p className="text-xs text-blue-200">v{pkg.version}</p>
+        <p className="text-xs text-white/70">v{pkg.version}</p>
       </div>
     </aside>
   );

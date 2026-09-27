@@ -6,10 +6,20 @@ import {
   type RenderOptions,
   renderOptionsSchema,
 } from '../../shared/project/videoFormat';
-import { generationSettings } from '../utils/generationContext';
+import {
+  generationSettings,
+  jobOperationContext,
+  type RenderProgress,
+} from '../utils/generationContext';
+import { logger } from '../utils/logger';
 import { registerOperation } from './operations';
-import { projectSchema } from '../../shared/project/schema';
+import { projectSchema, type Project } from '../../shared/project/schema';
 import { partFreshness, videoInput } from '../../shared/project/integrity';
+import {
+  partRenderFingerprint,
+  renderConflictMessage,
+  renderContentFingerprint,
+} from '../../shared/project/renderIntent';
 import { ProjectRepository } from '../project/repository';
 import { BrowserWindow, app, dialog } from 'electron';
 import * as fs from 'fs/promises';
@@ -31,8 +41,16 @@ import {
 
 type RenderStage = 'preparing' | 'rendering_parts' | 'concatenating' | 'finalizing';
 
+/** 誰が依頼した書き出しか。ジョブの書き出しはジョブの停止(jobs:cancel)で、手動の書き出しは video:cancelRender で止める */
+type RenderOrigin = 'job' | 'manual';
+
 interface ProgressUpdatePayload {
   source: 'video';
+  /** 対象のプロジェクト(画面で、表示中のプロジェクトの書き出しかを見分けるのに使う) */
+  projectId?: string;
+  origin?: RenderOrigin;
+  /** プレビューか書き出しか */
+  kind?: 'preview' | 'render';
   stage?: RenderStage;
   percent?: number;
   current?: number;
@@ -81,13 +99,73 @@ type ProjectLike = {
   outputSettings?: import('../../shared/project/schema').Project['outputSettings'];
 };
 
-let currentJob: VideoJob | null = null;
+type ActiveRender = {
+  projectId: string;
+  origin: RenderOrigin;
+  /** 依頼した画面(webContents)の ID。Main 内からの依頼では undefined */
+  senderId?: number;
+  job: VideoJob;
+};
+/** 実行中の書き出し・プレビュー。実行そのものは operations.ts の待ち行列で 1 件ずつに直列化している */
+const activeRenders = new Set<ActiveRender>();
+
+function cancelVideoJob(job: VideoJob) {
+  job.canceled = true;
+  for (const proc of job.processes) {
+    try {
+      proc.kill('SIGTERM');
+    } catch {
+      // ignore
+    }
+  }
+}
+
+function senderIdOf(event: unknown): number | undefined {
+  const id = (event as { sender?: { id?: unknown } } | undefined)?.sender?.id;
+  return typeof id === 'number' ? id : undefined;
+}
+
+/** メインプロセスでプロジェクトを保存したら、画面側の保持データを最新にするため必ず通知する */
+function notifyProjectChanged(saved: { id: string; revision?: number }) {
+  for (const window of BrowserWindow.getAllWindows())
+    window.webContents.send('project:changed', { id: saved.id, revision: saved.revision });
+}
 
 function sendProgress(payload: Omit<ProgressUpdatePayload, 'source'>) {
   const full: ProgressUpdatePayload = { source: 'video', ...payload };
   for (const win of BrowserWindow.getAllWindows()) {
     win.webContents.send('progress:update', full);
   }
+}
+
+type ProgressReport = Omit<ProgressUpdatePayload, 'source' | 'projectId' | 'origin' | 'kind'>;
+
+/**
+ * 書き出しの進み具合を、画面(progress:update)と自動生成ジョブ(job.progress.video)の両方に流す。
+ * レンダラーは映像 0.5 秒ごとに進捗を出すので、画面への送信は 0.2 秒に 1 回まで・同じ値は送らないよう間引く
+ * (段階の切り替わりと完了は必ず送る)。ジョブ側の保存はジョブエンジンがさらに間引く
+ */
+function createProgressReporter(
+  target: { projectId: string; origin: RenderOrigin; kind: 'preview' | 'render' },
+  onJobProgress?: (progress: RenderProgress) => void
+) {
+  let lastAt = 0;
+  let lastPercent = -1;
+  let lastStage: RenderStage | undefined;
+  let lastMessage: string | undefined;
+  return (report: ProgressReport) => {
+    const percent = Math.max(0, Math.min(100, Math.round(report.percent ?? lastPercent)));
+    const now = Date.now();
+    const milestone = report.stage !== lastStage || percent >= 100 || lastPercent < 0;
+    if (!milestone && percent === lastPercent && report.message === lastMessage) return;
+    if (!milestone && now - lastAt < 200) return;
+    lastAt = now;
+    lastPercent = percent;
+    lastStage = report.stage;
+    lastMessage = report.message;
+    sendProgress({ ...report, ...target, percent });
+    onJobProgress?.({ percent, ...(report.message ? { message: report.message } : {}) });
+  };
 }
 
 function parseResolution(resolution: RenderOptions['resolution']): {
@@ -339,7 +417,17 @@ async function normalizeVideoToSpec(
   const vf = buildScalePadFilter(width, height);
   const hasAudio = await probeHasAudio(ffmpegPath, inputPath);
 
-  const args: string[] = ['-y', '-hide_banner', '-loglevel', 'error', '-i', inputPath];
+  const args: string[] = [
+    '-y',
+    '-hide_banner',
+    '-loglevel',
+    'error',
+    '-progress',
+    'pipe:1',
+    '-nostats',
+    '-i',
+    inputPath,
+  ];
 
   if (!hasAudio) {
     // 音声トラックが無い動画は無音を追加して規格統一
@@ -545,12 +633,14 @@ async function concatSegments(
   segmentPaths: string[],
   outputPath: string,
   options: RenderOptions,
-  job: VideoJob
+  job: VideoJob,
+  expectedDurationSec: number,
+  onFraction?: (fraction: number) => void
 ): Promise<void> {
   const { width, height } = parseResolution(options.resolution);
 
   if (backend.id === 'native') {
-    await concatSegmentsNative(
+    const result = await concatSegmentsNative(
       backend.rendererPath,
       {
         outputPath,
@@ -561,10 +651,24 @@ async function concatSegments(
         audioBitrate: options.audioBitrate,
         segmentPaths,
       },
-      job
+      job,
+      (record) => {
+        const fraction = Number(record.progress);
+        if (record.progress !== undefined && Number.isFinite(fraction))
+          onFraction?.(Math.max(0, Math.min(1, fraction)));
+      }
     );
+    logger.info('[video:render] Concatenated segments', {
+      mode: result?.mode ?? 'unknown',
+      count: segmentPaths.length,
+    });
     return;
   }
+  const onFfmpegProgress = (kv: Record<string, string>) => {
+    const outTimeUs = Number(kv.out_time_ms);
+    if (kv.out_time_ms && Number.isFinite(outTimeUs) && expectedDurationSec > 0)
+      onFraction?.(Math.max(0, Math.min(1, outTimeUs / 1_000_000 / expectedDurationSec)));
+  };
 
   const ffmpegPath = backend.ffmpegPath;
   const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'newsvideo-'));
@@ -578,6 +682,9 @@ async function concatSegments(
     '-hide_banner',
     '-loglevel',
     'error',
+    '-progress',
+    'pipe:1',
+    '-nostats',
     '-f',
     'concat',
     '-safe',
@@ -591,10 +698,12 @@ async function concatSegments(
     outputPath,
   ];
   try {
-    await runVideoFfmpeg(ffmpegPath, copyArgs, job);
+    await runVideoFfmpeg(ffmpegPath, copyArgs, job, onFfmpegProgress);
     await fs.rm(tmpDir, { recursive: true, force: true });
     return;
   } catch {
+    // キャンセルや固まった場合は再エンコードに進まない
+    assertNotCanceled(job);
     // fallback: re-encode
   }
 
@@ -604,6 +713,9 @@ async function concatSegments(
     '-hide_banner',
     '-loglevel',
     'error',
+    '-progress',
+    'pipe:1',
+    '-nostats',
     '-f',
     'concat',
     '-safe',
@@ -634,7 +746,7 @@ async function concatSegments(
     '+faststart',
     outputPath,
   ];
-  await runVideoFfmpeg(ffmpegPath, reencodeArgs, job);
+  await runVideoFfmpeg(ffmpegPath, reencodeArgs, job, onFfmpegProgress);
   await fs.rm(tmpDir, { recursive: true, force: true });
 }
 
@@ -673,6 +785,7 @@ async function renderClosingCardVideo(
         height,
         fps: options.fps,
         videoBitrate: options.videoBitrate,
+        audioBitrate: options.audioBitrate,
         durationSec: 3.6,
         headline: headline || undefined,
         cta: cta || undefined,
@@ -746,6 +859,9 @@ async function renderClosingCardVideo(
     '-hide_banner',
     '-loglevel',
     'error',
+    '-progress',
+    'pipe:1',
+    '-nostats',
     '-f',
     'lavfi',
     '-i',
@@ -905,108 +1021,155 @@ async function findProjectByPartId(
   throw new Error(`Part not found: ${partId}`);
 }
 
-registerOperation('video:cancelRender', async (): Promise<{ success: boolean }> => {
-  if (!currentJob) return { success: true };
-  currentJob.canceled = true;
-  for (const proc of currentJob.processes) {
+/**
+ * 画面から依頼した書き出し・プレビューを止める。projectId を渡すとそのプロジェクトのものだけを止める。
+ * 自動生成ジョブの書き出しは止めない(ジョブの停止 jobs:cancel で止める。ジョブの状態と食い違わないようにするため)
+ */
+registerOperation(
+  'video:cancelRender',
+  async (event, projectId?: unknown): Promise<{ success: boolean }> => {
+    const target = typeof projectId === 'string' && projectId ? projectId : undefined;
+    const senderId = senderIdOf(event);
+    for (const render of activeRenders) {
+      if (render.origin !== 'manual') continue;
+      if (target && render.projectId !== target) continue;
+      if (senderId !== undefined && render.senderId !== undefined && render.senderId !== senderId)
+        continue;
+      cancelVideoJob(render.job);
+    }
+    return { success: true };
+  }
+);
+
+/**
+ * プレビューを作る対象を、待ち行列の順番が来た後に保存済みの最新から読む。
+ * 画面が意図した内容(intended)が渡されたときは、そのパートの内容が最新と一致するかを確かめ、
+ * 本当に違うときだけ競合エラーにする(リビジョンの一致は求めない)。
+ */
+async function resolvePreviewTarget(
+  partId: string,
+  intendedInput: unknown
+): Promise<{ project: ProjectLike; part: PartLike }> {
+  if (intendedInput === undefined || intendedInput === null) {
+    const { project, part } = await findProjectByPartId(partId);
+    return { project, part };
+  }
+  const intended = projectSchema.parse(intendedInput);
+  const latest = await getProjectRepository().load(intended.id);
+  const expected = partRenderFingerprint(intended, partId);
+  const actual = partRenderFingerprint(latest, partId);
+  if (!expected || !actual) throw new Error(`Part not found: ${partId}`);
+  if (expected !== actual) throw new Error(renderConflictMessage('preview'));
+  return { project: latest, part: latest.parts.find((item) => item.id === partId)! };
+}
+
+registerOperation(
+  'video:preview',
+  async (event, partId: string, intended?: unknown): Promise<{ previewPath: string }> => {
+    const job: VideoJob = { canceled: false, processes: new Set() };
+    const { project, part } = await resolvePreviewTarget(partId, intended);
+    const active: ActiveRender = {
+      projectId: project.id,
+      origin: 'manual',
+      senderId: senderIdOf(event),
+      job,
+    };
+    activeRenders.add(active);
+    const sendProgress = createProgressReporter({
+      projectId: project.id,
+      origin: 'manual',
+      kind: 'preview',
+    });
     try {
-      proc.kill('SIGTERM');
-    } catch {
-      // ignore
+      sendProgress({ stage: 'preparing', percent: 0, message: 'プレビュー準備中...' });
+      const backend = await resolveVideoExecutionBackend();
+
+      const settings = await readSettings();
+      const leadInSec =
+        project.outputSettings?.videoPartLeadInSec ?? settings.videoPartLeadInSec ?? 0.3;
+
+      const previewDir = path.join(project.path, 'output', 'previews');
+      await fs.mkdir(previewDir, { recursive: true });
+      const previewPath = path.join(
+        previewDir,
+        `preview-part-${part.index + 1}-${part.id.slice(0, 8)}.mp4`
+      );
+
+      const previewOptions: RenderOptions = {
+        resolution: resolutionForAspect(
+          project.outputSettings?.resolution ?? '1280x720',
+          project.presentationProfile?.aspectRatio ?? '16:9'
+        ),
+        fps: project.outputSettings?.fps ?? 30,
+        videoBitrate: '2M',
+        audioBitrate: '128k',
+        includeOpening: false,
+        includeEnding: false,
+      };
+
+      sendProgress({
+        stage: 'rendering_parts',
+        percent: 10,
+        current: 1,
+        total: 1,
+        message: `プレビュー生成中: ${part.index + 1}/${project.parts.length}`,
+      });
+
+      await renderPartVideo(
+        backend,
+        project,
+        part,
+        previewOptions,
+        previewPath,
+        job,
+        leadInSec,
+        (within) => {
+          sendProgress({
+            stage: 'rendering_parts',
+            percent: Math.round(10 + within * 80),
+            current: 1,
+            total: 1,
+            message: `プレビュー生成中...`,
+          });
+        }
+      );
+
+      sendProgress({ stage: 'finalizing', percent: 100, message: '完了' });
+      await getProjectRepository()
+        .update(project.id, (data) => {
+          data.metrics = metricsSchema.parse(data.metrics ?? {});
+          data.metrics.firstPreviewAt ??= new Date().toISOString();
+        })
+        .then(notifyProjectChanged)
+        .catch(() => {});
+      return { previewPath };
+    } finally {
+      activeRenders.delete(active);
     }
   }
-  return { success: true };
-});
-
-registerOperation('video:preview', async (_, partId: string): Promise<{ previewPath: string }> => {
-  if (currentJob) throw new Error('別の動画処理が実行中です');
-  const job: VideoJob = { canceled: false, processes: new Set() };
-  currentJob = job;
-  try {
-    sendProgress({ stage: 'preparing', percent: 0, message: 'プレビュー準備中...' });
-
-    const { project, part } = await findProjectByPartId(partId);
-    const backend = await resolveVideoExecutionBackend();
-
-    const settings = await readSettings();
-    const leadInSec =
-      project.outputSettings?.videoPartLeadInSec ?? settings.videoPartLeadInSec ?? 0.3;
-
-    const previewDir = path.join(project.path, 'output', 'previews');
-    await fs.mkdir(previewDir, { recursive: true });
-    const previewPath = path.join(
-      previewDir,
-      `preview-part-${part.index + 1}-${part.id.slice(0, 8)}.mp4`
-    );
-
-    const previewOptions: RenderOptions = {
-      resolution: resolutionForAspect(
-        project.outputSettings?.resolution ?? '1280x720',
-        project.presentationProfile?.aspectRatio ?? '16:9'
-      ),
-      fps: project.outputSettings?.fps ?? 30,
-      videoBitrate: '2M',
-      audioBitrate: '128k',
-      includeOpening: false,
-      includeEnding: false,
-    };
-
-    sendProgress({
-      stage: 'rendering_parts',
-      percent: 10,
-      current: 1,
-      total: 1,
-      message: `プレビュー生成中: ${part.index + 1}/${project.parts.length}`,
-    });
-
-    await renderPartVideo(
-      backend,
-      project,
-      part,
-      previewOptions,
-      previewPath,
-      job,
-      leadInSec,
-      (within) => {
-        sendProgress({
-          stage: 'rendering_parts',
-          percent: Math.round(10 + within * 80),
-          current: 1,
-          total: 1,
-          message: `プレビュー生成中...`,
-        });
-      }
-    );
-
-    sendProgress({ stage: 'finalizing', percent: 100, message: '完了' });
-    await getProjectRepository()
-      .update(project.id, (data) => {
-        data.metrics = metricsSchema.parse(data.metrics ?? {});
-        data.metrics.firstPreviewAt ??= new Date().toISOString();
-      })
-      .catch(() => {});
-    return { previewPath };
-  } finally {
-    currentJob = null;
-  }
-});
+);
 
 registerOperation(
   'video:render',
   async (
-    _,
-    project: ProjectLike,
+    event,
+    intendedInput: unknown,
     options: RenderOptions,
     outputPath: string
   ): Promise<{ outputPath: string }> => {
-    if (currentJob) throw new Error('別の動画処理が実行中です');
+    // 自動生成ジョブからの依頼では、停止の合図と進捗の受け取り先が付いてくる
+    const context = jobOperationContext.getStore();
+    const origin: RenderOrigin = context ? 'job' : 'manual';
+    if (context?.signal?.aborted) throw new Error('キャンセルしました');
     options = renderOptionsSchema.parse(options);
-    const validated = projectSchema.parse(project);
-    const persisted = await new ProjectRepository(
-      path.join(app.getPath('userData'), 'projects')
-    ).load(validated.id);
-    validated.path = persisted.path;
-    project = validated;
+    const intended = projectSchema.parse(intendedInput);
+    // 待ち行列の順番が来た後に保存済みの最新を読み、それに対して書き出す。
+    // リビジョンの一致は求めず、画面(またはジョブ)が意図した書き出し内容が最新と一致するかだけを確かめる。
+    // プレビュー時のメトリクス更新や出力設定の保存のように、書き出し内容に影響しない更新では失敗しない。
+    const validated: Project = await getProjectRepository().load(intended.id);
+    if (renderContentFingerprint(intended) !== renderContentFingerprint(validated))
+      throw new Error(renderConflictMessage('render'));
+    let project: ProjectLike = validated;
     outputPath = await fileAccess().media(outputPath, true);
     for (const part of validated.parts) {
       if (part.audio) await fileAccess().media(part.audio.filePath);
@@ -1017,12 +1180,6 @@ registerOperation(
         if (image) await fileAccess().media(image.filePath);
       }
     }
-    if (persisted.revision !== validated.revision)
-      throw new Error('保存後にプロジェクトが変更されました。再度書き出してください。');
-    validated.integrity = {
-      ...validated.integrity!,
-      missingFiles: persisted.integrity?.missingFiles ?? [],
-    };
     if (
       validated.parts.some((part) => {
         const state = partFreshness(validated, part);
@@ -1032,9 +1189,38 @@ registerOperation(
       throw new Error(
         '更新が必要な台本・画像・音声があります。再生成または内容を確認して維持してから書き出してください。'
       );
-    if (currentJob) throw new Error('別の動画処理が実行中です');
+    const settings = await readSettings();
+    validated.outputSettings = {
+      ...options,
+      videoPartLeadInSec: options.videoPartLeadInSec ?? settings.videoPartLeadInSec ?? 0.3,
+      openingVideoPath: options.openingVideoPath ?? settings.openingVideoPath,
+      endingVideoPath: options.endingVideoPath ?? settings.endingVideoPath,
+    };
+    // 出力設定の保存と同じ直列化の中で、読み込み後に書き出し内容が変わっていないかを確かめ直す
+    // (ファイル確認などを待つ間の更新を取りこぼさない)
+    const expectedContent = renderContentFingerprint(validated);
+    notifyProjectChanged(
+      await getProjectRepository().update(validated.id, (data) => {
+        if (renderContentFingerprint(data) !== expectedContent)
+          throw new Error(renderConflictMessage('render'));
+        data.outputSettings = validated.outputSettings;
+      })
+    );
     const job: VideoJob = { canceled: false, processes: new Set() };
-    currentJob = job;
+    const active: ActiveRender = {
+      projectId: validated.id,
+      origin,
+      senderId: senderIdOf(event),
+      job,
+    };
+    activeRenders.add(active);
+    const onAbort = () => cancelVideoJob(job);
+    context?.signal?.addEventListener('abort', onAbort, { once: true });
+    if (context?.signal?.aborted) cancelVideoJob(job);
+    const sendProgress = createProgressReporter(
+      { projectId: validated.id, origin, kind: 'render' },
+      context?.onRenderProgress
+    );
 
     let renderTmpDir: string | null = null;
     let renderSucceeded = false;
@@ -1042,7 +1228,7 @@ registerOperation(
     try {
       if (!outputPath) throw new Error('出力先が未指定です');
 
-      sendProgress({ stage: 'preparing', percent: 0, message: 'レンダリング準備中...' });
+      sendProgress({ stage: 'preparing', percent: 0, message: '書き出しの準備中' });
 
       const backend = await resolveVideoExecutionBackend();
       const { width, height } = parseResolution(options.resolution);
@@ -1052,17 +1238,7 @@ registerOperation(
       await fs.mkdir(path.dirname(outputPath), { recursive: true });
       renderTmpDir = await fs.mkdtemp(path.join(project.path, 'output', 'render-tmp-'));
 
-      const settings = await readSettings();
-      validated.outputSettings = {
-        ...options,
-        videoPartLeadInSec: options.videoPartLeadInSec ?? settings.videoPartLeadInSec ?? 0.3,
-        openingVideoPath: options.openingVideoPath ?? settings.openingVideoPath,
-        endingVideoPath: options.endingVideoPath ?? settings.endingVideoPath,
-      };
       project = validated;
-      await getProjectRepository().update(project.id, (data) => {
-        data.outputSettings = validated.outputSettings;
-      });
       const leadInSec = validated.outputSettings.videoPartLeadInSec ?? 0.3;
       const presentationProfile = normalizePresentationProfile(project.presentationProfile);
 
@@ -1076,6 +1252,18 @@ registerOperation(
 
       const generatedPartPaths: string[] = [];
       const partDurations: number[] = [];
+      // 進捗はパートの長さで重み付けする(準備 0〜2%、パート 2〜85%、前後の動画と締めカード 85〜90%、連結 90〜98%)
+      const clampedLeadIn = Math.min(2, Math.max(0, leadInSec));
+      const weights = parts.map(
+        (part) => Math.max(0.1, part.audio?.durationSec ?? 0) + clampedLeadIn
+      );
+      const totalWeight = weights.reduce((sum, value) => sum + value, 0);
+      const partPercent = (index: number, within: number) =>
+        2 +
+        (83 *
+          (weights.slice(0, index).reduce((sum, value) => sum + value, 0) +
+            weights[index] * within)) /
+          totalWeight;
 
       for (let i = 0; i < totalParts; i++) {
         assertNotCanceled(job);
@@ -1085,13 +1273,14 @@ registerOperation(
           partsDir,
           `part-${String(part.index + 1).padStart(2, '0')}-${part.id.slice(0, 8)}.mp4`
         );
+        const message = `シーン ${i + 1} / ${totalParts} を書き出し中`;
 
         sendProgress({
           stage: 'rendering_parts',
-          percent: Math.round((i / totalParts) * 80),
+          percent: partPercent(i, 0),
           current: i + 1,
           total: totalParts,
-          message: `パート動画生成: ${i + 1}/${totalParts} (${part.title})`,
+          message,
           meta: { width, height },
         });
 
@@ -1104,13 +1293,12 @@ registerOperation(
           job,
           leadInSec,
           (within) => {
-            const overall = (i + within) / totalParts;
             sendProgress({
               stage: 'rendering_parts',
-              percent: Math.round(overall * 80),
+              percent: partPercent(i, within),
               current: i + 1,
               total: totalParts,
-              message: `パート動画生成: ${i + 1}/${totalParts} (${part.title})`,
+              message,
             });
           }
         );
@@ -1133,7 +1321,7 @@ registerOperation(
           'opening'
         );
         const normalized = path.join(renderTmpDir, 'opening.normalized.mp4');
-        sendProgress({ stage: 'preparing', percent: 82, message: 'オープニング動画を調整中...' });
+        sendProgress({ stage: 'preparing', percent: 85, message: 'オープニング動画を調整中' });
         await normalizeVideoToSpec(backend, openingInputForFfmpeg, normalized, options, job);
         segments.push(normalized);
       }
@@ -1142,7 +1330,7 @@ registerOperation(
 
       if (presentationProfile.closingCardEnabled) {
         const closingCardPath = path.join(renderTmpDir, 'closing-card.mp4');
-        sendProgress({ stage: 'preparing', percent: 84, message: '締めカードを生成中...' });
+        sendProgress({ stage: 'preparing', percent: 87, message: '締めカードを作成中' });
         const renderedClosingCard = await renderClosingCardVideo(
           backend,
           {
@@ -1166,21 +1354,35 @@ registerOperation(
           throw new Error(`エンディング動画が見つかりません: ${ending}`);
         const endingInputForFfmpeg = await stageVideoInputForFfmpeg(ending, renderTmpDir, 'ending');
         const normalized = path.join(renderTmpDir, 'ending.normalized.mp4');
-        sendProgress({ stage: 'preparing', percent: 86, message: 'エンディング動画を調整中...' });
+        sendProgress({ stage: 'preparing', percent: 89, message: 'エンディング動画を調整中' });
         await normalizeVideoToSpec(backend, endingInputForFfmpeg, normalized, options, job);
         segments.push(normalized);
       }
 
       // concat
-      sendProgress({ stage: 'concatenating', percent: 90, message: '全体動画を連結中...' });
+      sendProgress({ stage: 'concatenating', percent: 90, message: 'シーンをつなぎ合わせ中' });
       const stagedOutputPath = path.join(renderTmpDir, 'final.rendered.mp4');
-      await concatSegments(backend, segments, stagedOutputPath, options, job);
+      await concatSegments(
+        backend,
+        segments,
+        stagedOutputPath,
+        options,
+        job,
+        partDurations.reduce((sum, value) => sum + value, 0) +
+          (presentationProfile.closingCardEnabled ? 3.6 : 0),
+        (fraction) =>
+          sendProgress({
+            stage: 'concatenating',
+            percent: 90 + fraction * 8,
+            message: 'シーンをつなぎ合わせ中',
+          })
+      );
       assertNotCanceled(job);
 
-      sendProgress({ stage: 'finalizing', percent: 97, message: '出力ファイルを書き込み中...' });
+      sendProgress({ stage: 'finalizing', percent: 98, message: '出力ファイルを書き込み中' });
       await copyRenderedOutput(stagedOutputPath, outputPath);
 
-      sendProgress({ stage: 'finalizing', percent: 100, message: 'レンダリング完了' });
+      sendProgress({ stage: 'finalizing', percent: 100, message: '書き出し完了' });
       if (backend.id === 'native')
         measuredDuration = await probeDurationNative(backend.rendererPath, outputPath);
       const saved = await getProjectRepository().update(project.id, (data) => {
@@ -1194,8 +1396,7 @@ registerOperation(
         data.metrics = metricsSchema.parse(data.metrics ?? {});
         data.metrics.outputDurationSec = measuredDuration;
       });
-      for (const window of BrowserWindow.getAllWindows())
-        window.webContents.send('project:changed', { id: saved.id, revision: saved.revision });
+      notifyProjectChanged(saved);
       renderSucceeded = true;
       return { outputPath };
     } finally {
@@ -1209,10 +1410,7 @@ registerOperation(
             data.metrics.firstOutputAt ??= new Date().toISOString();
           }
         })
-        .then((saved) => {
-          for (const window of BrowserWindow.getAllWindows())
-            window.webContents.send('project:changed', { id: saved.id, revision: saved.revision });
-        })
+        .then(notifyProjectChanged)
         .catch(() => {});
       if (renderTmpDir) {
         try {
@@ -1221,7 +1419,8 @@ registerOperation(
           // ignore
         }
       }
-      currentJob = null;
+      context?.signal?.removeEventListener('abort', onAbort);
+      activeRenders.delete(active);
     }
   }
 );

@@ -1,0 +1,66 @@
+[
+  {
+    "id": "11111111-1111-4111-8111-111111111111",
+    "index": 0,
+    "title": "パート1",
+    "summary": "要約",
+    "scriptText": "パート1の台本です。",
+    "durationEstimateSec": 15,
+    "panelImages": [
+      {
+        "imageId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+      }
+    ],
+    "comments": [],
+    "createdAt": "2026-02-10T01:10:00.000Z",
+    "updatedAt": "2026-02-10T01:10:00.000Z",
+    "scriptGeneratedAt": "2026-02-10T01:10:00.000Z",
+    "scriptModifiedByUser": false,
+    "audio": {
+      "id": "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
+      "filePath": "/Users/example/Library/Application Support/newsvideo/projects/報道サンプル_5b0f6c1e.newsproj/audio/eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee.wav",
+      "durationSec": 12.5,
+      "ttsEngine": "gemini_tts",
+      "voiceId": "Charon",
+      "segments": ["前半の読み上げ。", "後半の読み上げ。"],
+      "settings": {
+        "speakingRate": 1,
+        "pitch": 0,
+        "languageCode": "ja-JP"
+      },
+      "generatedAt": "2026-02-10T01:40:00.000Z"
+    }
+  },
+  {
+    "id": "22222222-2222-4222-8222-222222222222",
+    "index": 1,
+    "title": "パート2",
+    "summary": "要約",
+    "scriptText": "パート2の台本です。",
+    "durationEstimateSec": 15,
+    "panelImages": [
+      {
+        "imageId": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+      }
+    ],
+    "comments": [],
+    "createdAt": "2026-02-10T01:10:00.000Z",
+    "updatedAt": "2026-02-10T01:10:00.000Z",
+    "scriptGeneratedAt": "2026-02-10T01:10:00.000Z",
+    "scriptModifiedByUser": false,
+    "audio": {
+      "id": "ffffffff-ffff-4fff-8fff-ffffffffffff",
+      "filePath": "/Users/example/Library/Application Support/newsvideo/projects/報道サンプル_5b0f6c1e.newsproj/audio/ffffffff-ffff-4fff-8fff-ffffffffffff.wav",
+      "durationSec": 13.5,
+      "ttsEngine": "gemini_tts",
+      "voiceId": "Charon",
+      "segments": ["前半の読み上げ。", "後半の読み上げ。"],
+      "settings": {
+        "speakingRate": 1,
+        "pitch": 0,
+        "languageCode": "ja-JP"
+      },
+      "generatedAt": "2026-02-10T01:40:00.000Z"
+    }
+  }
+]

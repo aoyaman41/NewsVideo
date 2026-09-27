@@ -161,12 +161,40 @@ describe('settings IPC handlers', () => {
     const saved = JSON.parse(String(content));
     expect(saved.scriptTextModel).toBe('gpt-5.6-terra');
     expect(saved.imagePromptTextModel).toBe('gpt-5.6-luna');
-    expect(saved.imageModel).toBe('gemini-3-pro-image-preview');
+    // 提供終了した preview 版の ID は GA 版の ID で保存される
+    expect(saved.imageModel).toBe('gemini-3-pro-image');
     expect(saved.ttsEngine).toBe('gemini_tts');
     expect(saved.openaiReasoningEffort).toBe('max');
     expect(saved.ttsModel).toBe('gemini-2.5-flash-preview-tts');
     expect(saved.geminiThinkingLevel).toBe('low');
     expect(saved.unknown).toBeUndefined();
+  });
+
+  it('keeps both changes when two partial saves overlap, and reads after pending saves', async () => {
+    // 読み込み → 書き込みの間に別の保存が入ると、先の変更が消える(ファイルは 1 つ)
+    let stored = JSON.stringify(DEFAULT_SETTINGS);
+    readFileMock.mockImplementation(async () => stored);
+    writeFileMock.mockImplementation(async (_path: string, content: string) => {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      stored = content;
+    });
+    const event = { senderFrame: { url: 'http://localhost:5173', parent: null } };
+
+    const saves = Promise.all([
+      getHandler('settings:set')(event, { generationMode: 'review' }),
+      getHandler('settings:set')(event, { generationBudgetUsd: null }),
+    ]);
+    const read = getHandler('settings:get')(event) as Promise<typeof DEFAULT_SETTINGS>;
+    await saves;
+
+    expect(JSON.parse(stored)).toMatchObject({
+      generationMode: 'review',
+      generationBudgetUsd: null,
+    });
+    await expect(read).resolves.toMatchObject({
+      generationMode: 'review',
+      generationBudgetUsd: null,
+    });
   });
 });
 
@@ -240,7 +268,10 @@ describe('Anthropic settings', () => {
   });
 
   it('persists claudeEffort and propagates it to idle projects', async () => {
-    readFileMock.mockResolvedValueOnce(JSON.stringify(DEFAULT_SETTINGS));
+    // 既定のテキストモデルは Claude なので、旧来の OpenAI モデルを保存済みの設定から切り替える
+    readFileMock.mockResolvedValueOnce(
+      JSON.stringify({ ...DEFAULT_SETTINGS, scriptTextModel: 'gpt-5.2' })
+    );
     repositoryMock.directories.mockResolvedValue(['/idle']);
     repositoryMock.readDirectory.mockResolvedValueOnce({ id: 'idle' });
     const project = { id: 'idle', revision: 1, generationConfig: {} };
@@ -260,6 +291,23 @@ describe('Anthropic settings', () => {
       scriptTextModel: 'claude-opus-5-5',
       claudeEffort: 'max',
     });
+  });
+
+  it('persists the image prompt effort separately and propagates it to idle projects', async () => {
+    readFileMock.mockResolvedValueOnce(JSON.stringify(DEFAULT_SETTINGS));
+    repositoryMock.directories.mockResolvedValue(['/idle']);
+    repositoryMock.readDirectory.mockResolvedValueOnce({ id: 'idle' });
+    const project = { id: 'idle', revision: 1, generationConfig: {} };
+    repositoryMock.update.mockImplementation(async (_id, mutate) => {
+      mutate(project);
+      return project;
+    });
+
+    await getHandler('settings:set')(event, { claudeImagePromptEffort: 'low' });
+
+    const saved = JSON.parse(String(writeFileMock.mock.calls[0][1]));
+    expect(saved).toMatchObject({ claudeEffort: 'medium', claudeImagePromptEffort: 'low' });
+    expect(project.generationConfig).toEqual({ claudeImagePromptEffort: 'low' });
   });
 });
 
@@ -284,4 +332,36 @@ it('propagates only changed generation defaults and leaves running job snapshots
     scriptTextModel: 'gpt-6-astra',
     ttsVoice: 'Existing voice',
   });
+});
+
+// M5: 「新しい動画」の既定値・進め方と予算・為替レートは、作成済みの動画を変えない
+it('saves new video defaults item by item without touching existing projects', async () => {
+  await loadSettingsModule();
+  let stored = JSON.stringify({
+    ...DEFAULT_SETTINGS,
+    newProjectDefaults: { ...DEFAULT_SETTINGS.newProjectDefaults, imageStylePreset: 'editorial' },
+  });
+  readFileMock.mockImplementation(async () => stored);
+  writeFileMock.mockImplementation(async (_path: string, content: string) => {
+    stored = content;
+  });
+  repositoryMock.directories.mockResolvedValue(['/idle']);
+  repositoryMock.readDirectory.mockResolvedValue({ id: 'idle' });
+  const event = { senderFrame: { url: 'http://localhost:5173', parent: null } };
+
+  await getHandler('settings:set')(event, {
+    newProjectDefaults: { purpose: 'short' },
+    generationMode: 'review',
+    generationBudgetUsd: 3,
+    jpyPerUsd: 145,
+  });
+
+  expect(JSON.parse(stored)).toMatchObject({
+    generationMode: 'review',
+    generationBudgetUsd: 3,
+    jpyPerUsd: 145,
+    // 送らなかった項目は今の値のまま
+    newProjectDefaults: { purpose: 'short', imageStylePreset: 'editorial' },
+  });
+  expect(repositoryMock.update).not.toHaveBeenCalled();
 });

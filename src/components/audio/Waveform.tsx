@@ -133,8 +133,12 @@ export function Waveform({
       ctx.stroke();
     };
 
-    draw('#d1d5db', peaks.length - 1);
-    draw('#3b82f6', Math.floor(progressRatio * peaks.length));
+    // 色はデザイントークンから取る(キャンバスには CSS 変数を直接使えないため)
+    const styles = getComputedStyle(canvas);
+    const token = (name: string, fallback: string) =>
+      styles.getPropertyValue(name).trim() || fallback;
+    draw(token('--nv-color-border', '#d0d7e2'), peaks.length - 1);
+    draw(token('--nv-color-accent', '#145da0'), Math.floor(progressRatio * peaks.length));
   }, [height, peaks, progressRatio, width]);
 
   const canSeek = !!onSeek && Number.isFinite(durationSec) && durationSec > 0;
@@ -151,24 +155,24 @@ export function Waveform({
             const ratio = rect.width > 0 ? (e.clientX - rect.left) / rect.width : 0;
             onSeek(clamp(ratio, 0, 1) * durationSec);
           }}
-          className={`w-full rounded-lg border border-gray-200 bg-white ${
+          className={`w-full rounded-[var(--nv-radius-sm)] border border-[var(--nv-color-border)] bg-white ${
             canSeek ? 'cursor-pointer' : 'cursor-default'
           }`}
           style={{ height }}
         />
         {!peaks && !error && (
-          <div className="absolute inset-0 flex items-center justify-center text-xs text-gray-500">
+          <div className="absolute inset-0 flex items-center justify-center text-xs text-[var(--nv-color-muted)]">
             波形を解析中...
           </div>
         )}
         {error && (
-          <div className="absolute inset-0 flex items-center justify-center text-xs text-red-600">
+          <div className="absolute inset-0 flex items-center justify-center text-xs text-[var(--nv-color-danger)]">
             波形の解析に失敗しました
           </div>
         )}
       </div>
       {canSeek && (
-        <label className="mt-2 block text-sm text-slate-700">
+        <label className="mt-2 block text-sm text-[var(--nv-color-muted)]">
           再生位置 {currentTimeSec.toFixed(1)} / {durationSec.toFixed(1)} 秒
           <input
             aria-label="音声の再生位置（秒）"
@@ -178,7 +182,7 @@ export function Waveform({
             step="0.1"
             value={clamp(currentTimeSec, 0, durationSec)}
             onChange={(event) => onSeek?.(Number(event.target.value))}
-            className="w-full"
+            className="w-full accent-[var(--nv-color-accent)]"
           />
         </label>
       )}
